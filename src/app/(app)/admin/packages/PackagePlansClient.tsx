@@ -152,6 +152,115 @@ export default function PackagePlansClient() {
 					</div>
 				</div>
 			) : (
+			<>
+				{/* Mobile: stacked cards */}
+				<div className="space-y-3 md:hidden">
+					{plans.map((plan) => {
+						const eligibility = plan.isGeneralDropIn
+							? "General open play"
+							: (plan.product?.name ?? "—");
+						return (
+							<div
+								key={plan.packagePlanId}
+								className={`rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 ${!plan.isActive ? "opacity-60" : ""}`}
+							>
+								<div className="flex items-start justify-between gap-3">
+									<div className="min-w-0 flex-1">
+										<div className="font-medium text-[var(--foreground)]">
+											{plan.name}
+										</div>
+										{plan.description && (
+											<div className="mt-0.5 line-clamp-2 text-[var(--muted-foreground)] text-xs">
+												{plan.description}
+											</div>
+										)}
+									</div>
+									{plan.isActive ? (
+										<span className="inline-flex shrink-0 items-center gap-1 text-green-600 text-xs">
+											<span className="h-2 w-2 rounded-full bg-green-600" />
+											Active
+										</span>
+									) : (
+										<span className="inline-flex shrink-0 items-center gap-1 text-[var(--muted-foreground)] text-xs">
+											<span className="h-2 w-2 rounded-full bg-gray-400" />
+											Inactive
+										</span>
+									)}
+								</div>
+								<dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+									<div>
+										<dt className="text-[var(--muted-foreground)] text-xs">
+											Eligibility
+										</dt>
+										<dd className="text-[var(--foreground)]">{eligibility}</dd>
+									</div>
+									<div>
+										<dt className="text-[var(--muted-foreground)] text-xs">
+											Credits
+										</dt>
+										<dd className="text-[var(--foreground)]">
+											{plan.sessionCount ?? "Unlimited"}
+										</dd>
+									</div>
+									<div>
+										<dt className="text-[var(--muted-foreground)] text-xs">
+											Price
+										</dt>
+										<dd className="text-[var(--foreground)]">
+											{formatPrice(plan.priceInCents)}
+										</dd>
+									</div>
+									<div>
+										<dt className="text-[var(--muted-foreground)] text-xs">
+											Valid For
+										</dt>
+										<dd className="text-[var(--foreground)]">
+											{formatValidity(plan.durationValue, plan.durationUnit)}
+										</dd>
+									</div>
+									<div className="col-span-2">
+										<dt className="text-[var(--muted-foreground)] text-xs">
+											Active Sales
+										</dt>
+										<dd className="text-[var(--foreground)]">
+											{plan._count.memberPackages} active
+										</dd>
+									</div>
+								</dl>
+								{canManagePlans && (
+									<div className="mt-3 flex justify-end gap-2 border-[var(--border)] border-t pt-3">
+										<Link href={`/admin/packages/${plan.packagePlanId}/edit`}>
+											<Button
+												variant="ghost"
+												size="sm"
+												aria-label="Edit package plan"
+											>
+												<Pencil size={14} />
+												Edit
+											</Button>
+										</Link>
+										{plan.isActive && (
+											<Button
+												variant="ghost"
+												size="sm"
+												onClick={() =>
+													handleArchive(plan.packagePlanId, plan.name)
+												}
+												aria-label="Archive package plan"
+												className="hover:bg-red-50 hover:text-red-600"
+											>
+												<Archive size={14} />
+												Archive
+											</Button>
+										)}
+									</div>
+								)}
+							</div>
+						);
+					})}
+				</div>
+
+				{/* Desktop: table */}
 				<div className="hidden overflow-hidden rounded-lg border border-[var(--border)] md:block">
 					<table className="w-full">
 						<thead className="bg-[var(--muted)] text-left text-sm">
@@ -248,6 +357,7 @@ export default function PackagePlansClient() {
 						</tbody>
 					</table>
 				</div>
+			</>
 			)}
 
 			<AlertDialog

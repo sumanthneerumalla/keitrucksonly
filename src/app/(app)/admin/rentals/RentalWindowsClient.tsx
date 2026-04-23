@@ -123,14 +123,15 @@ export default function RentalWindowsClient() {
 		e: React.MouseEvent,
 	) => {
 		e.stopPropagation();
-		// Construct a minimal ilamy CalendarEvent for EventFormModal. The modal's
-		// second useEffect will hydrate rental-specific fields (resourceIds, maxBookingHours,
-		// cancelCutoffHours, rrule) from the getEventById response.
+		// Pass BASE times (baseStart/baseEnd), not occurrence times. updateRentalWindow
+		// rewrites base.start/end, so a no-op save on a recurring window would otherwise
+		// shift the whole series anchor to the clicked occurrence's date. EventFormModal's
+		// second useEffect also reseeds from fetchedEvent as a safety net.
 		const ilamyEvent = {
 			id: w.eventId,
 			title: w.title,
-			start: dayjs(w.start),
-			end: dayjs(w.end),
+			start: dayjs(w.baseStart),
+			end: dayjs(w.baseEnd),
 			resourceId: w.courts[0]?.resourceId,
 			data: {
 				dbEventId: w.eventId,
@@ -258,8 +259,8 @@ export default function RentalWindowsClient() {
 					</div>
 				</div>
 			) : (
-				<div className="overflow-hidden rounded-lg border border-[var(--border)]">
-					<table className="w-full">
+				<div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+					<table className="w-full min-w-[640px]">
 						<thead className="bg-[var(--muted)] text-left text-sm">
 							<tr>
 								<th className="px-4 py-3 font-medium">Title</th>
@@ -290,8 +291,8 @@ export default function RentalWindowsClient() {
 									<td className="px-4 py-3 text-[var(--foreground)] text-sm">
 										{w.courts.map((c) => c.title).join(", ")}
 									</td>
-									<td className="px-4 py-3 text-[var(--muted-foreground)] text-sm">
-										&mdash;
+									<td className="px-4 py-3 text-[var(--foreground)] text-sm">
+										{w.bookingCount}
 									</td>
 									<td className="px-4 py-3">
 										<div className="flex justify-end gap-2">

@@ -1,6 +1,7 @@
 import { RentalBookingStatus } from "@prisma/client";
 import type { Prisma, User } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
+import { RRule, RRuleSet } from "rrule";
 import { z } from "zod";
 import {
 	createTRPCRouter,
@@ -15,6 +16,28 @@ import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
 // SHARED HELPERS
 // ============================================================
 
+/**
+ * Build an RRuleSet from a stored rrule string + exdates + fallback dtstart.
+ * Using RRuleSet (not bare RRule) is important so `.between()` honors exdates —
+ * without it, occurrences on excepted dates show up as still-valid, which breaks
+ * both display (listRentalWindows) and safety checks (updateRentalWindow orphan guard).
+ */
+function buildRuleSetFromEvent(
+	rruleString: string,
+	exdates: Date[],
+	fallbackDtstart: Date,
+): RRuleSet {
+	const parsed = RRule.fromString(rruleString);
+	const rule = new RRule({
+		...parsed.origOptions,
+		dtstart: parsed.origOptions.dtstart ?? fallbackDtstart,
+	});
+	const set = new RRuleSet();
+	set.rrule(rule);
+	for (const d of exdates) set.exdate(d);
+	return set;
+}
+
 // NOTE: structured as per-court helper for future multi-court extension (decision #77)
 async function validateAndCreateBooking(
 	tx: Prisma.TransactionClient,
@@ -27,6 +50,15 @@ async function validateAndCreateBooking(
 	},
 ) {
 	const { rentalWindowEventId, resourceId, startTime, endTime, user } = params;
+
+	// 0. Advisory lock on the rental window for the duration of this transaction.
+	// Prevents a concurrent deleteRentalWindow from soft-deleting the window between
+	// our isDeleted check below and the booking insert. pg_advisory_xact_lock takes a
+	// bigint — we derive it from md5(eventId) for lower collision risk than hashtext()
+	// (64 bits of entropy vs ~32). Lock is scoped to the window, not the user, so
+	// two members booking different slots in the same window serialize (acceptable)
+	// while members in different windows don't (no false contention).
+	await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${rentalWindowEventId}), 1, 16))::bit(64)::bigint)`;
 
 	// 1. Fetch rental window and verify it's a RENTAL_WINDOW in the user's club
 	const rentalWindowEvent = await tx.calendarEvent.findUnique({
@@ -196,7 +228,12 @@ export const rentalsRouter = createTRPCRouter({
 				end: z.date(),
 				courtIds: z.array(z.string()).min(1),
 				maxBookingHours: z.number().int().positive().optional(),
-				earlyCancelCutoffHours: z.number().int().nonnegative().optional(),
+				earlyCancelCutoffHours: z
+					.number()
+					.int()
+					.nonnegative()
+					.nullable()
+					.optional(),
 				rrule: z.string().optional(),
 				color: z.string().optional(),
 				backgroundColor: z.string().optional(),
@@ -336,6 +373,88 @@ export const rentalsRouter = createTRPCRouter({
 				}
 			}
 
+			// Orphan guard: if start/end/rrule change, make sure no future confirmed
+			// booking would end up outside every occurrence of the new schedule. Reject
+			// with a specific date list so staff can cancel the affected bookings first.
+			const startChanged =
+				start !== undefined && start.getTime() !== event.start.getTime();
+			const endChanged =
+				end !== undefined && end.getTime() !== event.end.getTime();
+			const rruleChanged = rrule !== undefined && rrule !== event.rrule;
+
+			if (startChanged || endChanged || rruleChanged) {
+				const newStart = start ?? event.start;
+				const newEnd = end ?? event.end;
+				const newRrule = rrule !== undefined ? rrule : event.rrule;
+				const newDurationMs = newEnd.getTime() - newStart.getTime();
+
+				// Build the NEW schedule as an RRuleSet so exdates are respected. Rental
+				// windows don't expose exdate editing today, so we carry over the event's
+				// existing exdates — a date excluded in the old series stays excluded.
+				let newRuleSet: RRuleSet | null = null;
+				if (newRrule) {
+					try {
+						newRuleSet = buildRuleSetFromEvent(
+							newRrule,
+							event.exdates,
+							newStart,
+						);
+					} catch {
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Invalid recurrence pattern.",
+						});
+					}
+				}
+
+				const futureBookings = await ctx.db.rentalBooking.findMany({
+					where: {
+						rentalWindowEventId: eventId,
+						status: RentalBookingStatus.CONFIRMED,
+						startTime: { gte: new Date() },
+					},
+					select: { bookingId: true, startTime: true, endTime: true },
+				});
+
+				const orphanedStarts: Date[] = [];
+				for (const b of futureBookings) {
+					let covered = false;
+					if (!newRuleSet) {
+						// Non-recurring after update: single occurrence == the base window.
+						covered =
+							b.startTime >= newStart && b.endTime <= newEnd;
+					} else {
+						// Look one duration back so we catch occurrences that start before
+						// the booking but still contain it.
+						const candidates = newRuleSet.between(
+							new Date(b.startTime.getTime() - newDurationMs),
+							b.endTime,
+							true,
+						);
+						covered = candidates.some((occStart) => {
+							const occEnd = new Date(occStart.getTime() + newDurationMs);
+							return b.startTime >= occStart && b.endTime <= occEnd;
+						});
+					}
+					if (!covered) orphanedStarts.push(b.startTime);
+				}
+
+				if (orphanedStarts.length > 0) {
+					const preview = orphanedStarts
+						.slice(0, 3)
+						.map((d) => d.toISOString())
+						.join(", ");
+					const suffix =
+						orphanedStarts.length > 3
+							? ` and ${orphanedStarts.length - 3} more`
+							: "";
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: `Cannot apply changes: ${orphanedStarts.length} future booking(s) would be orphaned (${preview}${suffix}). Cancel those bookings first.`,
+					});
+				}
+			}
+
 			const updated = await ctx.db.calendarEvent.update({
 				where: { eventId },
 				data: {
@@ -394,7 +513,10 @@ export const rentalsRouter = createTRPCRouter({
 					include: { blockingEvent: true },
 				});
 
-				// Cancel each booking and unblock its calendar event
+				// Cancel each booking and soft-delete its blocking calendar event.
+				// Soft-delete (not just isBlocking=false) is canonical — isDeleted is what
+				// every other query filters on, and leaving the event "visible but unblocking"
+				// creates two sources of truth that drift.
 				for (const booking of bookings) {
 					await tx.rentalBooking.update({
 						where: { bookingId: booking.bookingId },
@@ -403,7 +525,11 @@ export const rentalsRouter = createTRPCRouter({
 					if (booking.blockingEventId) {
 						await tx.calendarEvent.update({
 							where: { eventId: booking.blockingEventId },
-							data: { isBlocking: false },
+							data: {
+								isBlocking: false,
+								isDeleted: true,
+								deletedAt: new Date(),
+							},
 						});
 					}
 				}
@@ -436,42 +562,124 @@ export const rentalsRouter = createTRPCRouter({
 			const dayEnd = new Date(date);
 			dayEnd.setHours(23, 59, 59, 999);
 
+			// Fetch base events: non-recurring that overlap the day, OR any recurring
+			// base whose series starts before dayEnd (expansion filtering happens below).
 			const windows = await ctx.db.calendarEvent.findMany({
 				where: {
 					eventType: "RENTAL_WINDOW",
 					isDeleted: false,
 					clubShortName,
 					...(facilityId && { facilityId }),
-					start: { lt: dayEnd },
-					end: { gt: dayStart },
+					parentEventId: null,
+					OR: [
+						{ rrule: null, start: { lt: dayEnd }, end: { gt: dayStart } },
+						{ rrule: { not: null }, start: { lt: dayEnd } },
+					],
 				},
 				include: {
 					resource: { select: { resourceId: true, title: true } },
+					_count: {
+						select: {
+							// Per-day count: only bookings whose startTime falls on the selected day.
+							// For a recurring window, _count otherwise aggregates across all occurrences
+							// which is misleading in a date-filtered list.
+							rentalWindowBookings: {
+								where: {
+									status: RentalBookingStatus.CONFIRMED,
+									startTime: { gte: dayStart, lt: dayEnd },
+								},
+							},
+						},
+					},
 				},
 			});
 
-			// Fetch court details for all resourceIds across windows
+			// Expand recurring events: for each base, find occurrences that overlap the day.
+			// Non-recurring events become a single "occurrence" equal to their base times.
+			type ExpandedRow = {
+				base: (typeof windows)[number];
+				occurrenceStart: Date;
+				occurrenceEnd: Date;
+			};
+			const expanded: ExpandedRow[] = [];
+
+			for (const w of windows) {
+				const durationMs = w.end.getTime() - w.start.getTime();
+				if (!w.rrule) {
+					expanded.push({
+						base: w,
+						occurrenceStart: w.start,
+						occurrenceEnd: w.end,
+					});
+					continue;
+				}
+				try {
+					// RRuleSet honors exdates so excluded instances don't surface as rows.
+					// Rrule strings in this codebase typically omit DTSTART — anchor to w.start.
+					const ruleSet = buildRuleSetFromEvent(w.rrule, w.exdates, w.start);
+					// Look back by one occurrence duration to catch occurrences that start before
+					// dayStart but extend into the day.
+					const candidates = ruleSet.between(
+						new Date(dayStart.getTime() - durationMs),
+						dayEnd,
+						true,
+					);
+					for (const occStart of candidates) {
+						const occEnd = new Date(occStart.getTime() + durationMs);
+						if (occStart < dayEnd && occEnd > dayStart) {
+							expanded.push({
+								base: w,
+								occurrenceStart: occStart,
+								occurrenceEnd: occEnd,
+							});
+						}
+					}
+				} catch {
+					// Malformed rrule — skip this window rather than fail the whole query.
+				}
+			}
+
+			// Fetch court details for all resourceIds across windows.
+			// Scope by clubShortName too — defense in depth on a public endpoint so
+			// attackers can't probe titles by guessing resourceIds across tenants.
+			// Filter by isActive so deactivated courts don't surface as ghost entries;
+			// CalendarEvent.resourceIds is an unconstrained String[] that can hold stale IDs.
 			const allResourceIds = [
-				...new Set(windows.flatMap((w) => w.resourceIds)),
+				...new Set(expanded.flatMap((r) => r.base.resourceIds)),
 			];
 			const courts = await ctx.db.clubResource.findMany({
-				where: { resourceId: { in: allResourceIds } },
+				where: {
+					resourceId: { in: allResourceIds },
+					clubShortName,
+					isActive: true,
+				},
 				select: { resourceId: true, title: true },
 			});
 			const courtMap = new Map(courts.map((c) => [c.resourceId, c.title]));
 
-			return windows.map((w) => ({
+			return expanded.map(({ base: w, occurrenceStart, occurrenceEnd }) => ({
 				eventId: w.eventId,
 				title: w.title,
-				start: w.start,
-				end: w.end,
+				// start/end are the OCCURRENCE times (what the user sees on the row).
+				start: occurrenceStart,
+				end: occurrenceEnd,
+				// baseStart/baseEnd are the series anchor — needed by the edit flow so
+				// a no-op save doesn't shift the series (updateRentalWindow rewrites base).
+				baseStart: w.start,
+				baseEnd: w.end,
 				facilityId: w.facilityId,
 				maxBookingHours: w.maxBookingHours,
 				earlyCancelCutoffHours: w.earlyCancelCutoffHours,
-				courts: w.resourceIds.map((rid) => ({
-					resourceId: rid,
-					title: courtMap.get(rid) ?? "Unknown Court",
-				})),
+				bookingCount: w._count.rentalWindowBookings,
+				isRecurring: w.rrule !== null,
+				// Filter stale / deactivated court IDs out of the response rather than
+				// rendering "Unknown Court" placeholders.
+				courts: w.resourceIds
+					.filter((rid) => courtMap.has(rid))
+					.map((rid) => ({
+						resourceId: rid,
+						title: courtMap.get(rid) ?? "Unknown Court",
+					})),
 			}));
 		}),
 
@@ -533,7 +741,7 @@ export const rentalsRouter = createTRPCRouter({
 
 			// Optionally resolve the caller's userId for annotation
 			let callerUserId: string | undefined;
-			const clerkUserId = (ctx as { auth?: { userId?: string | null } }).auth?.userId;
+			const clerkUserId = ctx.auth?.userId;
 			if (clerkUserId) {
 				const callerUser = await ctx.db.user.findUnique({
 					where: { clerkUserId },
@@ -659,6 +867,15 @@ export const rentalsRouter = createTRPCRouter({
 				});
 			}
 
+			// Club check BEFORE any state or ownership reveal — return NOT_FOUND so
+			// attackers can't distinguish "wrong club" from "nonexistent booking".
+			if (booking.clubShortName !== user.clubShortName) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Booking not found.",
+				});
+			}
+
 			if (booking.status !== RentalBookingStatus.CONFIRMED) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -672,6 +889,15 @@ export const rentalsRouter = createTRPCRouter({
 				throw new TRPCError({
 					code: "FORBIDDEN",
 					message: "You can only cancel your own bookings.",
+				});
+			}
+
+			// Past-booking guard (members only): a booking that has already ended
+			// cannot be cancelled — it's historical. Staff bypass for audit/admin cleanup.
+			if (!isStaff && new Date() > booking.endTime) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "This booking has already ended and cannot be cancelled.",
 				});
 			}
 
@@ -695,10 +921,17 @@ export const rentalsRouter = createTRPCRouter({
 					where: { bookingId },
 					data: { status: RentalBookingStatus.CANCELLED },
 				});
+				// Soft-delete the blocking CalendarEvent too, not just flip isBlocking.
+				// Otherwise two sources of truth drift: RentalBooking.status=CANCELLED but
+				// the CalendarEvent remains visible on any query that doesn't filter isBlocking.
 				if (booking.blockingEventId) {
 					await tx.calendarEvent.update({
 						where: { eventId: booking.blockingEventId },
-						data: { isBlocking: false },
+						data: {
+							isBlocking: false,
+							isDeleted: true,
+							deletedAt: new Date(),
+						},
 					});
 				}
 			});

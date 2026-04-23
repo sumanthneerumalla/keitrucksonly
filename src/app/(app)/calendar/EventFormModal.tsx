@@ -189,6 +189,13 @@ export default function EventFormModal({
 				? String(fetchedEvent.earlyCancelCutoffHours)
 				: "",
 		);
+		// Reseed start/end from the BASE event. selectedEvent may carry an OCCURRENCE's
+		// times (calendar client-side rrule expansion; /admin/rentals date-filtered row),
+		// and updateRentalWindow rewrites base.start/end — so a no-op save would otherwise
+		// shift the entire series anchor to the occurrence's date. Safe to overwrite the
+		// first useEffect's seed here: rental windows are series-level only (plan §2i).
+		setStart(toDatetimeLocal(dayjs(fetchedEvent.start)));
+		setEnd(toDatetimeLocal(dayjs(fetchedEvent.end)));
 		// When opened from /admin/rentals, selectedEvent.rrule isn't populated;
 		// seed rruleOpts from the fetched rrule string so staff can edit the pattern.
 		if (fetchedEvent.rrule && !rruleOpts) {
@@ -200,6 +207,9 @@ export default function EventFormModal({
 				// ignore parse errors
 			}
 		}
+		// rruleOpts intentionally omitted: this effect is a one-time bootstrap when
+		// fetchedEvent arrives with an rrule. Including it would re-seed on every
+		// user edit of the recurrence pattern, overwriting their changes.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [fetchedEvent]);
 
@@ -468,10 +478,12 @@ export default function EventFormModal({
 				toast("Select at least one court.", "error");
 				return;
 			}
+			// null = explicitly clear cutoff (for edits); matches server-side semantics for
+			// both create and update now that createRentalWindow accepts nullable.
 			const parsedCutoff =
 				cancelCutoffHours.trim() !== ""
 					? Number.parseInt(cancelCutoffHours, 10)
-					: undefined;
+					: null;
 			setSaving(true);
 			if (isEdit && selectedEvent) {
 				const dbEventId =
@@ -485,7 +497,7 @@ export default function EventFormModal({
 					end: endDate,
 					courtIds: resourceIds,
 					maxBookingHours,
-					earlyCancelCutoffHours: parsedCutoff ?? null,
+					earlyCancelCutoffHours: parsedCutoff,
 					rrule: rruleString,
 					color: colorText,
 					backgroundColor: color || undefined,
@@ -693,8 +705,29 @@ export default function EventFormModal({
 						</div>
 					)}
 
+					{/* Rental fields skeleton — shown while fetchedEvent is still loading on edit.
+					    Avoids the "empty fields flash" where courts/maxBookingHours/cutoff briefly
+					    render with defaults before the second useEffect hydrates from fetchedEvent,
+					    which could silently overwrite staff input typed during the fetch window. */}
+					{eventType === "RENTAL_WINDOW" && isEdit && !fetchedEvent && (
+						<div
+							className="space-y-3"
+							role="status"
+							aria-live="polite"
+							aria-busy="true"
+							aria-label="Loading rental window details"
+						>
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									Courts <span className="text-red-500">*</span>
+								</label>
+								<div className="h-9 animate-pulse rounded-md bg-[var(--muted)]" />
+							</div>
+						</div>
+					)}
+
 					{/* Courts (multi-select) — RENTAL_WINDOW only */}
-					{eventType === "RENTAL_WINDOW" && (
+					{eventType === "RENTAL_WINDOW" && (!isEdit || fetchedEvent) && (
 						<div className="space-y-1">
 							<label className="font-medium text-[var(--foreground)] text-sm">
 								Courts <span className="text-red-500">*</span>
@@ -899,8 +932,26 @@ export default function EventFormModal({
 						</div>
 					</div>
 
-					{/* Rental-specific fields — max booking hours + cancellation cutoff */}
-					{eventType === "RENTAL_WINDOW" && (
+					{/* Rental-specific numeric fields — same gating as the courts picker above.
+					    On edit, wait for fetchedEvent so defaults (2h, blank) don't flash and
+					    then silently overwrite any value the user typed during the fetch window. */}
+					{eventType === "RENTAL_WINDOW" && isEdit && !fetchedEvent && (
+						<>
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									Max Booking Hours
+								</label>
+								<div className="h-9 animate-pulse rounded-md bg-[var(--muted)]" />
+							</div>
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									Cancellation Cutoff (hours before start)
+								</label>
+								<div className="h-9 animate-pulse rounded-md bg-[var(--muted)]" />
+							</div>
+						</>
+					)}
+					{eventType === "RENTAL_WINDOW" && (!isEdit || fetchedEvent) && (
 						<>
 							<div className="space-y-1">
 								<label className="font-medium text-[var(--foreground)] text-sm">

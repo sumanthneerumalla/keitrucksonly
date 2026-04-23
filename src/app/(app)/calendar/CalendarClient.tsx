@@ -314,7 +314,16 @@ export default function CalendarClient() {
 	);
 
 	// Navigation handlers
-	const handleDateChange = (date: dayjs.Dayjs) => setCurrentDate(date);
+	// ilamy may fire onDateChange synchronously during a child's render (e.g. when
+	// initialDate drifts from its internal state). Calling setState there trips
+	// React's "setState during render" guard. queueMicrotask defers to after the
+	// current render; the isSame guard prevents re-render loops when ilamy echoes
+	// the same date back on each render.
+	const handleDateChange = useCallback((date: dayjs.Dayjs) => {
+		queueMicrotask(() => {
+			setCurrentDate((prev) => (prev.isSame(date) ? prev : date));
+		});
+	}, []);
 	const handleViewChange = (view: "month" | "week" | "day" | "year") => {
 		setCurrentView(view);
 		syncUrl({ view });

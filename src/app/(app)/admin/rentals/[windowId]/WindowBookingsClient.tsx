@@ -154,8 +154,8 @@ export default function WindowBookingsClient() {
 					</p>
 				</div>
 			) : (
-				<div className="overflow-hidden rounded-lg border border-[var(--border)]">
-					<table className="w-full">
+				<div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+					<table className="w-full min-w-[640px]">
 						<thead className="bg-[var(--muted)] text-left text-sm">
 							<tr>
 								<th className="px-4 py-3 font-medium">Court</th>
@@ -220,8 +220,8 @@ export default function WindowBookingsClient() {
 						{cancelledBookings.length} cancelled booking
 						{cancelledBookings.length !== 1 ? "s" : ""}
 					</summary>
-					<div className="mt-2 overflow-hidden rounded-lg border border-[var(--border)]">
-						<table className="w-full">
+					<div className="mt-2 overflow-x-auto rounded-lg border border-[var(--border)]">
+						<table className="w-full min-w-[640px]">
 							<thead className="bg-[var(--muted)] text-left text-sm">
 								<tr>
 									<th className="px-4 py-3 font-medium">Court</th>
