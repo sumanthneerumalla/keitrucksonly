@@ -3,6 +3,7 @@
 import { Archive, Pencil, Plus } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import { isAnyAdmin, isFacilityOrAbove } from "~/lib/utils";
@@ -11,6 +12,10 @@ import { api } from "~/trpc/react";
 export default function PackagePlansClient() {
 	const { toasts, toast, dismiss } = useToast();
 	const [showInactive, setShowInactive] = useState(false);
+	const [archiveTarget, setArchiveTarget] = useState<{
+		packagePlanId: string;
+		name: string;
+	} | null>(null);
 
 	const { data: user, isLoading: isUserLoading } =
 		api.user.getOrCreateProfile.useQuery();
@@ -84,8 +89,13 @@ export default function PackagePlansClient() {
 	};
 
 	const handleArchive = (packagePlanId: string, name: string) => {
-		if (window.confirm(`Archive "${name}"? Existing sold packages are unaffected.`)) {
-			archiveMutation.mutate({ packagePlanId });
+		setArchiveTarget({ packagePlanId, name });
+	};
+
+	const confirmArchive = () => {
+		if (archiveTarget) {
+			archiveMutation.mutate({ packagePlanId: archiveTarget.packagePlanId });
+			setArchiveTarget(null);
 		}
 	};
 
@@ -239,6 +249,16 @@ export default function PackagePlansClient() {
 					</table>
 				</div>
 			)}
+
+			<AlertDialog
+				open={archiveTarget !== null}
+				title={`Archive "${archiveTarget?.name}"?`}
+				description="Existing sold packages are unaffected. You can reactivate the plan later."
+				confirmLabel="Archive"
+				destructive
+				onConfirm={confirmArchive}
+				onCancel={() => setArchiveTarget(null)}
+			/>
 		</div>
 	);
 }

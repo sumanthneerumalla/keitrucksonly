@@ -234,6 +234,7 @@ export default function CalendarClient() {
 			backgroundColor: e.backgroundColor ?? undefined,
 			allDay: e.allDay,
 			resourceId: e.resourceId ?? undefined,
+			resourceIds: e.resourceIds?.length ? e.resourceIds : undefined,
 			uid: e.uid,
 			rrule: e.rrule ? parseRRule(e.rrule) : undefined,
 			exdates: e.exdates?.map((d) => d.toISOString()) ?? [],

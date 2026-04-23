@@ -885,11 +885,33 @@ export const userRouter = createTRPCRouter({
 				},
 			});
 
+			let targetClubShortName: string;
+			let targetRole: UserType;
+
 			if (!membership || !membership.facility.isActive) {
-				throw new TRPCError({
-					code: "FORBIDDEN",
-					message: "You do not have access to this facility.",
+				// Platform admins can switch to any active facility in any club,
+				// even without an explicit UserClub row (mirrors switchClub bypass).
+				if (!isPlatformAdmin(user)) {
+					throw new TRPCError({
+						code: "FORBIDDEN",
+						message: "You do not have access to this facility.",
+					});
+				}
+				const facility = await ctx.db.clubFacility.findUnique({
+					where: { facilityId: input.facilityId },
+					select: { clubShortName: true, isActive: true },
 				});
+				if (!facility || !facility.isActive) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Facility not found or inactive.",
+					});
+				}
+				targetClubShortName = facility.clubShortName;
+				targetRole = UserType.PLATFORM_ADMIN;
+			} else {
+				targetClubShortName = membership.facility.clubShortName;
+				targetRole = membership.role;
 			}
 
 			// Update all three active fields on User
@@ -897,8 +919,8 @@ export const userRouter = createTRPCRouter({
 				where: { userId: user.userId },
 				data: {
 					activeFacilityId: input.facilityId,
-					clubShortName: membership.facility.clubShortName,
-					userType: membership.role,
+					clubShortName: targetClubShortName,
+					userType: targetRole,
 				},
 				select: { activeFacilityId: true, clubShortName: true, userType: true },
 			});

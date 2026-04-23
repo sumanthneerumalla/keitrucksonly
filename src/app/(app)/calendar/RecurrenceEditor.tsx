@@ -64,9 +64,16 @@ const parseNum = (v: string) => Math.max(1, Number.parseInt(v, 10) || 1);
 interface RecurrenceEditorProps {
 	value?: RRuleOptions | null;
 	onChange: (v: RRuleOptions | null) => void;
+	disabled?: boolean;
+	disabledReason?: string;
 }
 
-export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
+export function RecurrenceEditor({
+	value,
+	onChange,
+	disabled = false,
+	disabledReason,
+}: RecurrenceEditorProps) {
 	const [show, setShow] = useState(value != null);
 	const [opts, setOpts] = useState<RRuleOptions | null>(value ?? null);
 
@@ -140,13 +147,17 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
 			: [];
 
 	return (
-		<div className="rounded-md border border-[var(--border)] bg-[var(--card,var(--background))]">
+		<div
+			className={`rounded-md border border-[var(--border)] bg-[var(--card,var(--background))] ${disabled ? "pointer-events-none opacity-50" : ""}`}
+			title={disabled ? disabledReason : undefined}
+		>
 			{/* Toggle row */}
 			<div className="flex items-center gap-2 px-4 py-3">
 				<input
 					type="checkbox"
 					id="recurrence-toggle"
 					checked={show}
+					disabled={disabled}
 					onChange={(e) => toggle(e.target.checked)}
 					className="h-4 w-4 rounded border-input accent-[var(--primary)]"
 				/>

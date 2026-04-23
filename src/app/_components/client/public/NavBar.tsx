@@ -79,11 +79,13 @@ export function NavBar({ clubShortName }: NavBarProps) {
 
 	// On authed app pages (not public), MobileAuthedHeader provides the hamburger.
 	// NavBar hamburger only needed on public pages (/, /resources/*, /club/*, /events/*).
+	// /rentals is public for unauthenticated visitors; authenticated users get the authed layout.
 	const isPublicPage =
 		pathname === "/" ||
 		pathname.startsWith("/resources") ||
 		pathname.startsWith("/club/") ||
-		pathname.startsWith("/events/");
+		pathname.startsWith("/events/") ||
+		(pathname.startsWith("/rentals") && !isSignedIn);
 	const showMobileHamburger = !isSignedIn || isPublicPage;
 
 	return (

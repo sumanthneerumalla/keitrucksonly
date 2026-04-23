@@ -1,6 +1,5 @@
 import {
 	EventType,
-	type PrismaClient,
 	RegistrationStatus,
 	type User,
 	UserType,
@@ -25,6 +24,7 @@ import {
 	isPlatformAdmin,
 	isSameClub,
 } from "~/server/utils/utils";
+import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
 
 // ============================================================
 // SHARED HELPERS
@@ -42,46 +42,6 @@ function requireSameClub(user: User, clubShortName: string): void {
 		});
 	}
 }
-
-/**
- * Checks for blocking event conflicts on a resource for a given time range.
- * Returns the conflicting events (non-recurring only — recurring conflicts are
- * handled client-side via rrule expansion; server-side recurring expansion is
- * reserved for the dedicated checkConflicts query procedure).
- */
-async function checkResourceConflicts({
-	db,
-	resourceId,
-	start,
-	end,
-	excludeEventId,
-}: {
-	db: PrismaClient;
-	resourceId: string;
-	start: Date;
-	end: Date;
-	excludeEventId?: string;
-}): Promise<Array<{ eventId: string; title: string; start: Date; end: Date }>> {
-	return db.calendarEvent.findMany({
-		where: {
-			resourceId,
-			isDeleted: false,
-			isBlocking: true,
-			rrule: null,
-			eventId: excludeEventId ? { not: excludeEventId } : undefined,
-			start: { lt: end },
-			end: { gt: start },
-		},
-		select: {
-			eventId: true,
-			title: true,
-			start: true,
-			end: true,
-		},
-	});
-}
-
-// DEFAULT_COLOR and DEFAULT_BG_COLOR imported from ~/lib/utils
 
 // ============================================================
 // INPUT SCHEMAS
@@ -1031,6 +991,12 @@ export const calendarRouter = createTRPCRouter({
 
 			// Use provided facilityId, or default to user's active facility
 			const effectiveFacilityId = input.facilityId ?? user.activeFacilityId;
+			if (!effectiveFacilityId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "A facility must be selected. Please set your active facility in profile settings.",
+				});
+			}
 
 			const event = await ctx.db.calendarEvent.create({
 				data: {
@@ -1168,6 +1134,7 @@ export const calendarRouter = createTRPCRouter({
 				events: filteredEvents.map((e) => ({
 					eventId: e.eventId,
 					resourceId: e.resourceId,
+					resourceIds: e.resourceIds,
 					title: e.title,
 					description: e.description,
 					start: e.start,
@@ -1214,6 +1181,18 @@ export const calendarRouter = createTRPCRouter({
 			}
 
 			requireSameClub(user, existing.clubShortName);
+
+			// Guard: rental events must be managed through the rentals router
+			if (
+				existing.eventType === "RENTAL_WINDOW" ||
+				existing.eventType === "RENTAL_BOOKING"
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message:
+						"Rental events must be managed from the Court Rentals page.",
+				});
+			}
 
 			// Coaches can only update their own events
 			if (isCoach && existing.createdByUserId !== user.userId) {
@@ -1416,6 +1395,7 @@ export const calendarRouter = createTRPCRouter({
 					eventId: newEventId,
 					uid: `${newEventId}@facilitypresence.com`,
 					clubShortName: existing.clubShortName,
+					facilityId: existing.facilityId,
 					createdByUserId: existing.createdByUserId,
 					eventType: existing.eventType,
 					title: eventData.title ?? existing.title,
@@ -1461,6 +1441,18 @@ export const calendarRouter = createTRPCRouter({
 			}
 
 			requireSameClub(user, existing.clubShortName);
+
+			// Guard: rental events must be managed through the rentals router
+			if (
+				existing.eventType === "RENTAL_WINDOW" ||
+				existing.eventType === "RENTAL_BOOKING"
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message:
+						"Rental events must be managed from the Court Rentals page.",
+				});
+			}
 
 			// Coaches can only delete their own events
 			if (isCoach && existing.createdByUserId !== user.userId) {
@@ -1585,6 +1577,9 @@ export const calendarRouter = createTRPCRouter({
 						},
 					},
 					createdByUser: { select: { firstName: true, lastName: true } },
+					bookingBlockEvent: {
+						select: { rentalWindowEventId: true },
+					},
 					_count: {
 						select: {
 							registrations: {

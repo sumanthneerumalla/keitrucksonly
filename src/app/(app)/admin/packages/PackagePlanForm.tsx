@@ -20,7 +20,7 @@ import {
 	PopoverTrigger,
 } from "~/app/_components/shared/ui/popover";
 import { Select } from "~/app/_components/shared/ui/select";
-import { isFacilityOrAbove } from "~/lib/utils";
+import { isAnyAdmin } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
 type DurationUnit = "days" | "weeks" | "months" | "years";
@@ -192,7 +192,7 @@ export default function PackagePlanForm({
 		}
 	};
 
-	const isFacilityOrAdmin = user ? isFacilityOrAbove(user) : false;
+	const canManagePlans = user ? isAnyAdmin(user) : false;
 
 	if (isUserLoading || (mode === "edit" && isEditLoading)) {
 		return (
@@ -202,7 +202,7 @@ export default function PackagePlanForm({
 		);
 	}
 
-	if (!isFacilityOrAdmin) {
+	if (!canManagePlans) {
 		return (
 			<div className="flex h-[calc(100vh-5rem)] items-center justify-center">
 				<div className="text-center">

@@ -29,12 +29,16 @@ export default function AuthedLayout({ children }: AuthedLayoutProps) {
 	// Short URLs (e.g. /cba) are rewritten to /club/<shortname> by middleware,
 	// so by the time this component renders, club landing pages always appear
 	// as /club/* — no need to check the hardcoded shortname list here.
+	// Note: /rentals is public for unauthenticated visitors (no sidebar) but
+	// authenticated users see the sidebar so they can navigate elsewhere after booking.
+	const isRentalsPage = pathname.startsWith("/rentals");
 	const isPublicPage =
 		pathname === "/" ||
 		pathname === "/features" ||
 		pathname.startsWith("/resources") ||
 		pathname.startsWith("/club/") ||
-		pathname.startsWith("/events/");
+		pathname.startsWith("/events/") ||
+		(isRentalsPage && !isSignedIn);
 
 	// Extract clubShortName from pathname for club landing pages.
 	// This is passed to NavBar so its SignIn/SignUp buttons can include

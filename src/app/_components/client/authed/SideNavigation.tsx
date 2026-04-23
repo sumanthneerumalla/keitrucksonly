@@ -9,6 +9,7 @@ import {
 import {
 	Building2,
 	Calendar,
+	CalendarClock,
 	ChevronDown,
 	LayoutDashboard,
 	Settings,
@@ -70,6 +71,12 @@ export const navItems: NavItem[] = [
 		label: "Calendar",
 		href: "/calendar",
 		icon: <Calendar size={20} />,
+		userTypes: ALL_TYPES,
+	},
+	{
+		label: "Book a Court",
+		href: "/rentals",
+		icon: <CalendarClock size={20} />,
 		userTypes: ALL_TYPES,
 	},
 	{
@@ -180,6 +187,15 @@ export const navItems: NavItem[] = [
 			{
 				label: "Check-in",
 				href: "/admin/checkin",
+				userTypes: [
+					UserType.PLATFORM_ADMIN,
+					UserType.CLUB_ADMIN,
+					UserType.FACILITY,
+				],
+			},
+			{
+				label: "Court Rentals",
+				href: "/admin/rentals",
 				userTypes: [
 					UserType.PLATFORM_ADMIN,
 					UserType.CLUB_ADMIN,

@@ -39,6 +39,7 @@ model Club {
   packagePlans      PackagePlan[]
   memberPackages    MemberPackage[]
   tags              Tag[]
+  rentalBookings    RentalBooking[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -82,6 +83,8 @@ model User {
 
   // User tags
   userTags UserTag[]
+
+  rentalBookings    RentalBooking[]
 
   @@index([clerkUserId])
   @@index([clubShortName])
@@ -379,6 +382,7 @@ model ClubFacility {
   resources      ClubResource[]
   calendarEvents CalendarEvent[]
   attendances    Attendance[]
+  rentalBookings RentalBooking[]
 
   @@unique([clubShortName, name])
   @@index([clubShortName])
@@ -405,6 +409,7 @@ model ClubResource {
   // Relations
   businessHours ResourceBusinessHours[]
   events        CalendarEvent[]
+  rentalBookings RentalBooking[]
 
   @@index([clubShortName])
   @@index([resourceTypeId])
@@ -432,8 +437,8 @@ model CalendarEvent {
   club           Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   resourceId     String?
   resource       ClubResource? @relation(fields: [resourceId], references: [resourceId], onDelete: SetNull)
-  facilityId     String?       // Nullable during migration; will become required once backfill is confirmed safe
-  facility       ClubFacility? @relation(fields: [facilityId], references: [facilityId], onDelete: Restrict)
+  facilityId     String
+  facility       ClubFacility  @relation(fields: [facilityId], references: [facilityId], onDelete: Restrict)
   title          String        @db.VarChar(500)
   description    String?       @db.Text
   start          DateTime
@@ -477,6 +482,8 @@ model CalendarEvent {
   registrations EventRegistration[]
   attendances   Attendance[]
   creditUsages  PackageCreditUsage[]
+  rentalWindowBookings  RentalBooking[] @relation("RentalWindow")
+  bookingBlockEvent     RentalBooking?  @relation("BookingBlock")
 
   @@index([clubShortName])
   @@index([resourceId])
@@ -518,11 +525,48 @@ model Product {
   calendarEvents CalendarEvent[]
   registrations  EventRegistration[]
   packagePlans   PackagePlan[]
+  rentalBookings RentalBooking[]
 
   @@index([clubShortName])
   @@index([categoryId])
   @@index([stripeProductId])
   @@index([createdByUserId])
+}
+
+enum RentalBookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+model RentalBooking {
+  bookingId           String        @id @default(cuid())
+  clubShortName       String
+  club                Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  facilityId          String
+  facility            ClubFacility  @relation(fields: [facilityId], references: [facilityId])
+  rentalWindowEventId String
+  rentalWindowEvent   CalendarEvent @relation("RentalWindow", fields: [rentalWindowEventId], references: [eventId])
+  userId              String
+  user                User          @relation(fields: [userId], references: [userId])
+  resourceId          String
+  resource            ClubResource  @relation(fields: [resourceId], references: [resourceId])
+  startTime           DateTime
+  endTime             DateTime
+  blockingEventId     String?       @unique  // @unique required for 1:1 relation (decision #69)
+  blockingEvent       CalendarEvent? @relation("BookingBlock", fields: [blockingEventId], references: [eventId])
+  productId           String?
+  product             Product?      @relation(fields: [productId], references: [productId])
+  status              RentalBookingStatus @default(CONFIRMED)
+  notes               String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([clubShortName])
+  @@index([rentalWindowEventId])
+  @@index([userId])
+  @@index([resourceId])
+  @@index([startTime, endTime])
+  @@index([status])
 }
 
 // EventRegistration — tracks who signed up for what; created when Stripe webhook confirms payment

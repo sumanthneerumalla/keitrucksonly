@@ -11,7 +11,14 @@ import type {
 } from "@ilamy/calendar";
 import type { RRuleOptions } from "@ilamy/calendar";
 import dayjs from "dayjs";
-import { Building2, ChevronsUpDown, ExternalLink, Trash2, X } from "lucide-react";
+import {
+	Building2,
+	Check,
+	ChevronsUpDown,
+	ExternalLink,
+	Trash2,
+	X,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RRule } from "rrule";
@@ -38,6 +45,8 @@ import { COLOR_OPTIONS } from "~/lib/constants";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
+type EventTypeValue = "BLOCK" | "BOOKABLE" | "COACHING_SLOT" | "RENTAL_WINDOW";
+
 interface EventFormModalProps {
 	open?: boolean;
 	selectedEvent?: IlamyCalendarEvent | null;
@@ -49,6 +58,7 @@ interface EventFormModalProps {
 	userType?: string;
 	facilityId?: string;
 	facilityName?: string;
+	defaultEventType?: EventTypeValue;
 }
 
 function toDatetimeLocal(d: dayjs.Dayjs): string {
@@ -68,13 +78,15 @@ export default function EventFormModal({
 	userType,
 	facilityId,
 	facilityName,
+	defaultEventType: defaultEventTypeProp,
 }: EventFormModalProps) {
 	// isEdit: selectedEvent has a real db id (non-empty string) — not a new-event temp object
 	const isEdit = selectedEvent?.id != null && selectedEvent.id !== "";
 
 	const isCoach = userType === "COACH";
 	const isFacilityOrAdmin = userType ? isFacilityOrAbove({ userType }) : false;
-	const defaultEventType = isCoach ? "COACHING_SLOT" : "BOOKABLE";
+	const defaultEventType: EventTypeValue =
+		defaultEventTypeProp ?? (isCoach ? "COACHING_SLOT" : "BOOKABLE");
 
 	// Fetch full event details when editing, to determine edit permissions
 	const dbEventId = isEdit
@@ -102,15 +114,17 @@ export default function EventFormModal({
 	const [allDay, setAllDay] = useState(false);
 	const [rruleOpts, setRruleOpts] = useState<RRuleOptions | null>(null);
 	const [saving, setSaving] = useState(false);
-	// eventType: coaches default to COACHING_SLOT; everyone else defaults to BOOKABLE.
-	const [eventType, setEventType] = useState<
-		"BLOCK" | "BOOKABLE" | "COACHING_SLOT"
-	>(defaultEventType);
+	const [eventType, setEventType] = useState<EventTypeValue>(defaultEventType);
 	const [productId, setProductId] = useState<string>("");
 	const [color, setColor] = useState<string>("");
 	const [scope, setScope] = useState<"THIS" | "THIS_AND_FUTURE" | "ALL">("ALL");
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [productPickerOpen, setProductPickerOpen] = useState(false);
+	// RENTAL_WINDOW-specific state
+	const [resourceIds, setResourceIds] = useState<string[]>([]);
+	const [maxBookingHours, setMaxBookingHours] = useState(2);
+	const [cancelCutoffHours, setCancelCutoffHours] = useState<string>("");
+	const [courtPickerOpen, setCourtPickerOpen] = useState(false);
 
 	// Reset saving state and scope when modal opens
 	useEffect(() => {
@@ -123,6 +137,11 @@ export default function EventFormModal({
 	// Populate form when modal opens
 	useEffect(() => {
 		if (!open) return;
+		// Reset rental-specific fields on every open; the second useEffect seeds them
+		// from fetchedEvent for edits and they stay at defaults for new events.
+		setResourceIds([]);
+		setMaxBookingHours(2);
+		setCancelCutoffHours("");
 		if (isEdit && selectedEvent) {
 			setTitle(selectedEvent.title ?? "");
 			setResourceId(selectedEvent.resourceId?.toString() ?? "");
@@ -132,11 +151,7 @@ export default function EventFormModal({
 			setRruleOpts((selectedEvent.rrule as RRuleOptions | undefined) ?? null);
 			const data = selectedEvent.data as Record<string, unknown> | undefined;
 			setEventType(
-				(data?.eventType as
-					| "BLOCK"
-					| "BOOKABLE"
-					| "COACHING_SLOT"
-					| undefined) ?? defaultEventType,
+				(data?.eventType as EventTypeValue | undefined) ?? defaultEventType,
 			);
 			setProductId((data?.productId as string | undefined) ?? "");
 			setColor(selectedEvent.backgroundColor ?? "");
@@ -164,14 +179,41 @@ export default function EventFormModal({
 		}
 	}, [open, selectedEvent, isEdit, defaultEventType]);
 
+	// Populate rental-specific fields from fetchedEvent (async — arrives after modal opens)
+	useEffect(() => {
+		if (!fetchedEvent || fetchedEvent.eventType !== "RENTAL_WINDOW") return;
+		setResourceIds(fetchedEvent.resourceIds ?? []);
+		setMaxBookingHours(fetchedEvent.maxBookingHours ?? 2);
+		setCancelCutoffHours(
+			fetchedEvent.earlyCancelCutoffHours != null
+				? String(fetchedEvent.earlyCancelCutoffHours)
+				: "",
+		);
+		// When opened from /admin/rentals, selectedEvent.rrule isn't populated;
+		// seed rruleOpts from the fetched rrule string so staff can edit the pattern.
+		if (fetchedEvent.rrule && !rruleOpts) {
+			try {
+				setRruleOpts(
+					RRule.fromString(fetchedEvent.rrule).origOptions as RRuleOptions,
+				);
+			} catch {
+				// ignore parse errors
+			}
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [fetchedEvent]);
+
 	// All hooks must be above early return (rules of hooks)
 	const utils = api.useUtils();
 	const { toast } = useToast();
 
-	// Fetch products for the selector (only when eventType !== BLOCK)
+	// Fetch products for the selector (BOOKABLE/COACHING_SLOT only)
 	const { data: productsData } = api.products.getProducts.useQuery(
 		{},
-		{ enabled: !!open && eventType !== "BLOCK" },
+		{
+			enabled:
+				!!open && eventType !== "BLOCK" && eventType !== "RENTAL_WINDOW",
+		},
 	);
 
 	// Derive the selected product label for the combobox trigger
@@ -223,6 +265,51 @@ export default function EventFormModal({
 		},
 	});
 
+	const invalidateAfterRentalMutation = () => {
+		void utils.calendar.getEvents.invalidate();
+		void utils.rentals.listRentalWindows.invalidate();
+	};
+
+	const rentalsCreateMutation = api.rentals.createRentalWindow.useMutation({
+		onSuccess: () => {
+			invalidateAfterRentalMutation();
+			onAdd?.(buildEvent());
+			onClose();
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+		onSettled: () => {
+			setSaving(false);
+		},
+	});
+	const rentalsUpdateMutation = api.rentals.updateRentalWindow.useMutation({
+		onSuccess: () => {
+			invalidateAfterRentalMutation();
+			onUpdate?.(buildEvent());
+			onClose();
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+		onSettled: () => {
+			setSaving(false);
+		},
+	});
+	const rentalsDeleteMutation = api.rentals.deleteRentalWindow.useMutation({
+		onSuccess: () => {
+			invalidateAfterRentalMutation();
+			onDelete?.(selectedEvent!);
+			onClose();
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+		onSettled: () => {
+			setSaving(false);
+		},
+	});
+
 	const buildEvent = useCallback(
 		(): IlamyCalendarEvent =>
 			({
@@ -245,6 +332,62 @@ export default function EventFormModal({
 
 	// While fetching permissions on edit, show loading shell
 	const isLoadingPermissions = isEdit && !fetchedEvent;
+
+	// Read-only view: RENTAL_BOOKING events are managed via /admin/rentals/{windowId}.
+	// Staff still land here via the calendar but are sent to the window page for any changes.
+	if (isEdit && fetchedEvent && fetchedEvent.eventType === "RENTAL_BOOKING") {
+		const windowId = fetchedEvent.bookingBlockEvent?.rentalWindowEventId;
+		return (
+			<>
+				<div
+					className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
+					onClick={onClose}
+				/>
+				<div className="glass-panel fixed top-0 right-0 z-50 flex h-full w-full max-w-md flex-col border-[var(--border)] border-l shadow-xl">
+					<div className="flex items-center justify-between border-[var(--border)] border-b px-6 py-4">
+						<h2 className="font-semibold text-[var(--foreground)] text-base">
+							{fetchedEvent.title}
+						</h2>
+						<button
+							onClick={onClose}
+							className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+							aria-label="Close"
+						>
+							<X size={18} />
+						</button>
+					</div>
+					<div className="flex-1 space-y-3 overflow-y-auto px-6 py-5">
+						<p className="text-[var(--muted-foreground)] text-sm">
+							{dayjs(fetchedEvent.start).format("ddd, MMM D · h:mm A")} –{" "}
+							{dayjs(fetchedEvent.end).format("h:mm A")}
+						</p>
+						{fetchedEvent.resource && (
+							<p className="text-[var(--muted-foreground)] text-sm">
+								Court:{" "}
+								<span className="text-[var(--foreground)]">
+									{fetchedEvent.resource.title}
+								</span>
+							</p>
+						)}
+						{windowId && (
+							<Link
+								href={`/admin/rentals/${windowId}`}
+								onClick={onClose}
+								className="inline-flex items-center gap-1.5 text-[var(--primary)] text-sm underline-offset-2 hover:underline"
+							>
+								<ExternalLink size={13} /> Manage bookings
+							</Link>
+						)}
+					</div>
+					<div className="flex justify-end border-[var(--border)] border-t px-6 py-4">
+						<Button variant="outline" size="sm" onClick={onClose}>
+							Close
+						</Button>
+					</div>
+				</div>
+			</>
+		);
+	}
 
 	// Read-only view: editing an event you don't own
 	if (isEdit && fetchedEvent && !canEdit) {
@@ -308,9 +451,68 @@ export default function EventFormModal({
 
 	const handleSave = () => {
 		if (!title.trim()) return;
-		setSaving(true);
+
+		const rruleString = rruleOpts
+			? new RRule(
+					rruleOpts as ConstructorParameters<typeof RRule>[0],
+				).toString()
+			: undefined;
+		const colorText = color
+			? (COLOR_OPTIONS.find((o) => o.bg === color)?.text ?? "#1e293b")
+			: undefined;
 		const startDate = dayjs(start).toDate();
 		const endDate = dayjs(end).toDate();
+
+		if (eventType === "RENTAL_WINDOW") {
+			if (resourceIds.length === 0) {
+				toast("Select at least one court.", "error");
+				return;
+			}
+			const parsedCutoff =
+				cancelCutoffHours.trim() !== ""
+					? Number.parseInt(cancelCutoffHours, 10)
+					: undefined;
+			setSaving(true);
+			if (isEdit && selectedEvent) {
+				const dbEventId =
+					((selectedEvent.data as Record<string, unknown> | undefined)
+						?.dbEventId as string | undefined) ??
+					String(selectedEvent?.id ?? "");
+				rentalsUpdateMutation.mutate({
+					eventId: dbEventId,
+					title,
+					start: startDate,
+					end: endDate,
+					courtIds: resourceIds,
+					maxBookingHours,
+					earlyCancelCutoffHours: parsedCutoff ?? null,
+					rrule: rruleString,
+					color: colorText,
+					backgroundColor: color || undefined,
+				});
+			} else {
+				if (!facilityId) {
+					toast("No facility selected for this rental window.", "error");
+					setSaving(false);
+					return;
+				}
+				rentalsCreateMutation.mutate({
+					facilityId,
+					title,
+					start: startDate,
+					end: endDate,
+					courtIds: resourceIds,
+					maxBookingHours,
+					earlyCancelCutoffHours: parsedCutoff,
+					rrule: rruleString,
+					color: colorText,
+					backgroundColor: color || undefined,
+				});
+			}
+			return;
+		}
+
+		setSaving(true);
 		if (isEdit && selectedEvent) {
 			const dbEventId =
 				((selectedEvent.data as Record<string, unknown> | undefined)
@@ -331,9 +533,7 @@ export default function EventFormModal({
 				// (a) preserve the existing value on edit, or (b) add a creditCost number input.
 				creditCost: productId ? 1 : null,
 				backgroundColor: color || undefined,
-				color: color
-					? (COLOR_OPTIONS.find((o) => o.bg === color)?.text ?? "#1e293b")
-					: undefined,
+				color: colorText,
 				...(isRecurring && {
 					scope,
 					instanceDate: selectedEvent.start.toDate(),
@@ -348,16 +548,10 @@ export default function EventFormModal({
 				facilityId: facilityId || undefined,
 				allDay,
 				productId: productId || undefined,
-				rrule: rruleOpts
-					? new RRule(
-							rruleOpts as ConstructorParameters<typeof RRule>[0],
-						).toString()
-					: undefined,
+				rrule: rruleString,
 				eventType,
 				backgroundColor: color || undefined,
-				color: color
-					? (COLOR_OPTIONS.find((o) => o.bg === color)?.text ?? "#1e293b")
-					: undefined,
+				color: colorText,
 			});
 		}
 	};
@@ -375,6 +569,10 @@ export default function EventFormModal({
 			((selectedEvent.data as Record<string, unknown> | undefined)?.dbEventId as
 				| string
 				| undefined) ?? String(selectedEvent.id);
+		if (fetchedEvent?.eventType === "RENTAL_WINDOW") {
+			rentalsDeleteMutation.mutate({ eventId: dbEventId });
+			return;
+		}
 		const isRecurring = !!fetchedEvent?.rrule;
 		deleteMutation.mutate({
 			eventId: dbEventId,
@@ -438,9 +636,7 @@ export default function EventFormModal({
 							<Select
 								value={eventType}
 								onChange={(e) => {
-									setEventType(
-										e.target.value as "BLOCK" | "BOOKABLE" | "COACHING_SLOT",
-									);
+									setEventType(e.target.value as EventTypeValue);
 									setProductId("");
 								}}
 								disabled={isEdit}
@@ -450,13 +646,16 @@ export default function EventFormModal({
 									Bookable — students can register
 								</option>
 								<option value="BLOCK">Block — internal scheduling</option>
+								<option value="RENTAL_WINDOW">
+									Rental Window — court availability
+								</option>
 							</Select>
-							{eventType !== "BLOCK" && (
+							{eventType === "BOOKABLE" || eventType === "COACHING_SLOT" ? (
 								<p className="text-[var(--muted-foreground)] text-xs">
 									Set visibility, capacity, and other details on the event page
 									after creation.
 								</p>
-							)}
+							) : null}
 						</div>
 					)}
 
@@ -473,8 +672,8 @@ export default function EventFormModal({
 						/>
 					</div>
 
-					{/* Resource */}
-					{resources.length > 0 && (
+					{/* Resource (single) — hidden for RENTAL_WINDOW which uses multi-select below */}
+					{resources.length > 0 && eventType !== "RENTAL_WINDOW" && (
 						<div className="space-y-1">
 							<label className="font-medium text-[var(--foreground)] text-sm">
 								Resource
@@ -494,16 +693,110 @@ export default function EventFormModal({
 						</div>
 					)}
 
-					{/* All day */}
-					<label className="flex cursor-pointer select-none items-center gap-2 text-[var(--foreground)] text-sm">
-						<input
-							type="checkbox"
-							checked={allDay}
-							onChange={(e) => setAllDay(e.target.checked)}
-							className="h-4 w-4 rounded border-input accent-[var(--primary)]"
-						/>
-						All day
-					</label>
+					{/* Courts (multi-select) — RENTAL_WINDOW only */}
+					{eventType === "RENTAL_WINDOW" && (
+						<div className="space-y-1">
+							<label className="font-medium text-[var(--foreground)] text-sm">
+								Courts <span className="text-red-500">*</span>
+							</label>
+							<Popover
+								open={courtPickerOpen}
+								onOpenChange={setCourtPickerOpen}
+							>
+								<PopoverTrigger asChild>
+									<button
+										type="button"
+										className="flex h-auto min-h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm transition-colors hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring"
+									>
+										<span
+											className={
+												resourceIds.length
+													? "flex flex-wrap gap-1 text-[var(--foreground)]"
+													: "text-[var(--muted-foreground)]"
+											}
+										>
+											{resourceIds.length ? (
+												resourceIds.map((rid) => {
+													const r = resources.find(
+														(res) => res.id === rid,
+													);
+													return (
+														<span
+															key={rid}
+															className="inline-flex items-center rounded-full bg-[var(--muted)] px-2 py-0.5 text-xs"
+														>
+															{r?.title ?? rid}
+														</span>
+													);
+												})
+											) : (
+												<>Select courts…</>
+											)}
+										</span>
+										<ChevronsUpDown
+											size={14}
+											className="ml-2 shrink-0 opacity-50"
+										/>
+									</button>
+								</PopoverTrigger>
+								<PopoverContent
+									className="w-[--radix-popover-trigger-width] p-0"
+									align="start"
+								>
+									<Command>
+										<CommandInput placeholder="Search courts…" />
+										<CommandList>
+											<CommandEmpty>No courts found.</CommandEmpty>
+											<CommandGroup>
+												{resources.map((r) => {
+													const selected = resourceIds.includes(
+														r.id.toString(),
+													);
+													return (
+														<CommandItem
+															key={r.id}
+															value={r.title}
+															onSelect={() => {
+																const rid = r.id.toString();
+																setResourceIds((prev) =>
+																	prev.includes(rid)
+																		? prev.filter((p) => p !== rid)
+																		: [...prev, rid],
+																);
+															}}
+														>
+															<span className="mr-2 flex h-4 w-4 items-center justify-center">
+																{selected && <Check size={14} />}
+															</span>
+															{r.title}
+														</CommandItem>
+													);
+												})}
+											</CommandGroup>
+										</CommandList>
+									</Command>
+								</PopoverContent>
+							</Popover>
+							{resources.length === 0 && (
+								<p className="text-[var(--muted-foreground)] text-xs">
+									No courts found for this facility.
+								</p>
+							)}
+						</div>
+					)}
+
+					{/* All day — hidden for RENTAL_WINDOW (always time-bounded) */}
+					{eventType !== "RENTAL_WINDOW" && (
+						<label className="flex cursor-pointer select-none items-center gap-2 text-[var(--foreground)] text-sm">
+							<input
+								type="checkbox"
+								checked={allDay}
+								onChange={(e) => setAllDay(e.target.checked)}
+								className="h-4 w-4 rounded border-input accent-[var(--primary)]"
+							/>
+							All day
+						</label>
+					)}
 
 					{/* Start */}
 					{!allDay && (
@@ -535,34 +828,51 @@ export default function EventFormModal({
 						</div>
 					)}
 
-					{/* Recurrence — new events only */}
-					{!isEdit && (
+					{/* Recurrence — always shown for create; on edit, shown for RENTAL_WINDOW + BLOCK only.
+					    BOOKABLE/COACHING_SLOT pattern edits hidden until registration migration ships
+					    (TODO at calendar.ts). RENTAL_WINDOW bookings hold their original times regardless
+					    of pattern change. BLOCK has no registrations so pattern edits are safe. */}
+					{(!isEdit ||
+						eventType === "RENTAL_WINDOW" ||
+						eventType === "BLOCK") && (
 						<div className="space-y-1">
-							<RecurrenceEditor value={rruleOpts} onChange={setRruleOpts} />
+							<RecurrenceEditor
+								value={rruleOpts}
+								onChange={setRruleOpts}
+								disabled={
+									isEdit && eventType === "BLOCK" && scope !== "ALL"
+								}
+								disabledReason="Pattern can only be changed when scope is 'All events in series'."
+							/>
 						</div>
 					)}
 
-					{/* Recurrence scope selector — shown when editing a recurring event */}
-					{isEdit && fetchedEvent?.rrule && (
-						<div className="space-y-1">
-							<label className="font-medium text-[var(--foreground)] text-sm">
-								Edit scope
-							</label>
-							<Select
-								value={scope}
-								onChange={(e) =>
-									setScope(e.target.value as "THIS" | "THIS_AND_FUTURE" | "ALL")
-								}
-								className="h-9"
-							>
-								<option value="ALL">All events in series</option>
-								<option value="THIS">This event only</option>
-								<option value="THIS_AND_FUTURE">
-									This and following events
-								</option>
-							</Select>
-						</div>
-					)}
+					{/* Recurrence scope selector — shown when editing a recurring event.
+					    Hidden for RENTAL_WINDOW: backend is series-level only (no per-instance scope). */}
+					{isEdit &&
+						fetchedEvent?.rrule &&
+						eventType !== "RENTAL_WINDOW" && (
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									Edit scope
+								</label>
+								<Select
+									value={scope}
+									onChange={(e) =>
+										setScope(
+											e.target.value as "THIS" | "THIS_AND_FUTURE" | "ALL",
+										)
+									}
+									className="h-9"
+								>
+									<option value="ALL">All events in series</option>
+									<option value="THIS">This event only</option>
+									<option value="THIS_AND_FUTURE">
+										This and following events
+									</option>
+								</Select>
+							</div>
+						)}
 
 					{/* Color picker */}
 					<div className="space-y-2">
@@ -589,8 +899,44 @@ export default function EventFormModal({
 						</div>
 					</div>
 
-					{/* Product selector — shown for BOOKABLE and COACHING_SLOT */}
-					{eventType !== "BLOCK" && (
+					{/* Rental-specific fields — max booking hours + cancellation cutoff */}
+					{eventType === "RENTAL_WINDOW" && (
+						<>
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									Max Booking Hours
+								</label>
+								<Input
+									type="number"
+									min={1}
+									value={maxBookingHours}
+									onChange={(e) =>
+										setMaxBookingHours(
+											Math.max(1, Number.parseInt(e.target.value, 10) || 1),
+										)
+									}
+								/>
+							</div>
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									Cancellation Cutoff (hours before start)
+								</label>
+								<Input
+									type="number"
+									min={0}
+									value={cancelCutoffHours}
+									onChange={(e) => setCancelCutoffHours(e.target.value)}
+									placeholder="None — free cancel"
+								/>
+								<p className="text-[var(--muted-foreground)] text-xs">
+									Leave blank for unrestricted member cancellation.
+								</p>
+							</div>
+						</>
+					)}
+
+					{/* Product selector — shown for BOOKABLE and COACHING_SLOT only */}
+					{eventType !== "BLOCK" && eventType !== "RENTAL_WINDOW" && (
 						<div className="space-y-1">
 							<label className="font-medium text-[var(--foreground)] text-sm">
 								Linked Product
@@ -693,7 +1039,12 @@ export default function EventFormModal({
 						<Button
 							size="sm"
 							onClick={handleSave}
-							disabled={!title.trim() || saving || isLoadingPermissions}
+							disabled={
+								!title.trim() ||
+								saving ||
+								isLoadingPermissions ||
+								(eventType === "RENTAL_WINDOW" && resourceIds.length === 0)
+							}
 						>
 							{saving ? "Saving…" : isEdit ? "Save" : "Create"}
 						</Button>

@@ -398,7 +398,7 @@ export const packagesRouter = createTRPCRouter({
 			}
 
 			const packages = await ctx.db.memberPackage.findMany({
-				where: { userId: input.userId },
+				where: { userId: input.userId, clubShortName: ctx.user.clubShortName },
 				include: {
 					packagePlan: {
 						select: {

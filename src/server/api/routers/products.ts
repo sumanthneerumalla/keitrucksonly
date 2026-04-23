@@ -22,7 +22,7 @@ const createProductSchema = z.object({
 
 const getProductsSchema = z.object({
 	page: z.number().int().min(1).default(1),
-	limit: z.number().int().min(10).max(50).default(20),
+	limit: z.number().int().min(10).max(200).default(20),
 	categoryId: z.string().optional(),
 	search: z.string().optional(),
 	includeInactive: z.boolean().optional().default(false),
