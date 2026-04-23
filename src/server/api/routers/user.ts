@@ -12,6 +12,7 @@ import { getCurrentWeekRange } from "~/server/utils/dateUtils";
 import { generateUniqueUsername } from "~/server/utils/generateUsername";
 import {
 	ROLE_HIERARCHY,
+	binaryToBase64DataUrl,
 	canAssignRole,
 	canManageUser,
 	formatUserForFrontend,
@@ -173,6 +174,39 @@ const switchUserTypeSchema = z.object({
 		UserType.FACILITY,
 		UserType.CLUB_ADMIN,
 	] as const),
+});
+
+const getStudentDetailSchema = z.object({
+	userId: z.string(),
+});
+
+// Shape of the StudentProfile.profileData JSON blob (TD-1). Validated here at
+// the mutation boundary; the client-side ProfileFieldsCard owns its own matching
+// shape — small duplication is cheaper than a shared file for 5 fields.
+const studentProfileDataSchema = z
+	.object({
+		phone: z.string().trim().max(40).optional(),
+		dateOfBirth: z
+			.string()
+			.trim()
+			.regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
+			.optional(),
+		medicalNotes: z.string().max(2000).optional(),
+		allergies: z.string().max(1000).optional(),
+		generalNotes: z.string().max(5000).optional(),
+	})
+	.partial();
+
+type StudentProfileData = z.infer<typeof studentProfileDataSchema>;
+
+function parseStudentProfileData(raw: unknown): StudentProfileData {
+	const result = studentProfileDataSchema.safeParse(raw ?? {});
+	return result.success ? result.data : {};
+}
+
+const updateStudentProfileDataSchema = z.object({
+	userId: z.string(),
+	profileData: studentProfileDataSchema,
 });
 
 const updateCoachProfileSchema = z.object({
@@ -586,7 +620,13 @@ export const userRouter = createTRPCRouter({
 			});
 		}),
 
-	// Update student profile
+	// Update student profile — SELF-SERVE. Updates the authenticated user's own
+	// StudentProfile (skillLevel, goals, bio, displayUsername, avatar bytes).
+	// NOT to be confused with `updateStudentProfileData` below, which is the
+	// staff-facing endpoint for the admin student detail page and writes the
+	// `profileData` JSON blob (phone/DOB/medical/allergies/notes). Split because
+	// this one is `protectedProcedure` (auth = target), whereas the other is
+	// `facilityProcedure` (staff acting on a student in their club).
 	updateStudentProfile: protectedProcedure
 		.input(updateStudentProfileSchema)
 		.mutation(async ({ ctx, input }) => {
@@ -2056,4 +2096,119 @@ export const userRouter = createTRPCRouter({
 			isActive: f.facilityId === user.activeFacilityId,
 		}));
 	}),
+
+	// ============================================================
+	// STUDENT DETAIL PAGE (Customer Feedback Sprint — F4)
+	// ============================================================
+
+	// Fetch the admin-facing student detail payload: user core fields, the
+	// student profile blob (with avatar as a base64 data URL), and assigned tags.
+	// See designFiles/roadmap/customer-feedback-ui-sprint.md.
+	getStudentDetail: facilityProcedure
+		.input(getStudentDetailSchema)
+		.query(async ({ ctx, input }) => {
+			const user = await ctx.db.user.findFirst({
+				where: {
+					userId: input.userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: {
+					userId: true,
+					firstName: true,
+					lastName: true,
+					email: true,
+					profileImage: true,
+					userType: true,
+					createdAt: true,
+					studentProfile: {
+						select: {
+							profileData: true,
+							profileImage: true,
+							profileImageType: true,
+							skillLevel: true,
+							bio: true,
+						},
+					},
+					userTags: {
+						include: { tag: true },
+					},
+				},
+			});
+
+			if (!user) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "User not found in your club.",
+				});
+			}
+
+			return {
+				user: {
+					userId: user.userId,
+					firstName: user.firstName,
+					lastName: user.lastName,
+					email: user.email,
+					profileImage: user.profileImage,
+					userType: user.userType,
+					createdAt: user.createdAt,
+				},
+				studentProfile: user.studentProfile
+					? {
+							profileData: parseStudentProfileData(
+								user.studentProfile.profileData,
+							),
+							profileImage: binaryToBase64DataUrl(
+								user.studentProfile.profileImage,
+								user.studentProfile.profileImageType ?? "image/png",
+							),
+							profileImageType: user.studentProfile.profileImageType,
+							skillLevel: user.studentProfile.skillLevel,
+							bio: user.studentProfile.bio,
+						}
+					: null,
+				tags: user.userTags.map((ut) => ({
+					tagId: ut.tag.tagId,
+					name: ut.tag.name,
+					bgColor: ut.tag.bgColor,
+					textColor: ut.tag.textColor,
+				})),
+			};
+		}),
+
+	// Upsert the StudentProfile.profileData JSON blob for a student in the
+	// caller's club. Full replace — the UI sends the whole object each save.
+	// Named `updateStudentProfileData` to avoid collision with the existing
+	// self-serve `updateStudentProfile` mutation (bio/skillLevel/avatar).
+	// See designFiles/roadmap/customer-feedback-ui-sprint.md (TD-1).
+	updateStudentProfileData: facilityProcedure
+		.input(updateStudentProfileDataSchema)
+		.mutation(async ({ ctx, input }) => {
+			const target = await ctx.db.user.findFirst({
+				where: {
+					userId: input.userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { userId: true },
+			});
+
+			if (!target) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "User not found in your club.",
+				});
+			}
+
+			await ctx.db.studentProfile.upsert({
+				where: { userId: target.userId },
+				create: {
+					userId: target.userId,
+					profileData: input.profileData,
+				},
+				update: {
+					profileData: input.profileData,
+				},
+			});
+
+			return { success: true as const };
+		}),
 });

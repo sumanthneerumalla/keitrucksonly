@@ -2,6 +2,7 @@
 
 import {
 	ArrowLeft,
+	ArrowRight,
 	Check,
 	ChevronsUpDown,
 	Download,
@@ -1247,15 +1248,30 @@ export default function UsersClient({
 											)}
 									</td>
 									<td className="px-4 py-3">
-										<Button
-											variant="ghost"
-											size="icon"
-											onClick={() =>
-												setEditingUserId(u.userId)
-											}
-										>
-											<Pencil size={14} />
-										</Button>
+										<div className="flex items-center gap-1">
+											<Link
+												href={`/admin/users/${u.userId}`}
+												aria-label={`View detail for ${u.firstName ?? ""} ${u.lastName ?? ""}`}
+												title="View detail"
+											>
+												<Button
+													variant="ghost"
+													size="icon"
+													className="text-[var(--muted-foreground)] hover:bg-[var(--primary)] hover:text-white"
+												>
+													<ArrowRight size={14} />
+												</Button>
+											</Link>
+											<Button
+												variant="ghost"
+												size="icon"
+												onClick={() =>
+													setEditingUserId(u.userId)
+												}
+											>
+												<Pencil size={14} />
+											</Button>
+										</div>
 									</td>
 								</tr>
 							))}

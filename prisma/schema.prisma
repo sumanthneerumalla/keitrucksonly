@@ -130,6 +130,10 @@ model StudentProfile {
   bio              String?  @db.Text
   profileImage     Bytes? // Store the binary image data directly in PostgreSQL
   profileImageType String? // Store the MIME type (e.g., "image/png")
+  // Loose JSON blob — phone, dateOfBirth, medicalNotes, allergies, generalNotes.
+  // TD-1 in designFiles/roadmap/customer-feedback-ui-sprint.md. Shape validated in
+  // src/lib/types/student-profile.ts, not at DB level. Promote to typed columns later.
+  profileData      Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -536,6 +540,9 @@ model Product {
 enum RentalBookingStatus {
   CONFIRMED
   CANCELLED
+  // NO_SHOW: reserved for a future staff flow (CR-d). No current code path sets this —
+  // added now so the migration ships before real data accumulates. Parallels RegistrationStatus.NO_SHOW.
+  NO_SHOW
 }
 
 model RentalBooking {

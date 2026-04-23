@@ -1,6 +1,7 @@
 import {
 	EventType,
 	RegistrationStatus,
+	RentalBookingStatus,
 	type User,
 	UserType,
 } from "@prisma/client";
@@ -8,7 +9,10 @@ import { TRPCError } from "@trpc/server";
 import { RRule } from "rrule";
 import { z } from "zod";
 import { DEFAULT_BG_COLOR, DEFAULT_COLOR } from "~/lib/utils";
-import { consumeCredit } from "~/server/utils/consumeCredit";
+import {
+	assertRegistrable,
+	createRegistrationTx,
+} from "~/server/utils/eventRegistration";
 import {
 	createTRPCRouter,
 	facilityProcedure, // user must be FACILITY or ADMIN
@@ -243,6 +247,13 @@ const checkConflictsSchema = z.object({
 
 const registerForEventSchema = z.object({
 	eventId: z.string(),
+	instanceDate: z.date().optional(), // Required for PER_INSTANCE recurring events
+});
+
+// Staff registering another member — same shape as registerForEvent plus target userId
+const staffRegisterSchema = z.object({
+	eventId: z.string(),
+	userId: z.string(),
 	instanceDate: z.date().optional(), // Required for PER_INSTANCE recurring events
 });
 
@@ -574,6 +585,24 @@ export const calendarRouter = createTRPCRouter({
 				throw new TRPCError({
 					code: "BAD_REQUEST",
 					message: `Cannot deactivate facility with ${existing._count.resources} active resource(s). Reassign or deactivate them first.`,
+				});
+			}
+
+			// Block on any future confirmed rental bookings. The calendarEvents _count above
+			// would also catch these (they create a blocking CalendarEvent), but a specific
+			// message here makes the fix obvious: staff need to cancel the booking, not just
+			// delete a calendar row. Historical cancelled bookings don't block.
+			const futureConfirmedBookings = await ctx.db.rentalBooking.count({
+				where: {
+					facilityId,
+					status: RentalBookingStatus.CONFIRMED,
+					endTime: { gt: new Date() },
+				},
+			});
+			if (futureConfirmedBookings > 0) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: `Cannot deactivate facility with ${futureConfirmedBookings} future rental booking(s). Cancel them first.`,
 				});
 			}
 
@@ -1975,118 +2004,85 @@ export const calendarRouter = createTRPCRouter({
 				});
 			}
 
-			const event = await ctx.db.calendarEvent.findUnique({
-				where: { eventId, isDeleted: false },
-				include: {
-					_count: {
-						select: {
-							registrations: {
-								where: {
-									status: {
-										in: [
-											RegistrationStatus.REGISTERED,
-											RegistrationStatus.CHECKED_IN,
-										],
-									},
-								},
-							},
-						},
-					},
-				},
+			// Validate event + capacity + no-duplicate (shared with staffRegister)
+			const event = await assertRegistrable({
+				db: ctx.db,
+				eventId,
+				userId: user.userId,
+				instanceDate,
+				selfServe: true,
 			});
 
-			if (!event) {
-				throw new TRPCError({ code: "NOT_FOUND", message: "Event not found" });
-			}
-
-			if (!event.isPublic) {
-				// Private events: registrant must be a member of the same club
-				if (user.clubShortName !== event.clubShortName) {
-					throw new TRPCError({
-						code: "FORBIDDEN",
-						message: "This event is not open for registration",
-					});
-				}
-			}
-
-			if (event.eventType === "BLOCK") {
+			// Private events: registrant must be a member of the same club.
+			// (This gate is self-serve only — staffRegister already same-club-scopes.)
+			if (!event.isPublic && user.clubShortName !== event.clubShortName) {
 				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Block events cannot be registered for",
+					code: "FORBIDDEN",
+					message: "This event is not open for registration",
 				});
 			}
 
-			// Capacity check (count only REGISTERED)
-			if (
-				event.maxParticipants !== null &&
-				event._count.registrations >= event.maxParticipants
-			) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "This event is fully booked",
-				});
-			}
-
-			// Duplicate check — no active REGISTERED registration for same event+user+instance
-			const existing = await ctx.db.eventRegistration.findFirst({
-				where: {
-					eventId,
+			const registration = await ctx.db.$transaction((tx) =>
+				createRegistrationTx({
+					tx,
+					event,
 					userId: user.userId,
-					status: RegistrationStatus.REGISTERED,
-					instanceDate: instanceDate ?? null,
-				},
-			});
-
-			if (existing) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "You are already registered for this event",
-				});
-			}
-
-			// Free events (productId=null) are allowed — EventRegistration.productId is nullable
-			const registration = await ctx.db.$transaction(async (tx) => {
-				const reg = await tx.eventRegistration.create({
-					data: {
-						eventId,
-						userId: user.userId,
-						productId: event.productId ?? null,
-						instanceDate: instanceDate ?? null,
-						status: RegistrationStatus.REGISTERED,
-					},
-				});
-
-				await tx.registrationStatusLog.create({
-					data: {
-						clubShortName: user.clubShortName,
-						registrationId: reg.registrationId,
-						userId: user.userId,
-						changedByUserId: user.userId,
-						oldStatus: null,
-						newStatus: RegistrationStatus.REGISTERED,
-						source: "self_service",
-					},
-				});
-
-				// Phase 8a: Attempt credit deduction. If no package matches or insufficient,
-				// registration still succeeds — member owes money (invoice in Phase 9).
-				// Skipped entirely for free events (productId=null) or non-credit events (creditCost=null/0).
-				if (event.productId && event.creditCost && event.creditCost > 0) {
-					await consumeCredit({
-						tx,
-						userId: user.userId,
-						clubShortName: user.clubShortName,
-						eventId: event.eventId,
-						eventProductId: event.productId,
-						creditCost: event.creditCost,
-						registrationId: reg.registrationId,
-					});
-				}
-
-				return reg;
-			});
+					instanceDate,
+					source: "self_service",
+					changedByUserId: user.userId,
+				}),
+			);
 
 			return { registrationId: registration.registrationId };
+		}),
+
+	// Staff registering another member for an event. Shares capacity /
+	// duplicate / credit-deduction logic with `registerForEvent` via
+	// `~/server/utils/eventRegistration`. This procedure only layers on the
+	// staff-specific scope check (target must be in the staff's club).
+	staffRegister: facilityProcedure
+		.input(staffRegisterSchema)
+		.mutation(async ({ ctx, input }) => {
+			const { eventId, userId, instanceDate } = input;
+			const staffUser = ctx.user;
+
+			// Target must belong to the same club as the acting staff
+			const target = await ctx.db.user.findUnique({
+				where: { userId },
+				select: { userId: true, clubShortName: true },
+			});
+
+			if (!target || target.clubShortName !== staffUser.clubShortName) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found in your club",
+				});
+			}
+
+			// Validate event + capacity + no-duplicate (shared with registerForEvent)
+			const event = await assertRegistrable({
+				db: ctx.db,
+				eventId,
+				userId: target.userId,
+				instanceDate,
+				selfServe: false,
+			});
+
+			// Staff can only register members for events in their own club
+			requireSameClub(staffUser, event.clubShortName);
+
+			const registration = await ctx.db.$transaction((tx) =>
+				createRegistrationTx({
+					tx,
+					event,
+					userId: target.userId,
+					instanceDate,
+					source: "admin_dashboard",
+					changedByUserId: staffUser.userId,
+				}),
+			);
+
+			return { registration };
 		}),
 
 	cancelRegistration: protectedProcedure
@@ -2474,6 +2470,7 @@ export const calendarRouter = createTRPCRouter({
 							userId: true,
 							firstName: true,
 							lastName: true,
+							email: true,
 							// profilePicture intentionally omitted for now; add here when avatar support is added (phase later)
 						},
 					},
@@ -2489,6 +2486,11 @@ export const calendarRouter = createTRPCRouter({
 					createdAt: r.createdAt,
 					firstName: r.user.firstName,
 					lastInitial: r.user.lastName ? r.user.lastName[0] + "." : "",
+					// FACILITY+ callers get full lastName + email for the detail-page
+					// click-through + "Add student" flows (sprint F3 / TD-2).
+					// COACH callers see only the stripped shape above.
+					lastName: isFacilityOrAdmin ? r.user.lastName : null,
+					email: isFacilityOrAdmin ? r.user.email : null,
 				})),
 			};
 		}),

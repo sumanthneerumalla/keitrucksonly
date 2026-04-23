@@ -7,12 +7,15 @@ import {
 	Check,
 	Copy,
 	Eye,
+	Package,
 	Pencil,
 	Users,
 	X,
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import SellPackageModal from "~/app/(app)/admin/checkin/SellPackageModal";
+import AddStudentPopover from "~/app/(app)/events/[eventId]/AddStudentPopover";
 import BookableEventDetails from "~/app/(app)/events/_components/BookableEventDetails";
 import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
@@ -37,6 +40,10 @@ export default function EventDetailClient({
 	const isStudent = userType === "STUDENT";
 	const [editMode, setEditMode] = useState(false);
 	const [copied, setCopied] = useState(false);
+	const [sellPackageTarget, setSellPackageTarget] = useState<{
+		userId: string;
+		memberName: string;
+	} | null>(null);
 
 	const handleCopyLink = () => {
 		void navigator.clipboard.writeText(window.location.href).then(() => {
@@ -292,15 +299,34 @@ export default function EventDetailClient({
 				{/* Event roster — FACILITY/ADMIN/COACH only */}
 				{(isFacilityOrAdmin || isCoach) && event.eventType !== "BLOCK" && (
 					<div className="glass-card space-y-3 rounded-lg p-5">
-						<div className="flex items-center gap-2">
-							<Users size={16} className="text-[var(--muted-foreground)]" />
-							<h3 className="font-medium text-[var(--foreground)] text-sm">
-								Registered ({rosterData?.registrations.length ?? 0}
-								{event.maxParticipants !== null
-									? ` / ${event.maxParticipants}`
-									: ""}
-								)
-							</h3>
+						<div className="flex items-center justify-between gap-2">
+							<div className="flex items-center gap-2">
+								<Users
+									size={16}
+									className="text-[var(--muted-foreground)]"
+								/>
+								<h3 className="font-medium text-[var(--foreground)] text-sm">
+									Registered ({rosterData?.registrations.length ?? 0}
+									{event.maxParticipants !== null
+										? ` / ${event.maxParticipants}`
+										: ""}
+									)
+								</h3>
+							</div>
+							{isFacilityOrAdmin && (
+								<AddStudentPopover
+									eventId={event.eventId}
+									facilityId={event.facilityId ?? null}
+									onSuccess={() => {
+										void utils.calendar.getEventRegistrations.invalidate({
+											eventId,
+										});
+										void utils.calendar.getPublicEventById.invalidate({
+											eventId,
+										});
+									}}
+								/>
+							)}
 						</div>
 						{!rosterData ? (
 							<p className="text-[var(--muted-foreground)] text-xs">Loading…</p>
@@ -310,21 +336,66 @@ export default function EventDetailClient({
 							</p>
 						) : (
 							<ul className="space-y-1.5">
-								{rosterData.registrations.map((r) => (
-									<li
-										key={r.registrationId}
-										className="flex items-center gap-2.5 text-[var(--foreground)] text-sm"
-									>
-										{/* Avatar placeholder — replace inner div with <ProfileAvatar> when avatar support is added */}
-										<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-medium text-[var(--primary)] text-xs">
-											{r.firstName?.[0] ?? "?"}
-										</div>
-										<span>
-											{r.firstName} {r.lastInitial}
-										</span>
-									</li>
-								))}
+								{rosterData.registrations.map((r) => {
+									const displayName = `${r.firstName ?? ""} ${
+										r.lastName ?? r.lastInitial ?? ""
+									}`.trim();
+									const nameContent = (
+										<>
+											{/* Avatar placeholder — replace inner div with <ProfileAvatar> when avatar support is added */}
+											<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-medium text-[var(--primary)] text-xs">
+												{r.firstName?.[0] ?? "?"}
+											</div>
+											<span>
+												{r.firstName} {r.lastName ?? r.lastInitial}
+											</span>
+										</>
+									);
+									return (
+										<li
+											key={r.registrationId}
+											className="flex items-center justify-between gap-2 text-[var(--foreground)] text-sm"
+										>
+											{isFacilityOrAdmin ? (
+												<Link
+													href={`/admin/users/${r.userId}`}
+													className="flex min-w-0 flex-1 items-center gap-2.5 transition-colors hover:text-[var(--primary)] hover:underline"
+												>
+													{nameContent}
+												</Link>
+											) : (
+												<div className="flex min-w-0 flex-1 items-center gap-2.5">
+													{nameContent}
+												</div>
+											)}
+											{isFacilityOrAdmin && (
+												<Button
+													variant="ghost"
+													size="icon"
+													title="Sell package"
+													aria-label={`Sell package to ${displayName}`}
+													className="h-8 w-8 shrink-0 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+													onClick={() =>
+														setSellPackageTarget({
+															userId: r.userId,
+															memberName: displayName,
+														})
+													}
+												>
+													<Package size={14} />
+												</Button>
+											)}
+										</li>
+									);
+								})}
 							</ul>
+						)}
+						{sellPackageTarget && (
+							<SellPackageModal
+								userId={sellPackageTarget.userId}
+								memberName={sellPackageTarget.memberName}
+								onClose={() => setSellPackageTarget(null)}
+							/>
 						)}
 					</div>
 				)}

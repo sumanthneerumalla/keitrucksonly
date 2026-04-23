@@ -44,6 +44,12 @@ const getRecentCheckinsSchema = z.object({
 	since: z.date().optional(), // for incremental polling — return only records after this timestamp
 });
 
+const getMemberAttendanceHistorySchema = z.object({
+	userId: z.string(),
+	limit: z.number().int().min(1).max(100).optional().default(20),
+	cursor: z.string().optional(), // attendanceId of the last item from the previous page
+});
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -688,6 +694,85 @@ export const checkinRouter = createTRPCRouter({
 						? { eventId: a.event.eventId, title: a.event.title }
 						: null,
 				})),
+			};
+		}),
+
+	// ------------------------------------------------------------------
+	// STUDENT DETAIL PAGE (Customer Feedback Sprint — F4)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Paginated attendance history for a single member, scoped to the caller's club.
+	 * Cursor-based: pass the last seen `attendanceId` to fetch the next page.
+	 * Ordered by checkedInAt DESC. See
+	 * designFiles/roadmap/customer-feedback-ui-sprint.md (TD-5).
+	 */
+	getMemberAttendanceHistory: facilityProcedure
+		.input(getMemberAttendanceHistorySchema)
+		.query(async ({ ctx, input }) => {
+			const { userId, limit, cursor } = input;
+
+			// Scope check: target user must belong to caller's club.
+			const member = await ctx.db.user.findFirst({
+				where: {
+					userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { userId: true },
+			});
+
+			if (!member) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found",
+				});
+			}
+
+			// Fetch limit+1 to determine whether there's another page.
+			const rows = await ctx.db.attendance.findMany({
+				where: {
+					userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				include: {
+					event: {
+						select: { eventId: true, title: true },
+					},
+					facility: {
+						select: { facilityId: true, name: true },
+					},
+				},
+				orderBy: [{ checkedInAt: "desc" }, { attendanceId: "desc" }],
+				take: limit + 1,
+				...(cursor
+					? {
+							cursor: { attendanceId: cursor },
+							skip: 1,
+						}
+					: {}),
+			});
+
+			const hasMore = rows.length > limit;
+			const page = hasMore ? rows.slice(0, limit) : rows;
+			const nextCursor = hasMore
+				? (page[page.length - 1]?.attendanceId ?? null)
+				: null;
+
+			return {
+				attendances: page.map((a) => ({
+					attendanceId: a.attendanceId,
+					checkedInAt: a.checkedInAt,
+					source: a.source,
+					notes: a.notes,
+					event: a.event
+						? { eventId: a.event.eventId, title: a.event.title }
+						: null,
+					facility: {
+						facilityId: a.facility.facilityId,
+						name: a.facility.name,
+					},
+				})),
+				nextCursor,
 			};
 		}),
 });
