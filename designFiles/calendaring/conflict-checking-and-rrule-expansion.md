@@ -22,8 +22,8 @@ If a conflict is found, callers throw a `TRPCError` with a human-readable messag
 Originally, `checkResourceConflicts` filtered `WHERE rrule IS NULL` — recurring events were invisible. That meant a member could book a court during a recurring class, and staff could schedule a one-off on top of a weekly class. See `designFiles/calendaring/recurrence-strategy.md` for the original recurrence model and `HANDOFF` decision #46 (gitignored, local) for the deferral note.
 
 The fix shipped in two tiers:
-- **Tier A (current state, 2026-04-23):** single-occurrence checks see recurring events. Covers the high-frequency member-facing scenarios (booking a slot, creating a one-off event).
-- **Tier B (planned, not yet shipped):** the *new* event being created can itself be recurring; we expand its rrule and check each occurrence. Covers the staff-side recurring-vs-recurring case.
+- **Tier A (2026-04-23):** single-occurrence checks see recurring events. Covers the high-frequency member-facing scenarios (booking a slot, creating a one-off event).
+- **Tier B (2026-04-23):** the *new* event being created can itself be recurring; we expand its rrule and check each occurrence. Wired into `calendar.createEvent` and `calendar.updateEvent` (where the new event is a blocker that should not silently overlap existing events). **Deliberately NOT wired into `rentals.createRentalWindow` / `updateRentalWindow`** — rental windows are availability containers (`isBlocking: false`), not blockers. The Tier A protections at `getRentalAvailability` (marks slots as unavailable) and `bookRentalSlot` (rejects bookings on overlapping slots) are sufficient. Adding Tier B at window creation would block legitimate "wide rental window with some slots blocked by classes" patterns. See decision CR-c.14 in the design doc.
 
 Full design and decisions: `designFiles/roadmap/cr-c-server-side-rrule-expansion.md` (gitignored).
 

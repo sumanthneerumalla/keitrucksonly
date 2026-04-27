@@ -1,7 +1,22 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
 import { buildRuleSetFromEvent } from "~/server/utils/rrule";
 
 type TxClient = Prisma.TransactionClient | PrismaClient;
+
+// CR-c Tier B: occurrence cap for `checkRecurringEventConflicts`. Caps the NEW
+// event's expansion only — existing recurring events on the resource are not
+// capped (they're naturally bounded by each per-occurrence check window). At
+// 2000, weekly schedules cover ~38 years and daily schedules ~5.5 years; staff
+// almost never hit this in normal use. Override via the function's
+// `maxOccurrences` parameter to lift the cap per-call later.
+const DEFAULT_MAX_OCCURRENCES = 2000;
+
+// CR-c Tier B: how far ahead we expand if the NEW rrule has no `until`.
+// 52 weeks = 1 year. Justification in design doc CR-c.5: matches how clubs plan
+// seasonally. Patterns extending past this aren't auto-verified — staff are on
+// their own beyond the 1-year horizon.
+const DEFAULT_HORIZON_WEEKS = 52;
 
 /**
  * One conflicting event/occurrence on a resource. The shape is intentionally flat
@@ -235,4 +250,169 @@ export async function checkResourceConflicts({
 		})),
 		...recurringMatches,
 	];
+}
+
+/**
+ * One conflict produced by `checkRecurringEventConflicts`. Each entry is a single
+ * occurrence of the NEW event being created, paired with the existing events that
+ * overlap it on the resource. Callers format the error message; this function only
+ * detects.
+ */
+export type RecurringEventConflict = {
+	occurrenceStart: Date;
+	occurrenceEnd: Date;
+	conflictingEvents: ResourceConflict[];
+};
+
+/**
+ * CR-c Tier B: check whether a NEW *recurring* event would conflict with any
+ * existing events on the same resource over the foreseeable horizon.
+ *
+ * Why this exists separately from `checkResourceConflicts`:
+ *   `checkResourceConflicts` answers "does the slot [start, end] overlap anything?"
+ *   It works for single-occurrence checks (member booking a court, staff creating
+ *   a one-off event). But when staff creates a NEW recurring event itself — say
+ *   "weekly rental window Tue/Thu 5–10pm for next 6 months" — we have to expand
+ *   the new rrule into its own occurrences and check each one separately. That's
+ *   what this function does.
+ *
+ * Algorithm:
+ *   1. Build an RRuleSet from the new rrule + dtstart + caller's exdates.
+ *   2. Determine the expansion horizon: rrule's own `until` if set, else 52 weeks.
+ *   3. Expand into occurrences within the horizon. If the count exceeds
+ *      `maxOccurrences` (default 2000, see DEFAULT_MAX_OCCURRENCES), throw a
+ *      BAD_REQUEST — staff has to set a tighter `until` or split the series.
+ *   4. For each occurrence, call `checkResourceConflicts` to find existing-event
+ *      overlaps on this resource.
+ *   5. Return one entry per conflicting occurrence with the list of overlapping
+ *      events. Empty array = no conflicts.
+ *
+ * Excluding the event being updated:
+ *   When this fires from an `updateRentalWindow` or `updateEvent` flow, pass
+ *   `excludeEventId = eventId` so the series doesn't conflict with itself.
+ *
+ * Performance shape:
+ *   New occurrences (capped 2000) × per-occurrence Tier A check (small).
+ *   For a typical "weekly for 6 months" with 5 existing recurring events on the
+ *   resource: ~26 occurrences × 5 tiny expansions = ~130 trivial RRule.between
+ *   calls. Sub-second on any sane DB. The cap is a sanity check, not a tight
+ *   performance bound.
+ *
+ * What this does NOT do:
+ *   - Doesn't replace the orphan guard on `updateRentalWindow` (different concern:
+ *     orphan guard protects existing bookings *in this series*; Tier B protects
+ *     existing events *on the same resource*). Both should run; orphan first per
+ *     design doc decision CR-c.12.
+ *   - Doesn't check non-recurring new events — that's `checkResourceConflicts`'s job.
+ */
+export async function checkRecurringEventConflicts({
+	db,
+	resourceId,
+	rruleString,
+	dtstart,
+	durationMs,
+	exdates = [],
+	excludeEventId,
+	maxOccurrences = DEFAULT_MAX_OCCURRENCES,
+	horizonWeeks = DEFAULT_HORIZON_WEEKS,
+}: {
+	db: TxClient;
+	resourceId: string;
+	rruleString: string;
+	dtstart: Date;
+	durationMs: number;
+	exdates?: Date[];
+	excludeEventId?: string;
+	maxOccurrences?: number;
+	horizonWeeks?: number;
+}): Promise<RecurringEventConflict[]> {
+	let ruleSet: ReturnType<typeof buildRuleSetFromEvent>;
+	try {
+		ruleSet = buildRuleSetFromEvent(rruleString, exdates, dtstart);
+	} catch {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid recurrence pattern.",
+		});
+	}
+
+	// Determine expansion horizon. If the rrule itself sets `until`, that's our
+	// upper bound — staff has explicitly said "no occurrences after this date,"
+	// so we honor it. Otherwise cap at horizonWeeks (default 52) from dtstart so
+	// "weekly forever" patterns don't try to enumerate to year 9999.
+	const ruleUntil = ruleSet.rrules()[0]?.options?.until;
+	const horizonEnd = new Date(
+		dtstart.getTime() + horizonWeeks * 7 * 24 * 60 * 60 * 1000,
+	);
+	const expansionEnd =
+		ruleUntil && ruleUntil < horizonEnd ? ruleUntil : horizonEnd;
+
+	// `.between(after, before, inclusive=true)` returns occurrence start dates
+	// in chronological order. We pass dtstart as `after` to get all occurrences
+	// the rule produces from its anchor onward (inclusive-true so the first
+	// occurrence isn't off-by-one).
+	const occurrenceStarts = ruleSet.between(dtstart, expansionEnd, true);
+
+	// Cap check (CR-c.6). The error message is intentionally actionable: staff
+	// either shortens the pattern (sets an `until`) or splits the series.
+	if (occurrenceStarts.length > maxOccurrences) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `Pattern produces too many occurrences to verify (over ${maxOccurrences.toLocaleString()}). Set an end date on the pattern, or split into shorter series.`,
+		});
+	}
+
+	// For each occurrence, do a Tier A single-occurrence check on this resource.
+	// Each Tier A call expands existing recurring events on the resource only
+	// within this occurrence's window — naturally tiny, no further capping needed.
+	const conflicts: RecurringEventConflict[] = [];
+	for (const occStart of occurrenceStarts) {
+		const occEnd = new Date(occStart.getTime() + durationMs);
+		const overlaps = await checkResourceConflicts({
+			db,
+			resourceId,
+			start: occStart,
+			end: occEnd,
+			excludeEventId,
+		});
+		if (overlaps.length > 0) {
+			conflicts.push({
+				occurrenceStart: occStart,
+				occurrenceEnd: occEnd,
+				conflictingEvents: overlaps,
+			});
+		}
+	}
+
+	return conflicts;
+}
+
+/**
+ * Format a Tier B conflict list into a human-readable error message. Lists the
+ * first 3 occurrence dates that conflict + "and N more" if more exist. Mirrors
+ * the orphan guard's existing pattern (CR-c.7).
+ *
+ * Caller responsibility:
+ *   - Pass the facility timezone for date formatting.
+ *   - Use this for the TRPCError message body.
+ */
+export function formatRecurringConflictsMessage(
+	conflicts: RecurringEventConflict[],
+	timezone: string | null | undefined,
+): string {
+	if (conflicts.length === 0) return "";
+	const tz = timezone ?? "America/New_York";
+	const dateFmt = new Intl.DateTimeFormat("en-US", {
+		timeZone: tz,
+		weekday: "short",
+		month: "short",
+		day: "numeric",
+	});
+	const previewDates = conflicts
+		.slice(0, 3)
+		.map((c) => dateFmt.format(c.occurrenceStart))
+		.join(", ");
+	const suffix =
+		conflicts.length > 3 ? ` and ${conflicts.length - 3} more` : "";
+	return `Pattern conflicts with existing events on ${conflicts.length} occurrence(s): ${previewDates}${suffix}. Adjust the pattern or cancel the conflicting events.`;
 }

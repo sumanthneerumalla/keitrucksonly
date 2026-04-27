@@ -28,7 +28,11 @@ import {
 	isPlatformAdmin,
 	isSameClub,
 } from "~/server/utils/utils";
-import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
+import {
+	checkResourceConflicts,
+	checkRecurringEventConflicts,
+	formatRecurringConflictsMessage,
+} from "~/server/utils/resourceConflicts";
 import { formatEventTimeInZone } from "~/server/utils/dateUtils";
 
 // ============================================================
@@ -1005,6 +1009,8 @@ export const calendarRouter = createTRPCRouter({
 			// occurrence (CR-c.2), so staff aren't left guessing which Tuesday the
 			// existing weekly class was on.
 			if (resourceId && !allDay) {
+				// Tier A: single-occurrence check. Surfaces both non-recurring overlaps
+				// and existing recurring-event occurrences that fall in [start, end].
 				const conflicts = await checkResourceConflicts({
 					db: ctx.db,
 					resourceId,
@@ -1033,6 +1039,36 @@ export const calendarRouter = createTRPCRouter({
 						code: "CONFLICT",
 						message: `Blocked by "${c.title}" (${timeStr})`,
 					});
+				}
+
+				// Tier B: if the new event is itself recurring, expand its rrule and
+				// check each occurrence against existing events on the resource. Catches
+				// the "weekly class for 6 months conflicts with existing weekly class on
+				// 4 Tuesdays" case that Tier A's single-slot check would miss.
+				if (rrule) {
+					const recurringConflicts = await checkRecurringEventConflicts({
+						db: ctx.db,
+						resourceId,
+						rruleString: rrule,
+						dtstart: start,
+						durationMs: end.getTime() - start.getTime(),
+					});
+					if (recurringConflicts.length > 0) {
+						const facilityIdForTz = input.facilityId ?? user.activeFacilityId;
+						const facility = facilityIdForTz
+							? await ctx.db.clubFacility.findUnique({
+									where: { facilityId: facilityIdForTz },
+									select: { timezone: true },
+								})
+							: null;
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: formatRecurringConflictsMessage(
+								recurringConflicts,
+								facility?.timezone ?? null,
+							),
+						});
+					}
 				}
 			}
 
@@ -1331,6 +1367,7 @@ export const calendarRouter = createTRPCRouter({
 			const newResourceId = data.resourceId ?? existing.resourceId;
 
 			if (newResourceId && !isAllDay) {
+				// Tier A: single-occurrence check, see comment in createEvent.
 				const conflicts = await checkResourceConflicts({
 					db: ctx.db,
 					resourceId: newResourceId,
@@ -1352,6 +1389,33 @@ export const calendarRouter = createTRPCRouter({
 						code: "CONFLICT",
 						message: `Blocked by "${c.title}" (${timeStr})`,
 					});
+				}
+
+				// Tier B: if the event remains (or becomes) recurring after this update,
+				// expand the new rrule and check each occurrence. CR-c.13: if the update
+				// clears rrule (recurring → non-recurring), the Tier A check above is
+				// sufficient and we skip Tier B.
+				const newRrule =
+					data.rrule !== undefined ? data.rrule : existing.rrule;
+				if (newRrule) {
+					const recurringConflicts = await checkRecurringEventConflicts({
+						db: ctx.db,
+						resourceId: newResourceId,
+						rruleString: newRrule,
+						dtstart: newStart,
+						durationMs: newEnd.getTime() - newStart.getTime(),
+						exdates: existing.exdates,
+						excludeEventId: eventId,
+					});
+					if (recurringConflicts.length > 0) {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: formatRecurringConflictsMessage(
+								recurringConflicts,
+								existing.facility?.timezone ?? null,
+							),
+						});
+					}
 				}
 			}
 
