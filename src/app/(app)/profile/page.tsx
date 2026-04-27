@@ -8,6 +8,7 @@ import StudentProfile from "~/app/_components/client/StudentProfile";
 import AdminClubIdSelector from "~/app/_components/client/authed/AdminClubIdSelector";
 import { ErrorBanner } from "~/app/_components/shared/ErrorBanner";
 import { Select } from "~/app/_components/shared/ui/select";
+import { TIMEZONE_OPTIONS } from "~/lib/timezones";
 import { isAnyAdmin, isOnboardedUser } from "~/lib/utils";
 import { parseServerError } from "~/lib/validation";
 import { api } from "~/trpc/react";
@@ -370,22 +371,11 @@ function ProfilePageContent() {
 												}
 											>
 												<option value="">Select time zone</option>
-												<option value="America/New_York">
-													Eastern Time (ET)
-												</option>
-												<option value="America/Chicago">
-													Central Time (CT)
-												</option>
-												<option value="America/Denver">
-													Mountain Time (MT)
-												</option>
-												<option value="America/Los_Angeles">
-													Pacific Time (PT)
-												</option>
-												<option value="Europe/London">London (GMT)</option>
-												<option value="Europe/Paris">Paris (CET)</option>
-												<option value="Asia/Tokyo">Tokyo (JST)</option>
-												<option value="Australia/Sydney">Sydney (AEDT)</option>
+												{TIMEZONE_OPTIONS.map((tz) => (
+													<option key={tz.value} value={tz.value}>
+														{tz.label}
+													</option>
+												))}
 											</Select>
 										</div>
 

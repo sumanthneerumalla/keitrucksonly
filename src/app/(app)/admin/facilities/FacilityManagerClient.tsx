@@ -12,6 +12,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
+import { Select } from "~/app/_components/shared/ui/select";
+import { TIMEZONE_OPTIONS } from "~/lib/timezones";
 import { api } from "~/trpc/react";
 
 export default function FacilityManagerClient() {
@@ -28,6 +30,9 @@ export default function FacilityManagerClient() {
 	const [zipCode, setZipCode] = useState("");
 	const [phone, setPhone] = useState("");
 	const [email, setEmail] = useState("");
+	// Empty string = "use schema default" (America/New_York). The backend treats
+	// undefined the same way; we only send a non-empty value through.
+	const [timezone, setTimezone] = useState("");
 
 	const createMutation = api.calendar.createFacility.useMutation({
 		onSuccess: () => {
@@ -61,6 +66,7 @@ export default function FacilityManagerClient() {
 		setZipCode("");
 		setPhone("");
 		setEmail("");
+		setTimezone("");
 	}
 
 	function startEdit(f: {
@@ -72,6 +78,7 @@ export default function FacilityManagerClient() {
 		zipCode: string | null;
 		phone: string | null;
 		email: string | null;
+		timezone: string;
 	}) {
 		setEditingId(f.facilityId);
 		setName(f.name);
@@ -81,6 +88,7 @@ export default function FacilityManagerClient() {
 		setZipCode(f.zipCode ?? "");
 		setPhone(f.phone ?? "");
 		setEmail(f.email ?? "");
+		setTimezone(f.timezone);
 		setShowForm(false);
 	}
 
@@ -94,6 +102,9 @@ export default function FacilityManagerClient() {
 			zipCode: zipCode.trim() || undefined,
 			phone: phone.trim() || undefined,
 			email: email.trim() || undefined,
+			// Send timezone only when staff picked one; empty string = "use schema
+			// default" so we omit. Avoids sending "" which would fail validation.
+			timezone: timezone.trim() || undefined,
 		};
 		if (editingId) {
 			updateMutation.mutate({ facilityId: editingId, ...data });
@@ -234,6 +245,27 @@ export default function FacilityManagerClient() {
 									type="email"
 								/>
 							</div>
+						</div>
+						<div>
+							<label className="mb-1 block text-[var(--muted-foreground)] text-xs">
+								Time Zone
+							</label>
+							<Select
+								value={timezone}
+								onChange={(e) => setTimezone(e.target.value)}
+							>
+								<option value="">Use default (Eastern Time)</option>
+								{TIMEZONE_OPTIONS.map((tz) => (
+									<option key={tz.value} value={tz.value}>
+										{tz.label}
+									</option>
+								))}
+							</Select>
+							<p className="mt-1 text-[var(--muted-foreground)] text-xs">
+								Used for displaying event times and calculating package
+								expiry. Leave as default unless this facility is in a
+								different time zone than the rest of your club.
+							</p>
 						</div>
 						{error && <p className="text-red-500 text-xs">{error.message}</p>}
 						<div className="flex gap-2">

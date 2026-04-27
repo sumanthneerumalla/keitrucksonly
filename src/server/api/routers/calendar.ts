@@ -109,6 +109,10 @@ const createFacilitySchema = z.object({
 	zipCode: z.string().max(20).trim().optional(),
 	phone: z.string().max(30).trim().optional(),
 	email: z.string().max(255).email().trim().optional(),
+	// IANA timezone (e.g. "America/New_York"). Schema default kicks in if omitted —
+	// no need to validate against the curated TIMEZONE_OPTIONS list here; staff who
+	// know IANA codes can pass anything Postgres + dayjs accept.
+	timezone: z.string().max(100).trim().optional(),
 });
 
 const updateFacilitySchema = z.object({
@@ -122,6 +126,10 @@ const updateFacilitySchema = z.object({
 	email: z.string().max(255).email().nullable().optional(),
 	position: z.number().int().min(0).optional(),
 	isActive: z.boolean().optional(),
+	// Not nullable: the field has a non-null default at the schema layer. Allowing
+	// null here would let staff blank out the timezone, which would break date
+	// math elsewhere (consumeCredit, dashboard ranges). Pass a value or omit.
+	timezone: z.string().max(100).trim().optional(),
 });
 
 const deleteFacilitySchema = z.object({
@@ -445,8 +453,16 @@ export const calendarRouter = createTRPCRouter({
 					_max: { position: true },
 				});
 
-				const { name, streetAddress, city, state, zipCode, phone, email } =
-					input;
+				const {
+					name,
+					streetAddress,
+					city,
+					state,
+					zipCode,
+					phone,
+					email,
+					timezone,
+				} = input;
 				const facility = await ctx.db.clubFacility.create({
 					data: {
 						clubShortName: ctx.user.clubShortName,
@@ -457,6 +473,9 @@ export const calendarRouter = createTRPCRouter({
 						zipCode,
 						phone,
 						email,
+						// `timezone` omitted from data block when undefined so the schema's
+						// default ("America/New_York") applies.
+						...(timezone ? { timezone } : {}),
 						position: (maxPos._max.position ?? -1) + 1,
 					},
 				});
@@ -518,6 +537,7 @@ export const calendarRouter = createTRPCRouter({
 			zipCode: f.zipCode,
 			phone: f.phone,
 			email: f.email,
+			timezone: f.timezone,
 			isActive: f.isActive,
 			position: f.position,
 			resourceCount: f._count.resources,
