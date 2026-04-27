@@ -1,6 +1,59 @@
 /**
  * Date utility functions for dashboard metrics calculations
+ * and shared server-side date/time formatting.
  */
+
+const DEFAULT_FACILITY_TIMEZONE = "America/New_York";
+
+/**
+ * Format an event's start/end window for display in error messages, scoped to a
+ * facility's timezone. Used by the conflict-check error formatters across
+ * `rentals.bookRentalSlot`, `calendar.createEvent`, and `calendar.updateEvent`
+ * (CR-c Tier A) so messages render consistently no matter which caller throws.
+ *
+ * Why a single helper:
+ * Each caller has a CalendarEvent → ClubFacility → timezone path that's identical.
+ * Hand-rolling Intl.DateTimeFormat per caller drifts in subtle ways (hour12 setting,
+ * weekday format, etc.). One helper, one source of truth for "what does a conflict
+ * message look like."
+ *
+ * Output examples (timezone="America/New_York"):
+ *   includeDate=false: "6:00 PM – 8:00 PM"
+ *   includeDate=true:  "Tue, May 5, 6:00 PM – 8:00 PM"
+ *
+ * The `includeDate` flag exists because:
+ *   - Non-recurring conflicts: the date is implied by what staff was creating
+ *     (they know which day they were trying to book). Date in the message is noise.
+ *   - Recurring occurrences: the date is essential — "6:00 PM" alone doesn't tell
+ *     staff which Tuesday is conflicting. CR-c.2 calls this out explicitly.
+ */
+export function formatEventTimeInZone(
+	start: Date,
+	end: Date,
+	timezone: string | null | undefined,
+	opts: { includeDate: boolean } = { includeDate: false },
+): string {
+	const tz = timezone ?? DEFAULT_FACILITY_TIMEZONE;
+	const timeFormatter = new Intl.DateTimeFormat("en-US", {
+		timeZone: tz,
+		hour: "numeric",
+		minute: "2-digit",
+		hour12: true,
+	});
+	const startTime = timeFormatter.format(start);
+	const endTime = timeFormatter.format(end);
+	if (!opts.includeDate) {
+		return `${startTime} – ${endTime}`;
+	}
+	const dateFormatter = new Intl.DateTimeFormat("en-US", {
+		timeZone: tz,
+		weekday: "short",
+		month: "short",
+		day: "numeric",
+	});
+	const date = dateFormatter.format(start);
+	return `${date}, ${startTime} – ${endTime}`;
+}
 
 /**
  * Validates that a date is a valid Date object

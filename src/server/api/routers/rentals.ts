@@ -1,7 +1,7 @@
 import { RentalBookingStatus } from "@prisma/client";
 import type { Prisma, User } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
-import { RRule, RRuleSet } from "rrule";
+import type { RRuleSet } from "rrule";
 import { z } from "zod";
 import {
 	createTRPCRouter,
@@ -11,32 +11,8 @@ import {
 } from "~/server/api/trpc";
 import { getCurrentUser, isFacilityOrAbove } from "~/server/utils/utils";
 import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
-
-// ============================================================
-// SHARED HELPERS
-// ============================================================
-
-/**
- * Build an RRuleSet from a stored rrule string + exdates + fallback dtstart.
- * Using RRuleSet (not bare RRule) is important so `.between()` honors exdates —
- * without it, occurrences on excepted dates show up as still-valid, which breaks
- * both display (listRentalWindows) and safety checks (updateRentalWindow orphan guard).
- */
-function buildRuleSetFromEvent(
-	rruleString: string,
-	exdates: Date[],
-	fallbackDtstart: Date,
-): RRuleSet {
-	const parsed = RRule.fromString(rruleString);
-	const rule = new RRule({
-		...parsed.origOptions,
-		dtstart: parsed.origOptions.dtstart ?? fallbackDtstart,
-	});
-	const set = new RRuleSet();
-	set.rrule(rule);
-	for (const d of exdates) set.exdate(d);
-	return set;
-}
+import { buildRuleSetFromEvent } from "~/server/utils/rrule";
+import { formatEventTimeInZone } from "~/server/utils/dateUtils";
 
 // NOTE: structured as per-court helper for future multi-court extension (decision #77)
 async function validateAndCreateBooking(
@@ -60,9 +36,12 @@ async function validateAndCreateBooking(
 	// while members in different windows don't (no false contention).
 	await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${rentalWindowEventId}), 1, 16))::bit(64)::bigint)`;
 
-	// 1. Fetch rental window and verify it's a RENTAL_WINDOW in the user's club
+	// 1. Fetch rental window and verify it's a RENTAL_WINDOW in the user's club.
+	// Include the facility so we can format conflict error messages in the facility's
+	// timezone (CR-c Tier A) without an extra query on the unhappy path.
 	const rentalWindowEvent = await tx.calendarEvent.findUnique({
 		where: { eventId: rentalWindowEventId },
+		include: { facility: { select: { timezone: true } } },
 	});
 
 	if (
@@ -127,7 +106,11 @@ async function validateAndCreateBooking(
 		});
 	}
 
-	// 7. No blocking event conflicts on the resource
+	// 7. No blocking event conflicts on the resource. Surfaces both non-recurring
+	// blockers and (post-CR-c Tier A) any recurring class/event whose occurrence
+	// overlaps this slot. The error message names the conflict and includes the
+	// occurrence date when it's a recurring instance — so members see "Blocked by
+	// 'Beginner Clinic' on Tue, May 5..." rather than a generic "slot taken."
 	const conflicts = await checkResourceConflicts({
 		db: tx,
 		resourceId,
@@ -135,9 +118,14 @@ async function validateAndCreateBooking(
 		end: endTime,
 	});
 	if (conflicts.length > 0) {
+		const c = conflicts[0]!;
+		const tz = rentalWindowEvent.facility?.timezone ?? null;
+		const timeStr = formatEventTimeInZone(c.start, c.end, tz, {
+			includeDate: c.isRecurringOccurrence,
+		});
 		throw new TRPCError({
 			code: "CONFLICT",
-			message: "Time slot is already booked or blocked.",
+			message: `Blocked by "${c.title}" (${timeStr})`,
 		});
 	}
 

@@ -29,6 +29,7 @@ import {
 	isSameClub,
 } from "~/server/utils/utils";
 import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
+import { formatEventTimeInZone } from "~/server/utils/dateUtils";
 
 // ============================================================
 // SHARED HELPERS
@@ -998,7 +999,11 @@ export const calendarRouter = createTRPCRouter({
 				}
 			}
 
-			// Check for conflicts if a resource is assigned
+			// Check for conflicts if a resource is assigned. Post-CR-c Tier A this also
+			// surfaces recurring-event occurrences that overlap the slot. Error message
+			// names the conflict and includes the date when the conflict is a recurring
+			// occurrence (CR-c.2), so staff aren't left guessing which Tuesday the
+			// existing weekly class was on.
 			if (resourceId && !allDay) {
 				const conflicts = await checkResourceConflicts({
 					db: ctx.db,
@@ -1007,9 +1012,26 @@ export const calendarRouter = createTRPCRouter({
 					end,
 				});
 				if (conflicts.length > 0) {
+					// Lazy timezone lookup — only fires on the unhappy path. Use the user's
+					// effective facility (the one this event would belong to) so the error
+					// renders in the same zone the calendar is showing.
+					const facilityIdForTz = input.facilityId ?? user.activeFacilityId;
+					const facility = facilityIdForTz
+						? await ctx.db.clubFacility.findUnique({
+								where: { facilityId: facilityIdForTz },
+								select: { timezone: true },
+							})
+						: null;
+					const c = conflicts[0]!;
+					const timeStr = formatEventTimeInZone(
+						c.start,
+						c.end,
+						facility?.timezone ?? null,
+						{ includeDate: c.isRecurringOccurrence },
+					);
 					throw new TRPCError({
 						code: "CONFLICT",
-						message: `Resource is already booked: ${conflicts.map((c) => c.title).join(", ")}`,
+						message: `Blocked by "${c.title}" (${timeStr})`,
 					});
 				}
 			}
@@ -1197,9 +1219,12 @@ export const calendarRouter = createTRPCRouter({
 			const isFacilityOrAdmin = isFacilityOrAbove(user);
 			const isCoach = user.userType === UserType.COACH;
 
-			// Verify ownership and not deleted
+			// Verify ownership and not deleted. Include facility timezone so any later
+			// conflict error message can render in the right zone without an extra query
+			// (CR-c Tier A).
 			const existing = await ctx.db.calendarEvent.findUnique({
 				where: { eventId },
+				include: { facility: { select: { timezone: true } } },
 			});
 
 			if (!existing) {
@@ -1314,9 +1339,18 @@ export const calendarRouter = createTRPCRouter({
 					excludeEventId: eventId,
 				});
 				if (conflicts.length > 0) {
+					// `existing.facility.timezone` was joined above (CR-c Tier A) — no
+					// extra query needed for the error formatter.
+					const c = conflicts[0]!;
+					const timeStr = formatEventTimeInZone(
+						c.start,
+						c.end,
+						existing.facility?.timezone ?? null,
+						{ includeDate: c.isRecurringOccurrence },
+					);
 					throw new TRPCError({
 						code: "CONFLICT",
-						message: `Resource is already booked: ${conflicts.map((c) => c.title).join(", ")}`,
+						message: `Blocked by "${c.title}" (${timeStr})`,
 					});
 				}
 			}
