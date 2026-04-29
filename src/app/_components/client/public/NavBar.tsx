@@ -28,6 +28,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "~/app/_components/shared/ui/sheet";
+import { CALENDLY_URL } from "~/lib/marketing";
 import { cn } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
@@ -88,13 +89,26 @@ export function NavBar({ clubShortName }: NavBarProps) {
 		(pathname.startsWith("/rentals") && !isSignedIn);
 	const showMobileHamburger = !isSignedIn || isPublicPage;
 
+	// Marketing pages render on the warm-paper background; the NavBar should
+	// blend with it rather than sit as a white slab. Authed app pages keep the
+	// existing white-blur chrome.
+	const isMarketingPage =
+		pathname === "/" ||
+		pathname === "/features" ||
+		pathname === "/pricing" ||
+		pathname.startsWith("/club/");
+
 	return (
 		<header
 			className={cn(
-				"fixed top-0 right-0 left-0 z-40 transition-all duration-300",
-				mounted && isScrolled
-					? "bg-white/80 shadow-sm backdrop-blur-lg"
-					: "bg-white/50 backdrop-blur-sm",
+				"sticky top-0 right-0 left-0 z-40 backdrop-blur-lg transition-all duration-300",
+				isMarketingPage
+					? mounted && isScrolled
+						? "border-[var(--line)]/60 border-b bg-[var(--paper)]/80"
+						: "bg-[var(--paper)]/55"
+					: mounted && isScrolled
+						? "bg-white/80 shadow-sm"
+						: "bg-white/50",
 			)}
 		>
 			<div className="container mx-auto px-4">
@@ -107,15 +121,28 @@ export function NavBar({ clubShortName }: NavBarProps) {
 						</span>
 					</Link>
 
-					{/* Hamburger — mobile only on public pages (authed app pages use MobileAuthedHeader) */}
+					{/* Mobile right-side: persistent demo CTA + hamburger */}
 					{mounted && showMobileHamburger && (
-						<button
-							className="flex items-center justify-center rounded-md p-2 text-gray-700 md:hidden"
-							onClick={() => setMobileOpen(true)}
-							aria-label="Open navigation"
-						>
-							<Menu size={22} />
-						</button>
+						<div className="flex items-center gap-2 md:hidden">
+							<SignedOut>
+								<a
+									href={CALENDLY_URL}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="btn btn-primary btn-sm text-xs"
+								>
+									Book a demo
+								</a>
+							</SignedOut>
+							<button
+								type="button"
+								className="flex h-9 w-9 items-center justify-center rounded-md text-gray-700"
+								onClick={() => setMobileOpen(true)}
+								aria-label="Open navigation"
+							>
+								<Menu size={22} />
+							</button>
+						</div>
 					)}
 
 					{/* Desktop Navigation */}
@@ -132,23 +159,25 @@ export function NavBar({ clubShortName }: NavBarProps) {
 										</NavigationMenuLink>
 									</NavigationMenuItem>
 
-									{/* How It Works dropdown */}
+									{/* Pricing link */}
 									<NavigationMenuItem>
-										<NavigationMenuTrigger>How It Works</NavigationMenuTrigger>
-										<NavigationMenuContent>
-											<ul className="w-48 p-2">
-												<li>
-													<NavigationMenuLink asChild>
-														<Link
-															href="/#how-it-works"
-															className="dropdown-item block"
-														>
-															How It Works
-														</Link>
-													</NavigationMenuLink>
-												</li>
-											</ul>
-										</NavigationMenuContent>
+										<NavigationMenuLink asChild>
+											<Link href="/pricing" className="nav-link px-3 py-2">
+												Pricing
+											</Link>
+										</NavigationMenuLink>
+									</NavigationMenuItem>
+
+									{/* How It Works link */}
+									<NavigationMenuItem>
+										<NavigationMenuLink asChild>
+											<Link
+												href="/#how-it-works"
+												className="nav-link px-3 py-2"
+											>
+												How it works
+											</Link>
+										</NavigationMenuLink>
 									</NavigationMenuItem>
 
 									{/* Resources dropdown */}
@@ -213,11 +242,13 @@ export function NavBar({ clubShortName }: NavBarProps) {
 									{showPublicNav && (
 										<>
 											<SheetClose asChild>
-												<Link
-													href="/features"
-													className="nav-link block py-2"
-												>
+												<Link href="/features" className="nav-link block py-2">
 													Features
+												</Link>
+											</SheetClose>
+											<SheetClose asChild>
+												<Link href="/pricing" className="nav-link block py-2">
+													Pricing
 												</Link>
 											</SheetClose>
 											<SheetClose asChild>
@@ -225,7 +256,7 @@ export function NavBar({ clubShortName }: NavBarProps) {
 													href="/#how-it-works"
 													className="nav-link block py-2"
 												>
-													How It Works
+													How it works
 												</Link>
 											</SheetClose>
 											<SheetClose asChild>
@@ -286,11 +317,11 @@ export function NavBar({ clubShortName }: NavBarProps) {
 					)}
 
 					{/* Authentication — desktop only, deferred to client mount to prevent hydration mismatch */}
-					<div className="hidden items-center space-x-4 md:flex">
+					<div className="hidden items-center space-x-2 md:flex">
 						{mounted && (
 							<>
 								<SignedOut>
-									<div className="nav-button">
+									<div className="nav-button text-sm">
 										<SignInButton
 											{...(redirectUrl && {
 												forceRedirectUrl: redirectUrl,
@@ -298,14 +329,15 @@ export function NavBar({ clubShortName }: NavBarProps) {
 											})}
 										/>
 									</div>
-									<div className="nav-button">
-										<SignUpButton
-											{...(redirectUrl && {
-												forceRedirectUrl: redirectUrl,
-												signInForceRedirectUrl: redirectUrl,
-											})}
-										/>
-									</div>
+									<a
+										href={CALENDLY_URL}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="btn btn-primary btn-sm"
+									>
+										Book a demo
+										<span className="arrow">→</span>
+									</a>
 								</SignedOut>
 								<SignedIn>
 									<Link href="/profile" className="nav-link">

@@ -37,6 +37,35 @@
 
 		/* Ensure backward compatibility with any component using these variables */
 		--ring-offset-color: var(--background);
+
+		/* ─── Marketing design system (paper/ink palette + brand aliases) ───────
+		 * Used on .marketing-page wrapper for home/features/pricing.
+		 * Authed app pages keep the existing white/blue-grey shell.
+		 */
+		--paper: #faf8f3;
+		--paper-2: #f2efe7;
+		--paper-3: #e8e4d8;
+		--line: #ddd7c7;
+		--line-2: #c9c2ae;
+		--ink: #14130e;
+		--ink-2: #3a382e;
+		--ink-3: #6b6857;
+		--ink-4: #97947f;
+
+		/* Brand aliased to existing indigo primary */
+		--brand: rgb(79 70 229);
+		--brand-ink: rgb(67 56 202);
+		--brand-50: rgb(238 242 255);
+		--brand-100: rgb(224 231 255);
+		--brand-200: rgb(199 210 254);
+
+		--good: #2f7d4f;
+		--warn: #d2691e;
+
+		/* Type families (set in app/layout.tsx via next/font) */
+		--font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+		--font-body: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+		--font-mono: var(--font-jbm), ui-monospace, SFMono-Regular, Menlo, monospace;
 	}
 }
 
@@ -303,6 +332,206 @@ body {
 		select,
 		textarea {
 			font-size: max(1rem, 16px);
+		}
+	}
+
+	/* ─── Marketing utilities (global) ─────────────────────────────────────
+	 * .btn / .kbd / .eyebrow / .sec-num / .strike-bar / .accent / .mk-card
+	 * are intentionally NOT scoped to .marketing-page so chrome rendered
+	 * outside the wrapper (Footer, NavBar, Strip) can still use them. The
+	 * visual identity comes from the design tokens, which are global.
+	 */
+	.eyebrow {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--ink-3);
+		font-weight: 500;
+	}
+	.eyebrow-dot {
+		color: var(--brand);
+	}
+
+	.sec-num {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--ink-3);
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		border-top: 1px solid var(--ink);
+		padding-top: 8px;
+		min-width: 64px;
+		display: inline-block;
+	}
+
+	.strike-bar {
+		position: relative;
+		display: inline-block;
+	}
+	.strike-bar::after {
+		content: "";
+		position: absolute;
+		left: -3%;
+		right: -3%;
+		top: 56%;
+		height: 4px;
+		background: var(--brand);
+		transform: rotate(-2deg);
+		border-radius: 4px;
+	}
+
+	.accent {
+		color: var(--brand);
+	}
+
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		font-family: var(--font-body);
+		font-size: 15px;
+		font-weight: 500;
+		padding: 12px 18px;
+		border-radius: 9999px;
+		border: 1px solid transparent;
+		cursor: pointer;
+		transition: transform 0.15s ease, background 0.2s ease, box-shadow 0.2s ease,
+			color 0.2s ease;
+		white-space: nowrap;
+		text-decoration: none;
+	}
+	.btn:active {
+		transform: translateY(1px);
+	}
+	.btn .arrow {
+		transition: transform 0.2s ease;
+	}
+	.btn:hover .arrow {
+		transform: translateX(3px);
+	}
+	.btn-primary {
+		background: var(--brand);
+		color: white;
+		box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 6px 18px -6px
+			var(--brand);
+	}
+	.btn-primary:hover {
+		background: var(--brand-ink);
+	}
+	.btn-secondary {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.btn-secondary:hover {
+		background: #000;
+	}
+	.btn-ghost {
+		background: transparent;
+		color: var(--ink);
+		border-color: var(--line-2);
+	}
+	.btn-ghost:hover {
+		background: rgba(20, 19, 14, 0.04);
+	}
+	.btn-text {
+		background: transparent;
+		color: var(--ink);
+		padding: 12px 8px;
+	}
+	.btn-text:hover {
+		color: var(--brand);
+	}
+	.btn-lg {
+		padding: 16px 24px;
+		font-size: 16px;
+	}
+	.btn-sm {
+		padding: 8px 14px;
+		font-size: 14px;
+	}
+
+	.kbd {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		padding: 2px 6px;
+		border-radius: 5px;
+		background: var(--paper-2);
+		border: 1px solid var(--line);
+		color: var(--ink-2);
+	}
+
+	.mk-card {
+		background: var(--paper);
+		border: 1px solid var(--line);
+		border-radius: 18px;
+		padding: 28px;
+		transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s
+			ease;
+	}
+	.mk-card:hover {
+		border-color: var(--line-2);
+		transform: translateY(-2px);
+		box-shadow: 0 1px 0 rgba(20, 19, 14, 0.04), 0 6px 24px -8px
+			rgba(20, 19, 14, 0.1);
+	}
+
+	/* ─── Marketing typography (scoped) ────────────────────────────────────
+	 * Page-level styles that should NOT leak into the authed app shell.
+	 */
+	.marketing-page {
+		background-color: var(--paper);
+		color: var(--ink);
+		font-family: var(--font-body);
+	}
+	/* Account for sticky NavBar (~64px) + Strip when jumping to in-page anchors */
+	.marketing-page [id] {
+		scroll-margin-top: 96px;
+	}
+	.marketing-page h1,
+	.marketing-page h2,
+	.marketing-page h3,
+	.marketing-page h4 {
+		font-family: var(--font-display);
+		letter-spacing: -0.02em;
+		color: var(--ink);
+	}
+	.marketing-page h1 {
+		font-size: clamp(40px, 6vw, 72px);
+		line-height: 1.04;
+		font-weight: 600;
+		letter-spacing: -0.035em;
+	}
+	.marketing-page h2 {
+		font-size: clamp(30px, 3.4vw, 48px);
+		line-height: 1.05;
+		font-weight: 600;
+		letter-spacing: -0.028em;
+	}
+	.marketing-page h3 {
+		font-size: clamp(20px, 1.6vw, 26px);
+		line-height: 1.2;
+		font-weight: 600;
+	}
+	.marketing-page .lead {
+		font-size: clamp(17px, 1.3vw, 20px);
+		line-height: 1.5;
+		color: var(--ink-2);
+	}
+
+	.marketing-page details > summary {
+		list-style: none;
+	}
+	.marketing-page details > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.marketing-page *,
+		.marketing-page *::before,
+		.marketing-page *::after {
+			animation-duration: 0.001ms !important;
+			transition-duration: 0.001ms !important;
 		}
 	}
 }

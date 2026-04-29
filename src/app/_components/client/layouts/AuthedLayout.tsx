@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import MobileAuthedHeader from "~/app/_components/client/authed/MobileAuthedHeader";
 import SideNavigation from "~/app/_components/client/authed/SideNavigation";
 import { NavBar } from "~/app/_components/client/public/NavBar";
+import { Strip } from "~/app/_components/client/public/Strip";
 import { SidebarProvider } from "~/app/_components/shared/ui/sidebar";
 import { api } from "~/trpc/react";
 
@@ -35,6 +36,7 @@ export default function AuthedLayout({ children }: AuthedLayoutProps) {
 	const isPublicPage =
 		pathname === "/" ||
 		pathname === "/features" ||
+		pathname === "/pricing" ||
 		pathname.startsWith("/resources") ||
 		pathname.startsWith("/club/") ||
 		pathname.startsWith("/events/") ||
@@ -55,8 +57,18 @@ export default function AuthedLayout({ children }: AuthedLayoutProps) {
 		clubShortName = match?.[1];
 	}
 
+	// Marketing pages render the announcement strip above the NavBar so it lives
+	// in document flow (not behind a fixed header). NavBar uses sticky positioning
+	// so it pins after the user scrolls past the strip.
+	const isMarketingPage =
+		pathname === "/" ||
+		pathname === "/features" ||
+		pathname === "/pricing" ||
+		pathname.startsWith("/club/");
+
 	return (
 		<>
+			{isMarketingPage ? <Strip /> : null}
 			<NavBar clubShortName={clubShortName} />
 			{isPublicPage ? (
 				// On public pages, just show content without sidebar
@@ -64,7 +76,7 @@ export default function AuthedLayout({ children }: AuthedLayoutProps) {
 			) : (
 				// On authenticated pages, show sidebar layout
 				<SidebarProvider>
-					<div className="flex min-h-screen w-full pt-16">
+					<div className="flex min-h-screen w-full">
 						{/* Sidebar — renders as sticky panel on desktop, Sheet on mobile */}
 						<div className="sticky top-16 hidden h-[calc(100vh-4rem)] shrink-0 md:flex">
 							<SideNavigation
@@ -84,7 +96,9 @@ export default function AuthedLayout({ children }: AuthedLayoutProps) {
 							<MobileAuthedHeader user={user} isLoading={isLoading} />
 							{!isLoaded ? (
 								<div className="flex h-[calc(100vh-5rem)] items-center justify-center">
-									<p className="text-[var(--muted-foreground)] text-sm">Loading...</p>
+									<p className="text-[var(--muted-foreground)] text-sm">
+										Loading...
+									</p>
 								</div>
 							) : (
 								children
