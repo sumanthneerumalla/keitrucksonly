@@ -8,6 +8,34 @@ import {
 import { getCurrentUser, isPlatformAdmin } from "~/server/utils/utils";
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+/**
+ * Image storage bridge (public-shop.md D2 / I2). `ProfileImageUploader`
+ * returns a `data:image/png;base64,...` string; our schema stores raw bytes
+ * + MIME separately. Splits the data URL on the first comma.
+ */
+function parseDataUrl(dataUrl: string): {
+	bytes: Uint8Array<ArrayBuffer>;
+	mime: string;
+} {
+	const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+	if (!match) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid image data URL",
+		});
+	}
+	const buf = Buffer.from(match[2]!, "base64");
+	// Copy into a fresh Uint8Array<ArrayBuffer> so Prisma's `Bytes` typing accepts it.
+	const ab = new ArrayBuffer(buf.byteLength);
+	const bytes = new Uint8Array(ab);
+	bytes.set(buf);
+	return { mime: match[1]!, bytes };
+}
+
+// ============================================================
 // INPUT SCHEMAS
 // ============================================================
 
@@ -18,6 +46,10 @@ const createProductSchema = z.object({
 	sku: z.string().max(100).trim().optional(),
 	priceInCents: z.number().int().min(0),
 	currency: z.string().length(3).default("usd"),
+	// Public shop fields (decisions #2 + #5).
+	isPubliclyListed: z.boolean().optional(),
+	publicDescription: z.string().max(2000).optional().nullable(),
+	publicImageDataUrl: z.string().optional().nullable(),
 });
 
 const getProductsSchema = z.object({
@@ -36,6 +68,10 @@ const updateProductSchema = z.object({
 	sku: z.string().max(100).trim().nullable().optional(),
 	priceInCents: z.number().int().min(0).optional(),
 	isActive: z.boolean().optional(),
+	// Public shop fields (decisions #2 + #5).
+	isPubliclyListed: z.boolean().optional(),
+	publicDescription: z.string().max(2000).optional().nullable(),
+	publicImageDataUrl: z.string().optional().nullable(),
 });
 
 const deleteProductSchema = z.object({
@@ -71,6 +107,18 @@ export const productsRouter = createTRPCRouter({
 				});
 			}
 
+			// Public shop image: parse data URL → bytes + mime (D2).
+			let publicImageData: Uint8Array<ArrayBuffer> | null | undefined;
+			let publicImageType: string | null | undefined;
+			if (typeof input.publicImageDataUrl === "string") {
+				const parsed = parseDataUrl(input.publicImageDataUrl);
+				publicImageData = parsed.bytes;
+				publicImageType = parsed.mime;
+			} else if (input.publicImageDataUrl === null) {
+				publicImageData = null;
+				publicImageType = null;
+			}
+
 			const product = await ctx.db.product.create({
 				data: {
 					clubShortName: ctx.user.clubShortName,
@@ -81,6 +129,10 @@ export const productsRouter = createTRPCRouter({
 					priceInCents: input.priceInCents,
 					currency: input.currency,
 					createdByUserId: ctx.user.userId,
+					isPubliclyListed: input.isPubliclyListed ?? false,
+					publicDescription: input.publicDescription ?? null,
+					...(publicImageData !== undefined ? { publicImageData } : {}),
+					...(publicImageType !== undefined ? { publicImageType } : {}),
 				},
 			});
 
@@ -170,7 +222,7 @@ export const productsRouter = createTRPCRouter({
 	updateProduct: facilityProcedure
 		.input(updateProductSchema)
 		.mutation(async ({ ctx, input }) => {
-			const { productId, ...data } = input;
+			const { productId, publicImageDataUrl, ...rest } = input;
 
 			const existing = await ctx.db.product.findUnique({
 				where: { productId },
@@ -194,9 +246,9 @@ export const productsRouter = createTRPCRouter({
 			}
 
 			// If changing category, verify it's a leaf in the same club
-			if (data.categoryId) {
+			if (rest.categoryId) {
 				const category = await ctx.db.productCategory.findUnique({
-					where: { categoryId: data.categoryId },
+					where: { categoryId: rest.categoryId },
 					include: { _count: { select: { children: { where: { isActive: true } } } } },
 				});
 
@@ -213,6 +265,25 @@ export const productsRouter = createTRPCRouter({
 						message: "Products must be assigned to leaf categories.",
 					});
 				}
+			}
+
+			// Public shop image: parse data URL → bytes + mime, or clear both
+			// columns when explicitly null (D2 — image storage bridge).
+			const data: Record<string, unknown> = { ...rest };
+			if (typeof publicImageDataUrl === "string") {
+				const parsed = parseDataUrl(publicImageDataUrl);
+				data.publicImageData = parsed.bytes;
+				data.publicImageType = parsed.mime;
+			} else if (publicImageDataUrl === null) {
+				data.publicImageData = null;
+				data.publicImageType = null;
+			}
+
+			// I3 save-handler guard: archiving (isActive=false) auto-unlists
+			// from the public shop. Prevents the "archived but listed"
+			// inconsistency (decision #22).
+			if (data.isActive === false) {
+				data.isPubliclyListed = false;
 			}
 
 			const updated = await ctx.db.product.update({

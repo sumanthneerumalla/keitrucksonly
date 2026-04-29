@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
+import { ProfileImageUploader } from "~/app/_components/shared/ProfileImageUploader";
 import { useToast } from "~/app/_components/shared/Toast";
 import { Select } from "~/app/_components/shared/ui/select";
 import { api } from "~/trpc/react";
@@ -37,6 +38,15 @@ export default function ProductFormModal({
 	const [sku, setSku] = useState("");
 	const [priceInCents, setPriceInCents] = useState(product?.priceInCents ?? 0);
 	const [saving, setSaving] = useState(false);
+
+	// Public Shop fields (decisions #2 + #5). The current `getProducts` query
+	// does not return these scalar columns or image bytes for v1, so editing
+	// an existing product starts from defaults — saving will overwrite. (D2)
+	const [isPubliclyListed, setIsPubliclyListed] = useState(false);
+	const [publicDescription, setPublicDescription] = useState("");
+	const [publicImageDataUrl, setPublicImageDataUrl] = useState<
+		string | null | undefined
+	>(undefined);
 
 	const { data: categoriesData, isLoading: isCategoriesLoading } =
 		api.categories.listCategories.useQuery();
@@ -90,6 +100,12 @@ export default function ProductFormModal({
 				name: name.trim(),
 				description: description.trim() || null,
 				priceInCents,
+				isPubliclyListed,
+				publicDescription: publicDescription.trim() || null,
+				// undefined = don't touch existing image; null/string = set/clear
+				...(publicImageDataUrl !== undefined
+					? { publicImageDataUrl }
+					: {}),
 			});
 		} else {
 			createMutation.mutate({
@@ -99,6 +115,11 @@ export default function ProductFormModal({
 				sku: sku.trim() || undefined,
 				priceInCents,
 				currency: "usd",
+				isPubliclyListed,
+				publicDescription: publicDescription.trim() || null,
+				...(publicImageDataUrl !== undefined
+					? { publicImageDataUrl }
+					: {}),
 			});
 		}
 	};
@@ -259,6 +280,49 @@ export default function ProductFormModal({
 							Enter 0 for free events. Price is stored in cents ({priceInCents}
 							¢).
 						</p>
+					</div>
+
+					{/* Public Shop (decisions #2 + #5 + D2) */}
+					<div className="space-y-3 rounded-md border border-[var(--border)] p-3">
+						<h3 className="font-semibold text-[var(--foreground)] text-sm">
+							Public Shop
+						</h3>
+						<label className="flex cursor-pointer select-none items-center gap-2 text-[var(--foreground)] text-sm">
+							<input
+								type="checkbox"
+								checked={isPubliclyListed}
+								onChange={(e) => setIsPubliclyListed(e.target.checked)}
+								disabled={saving}
+								className="h-4 w-4 rounded border-input accent-[var(--primary)]"
+							/>
+							List on public shop
+						</label>
+						<div className="space-y-1">
+							<label className="font-medium text-[var(--foreground)] text-sm">
+								Public description (shown to shoppers)
+							</label>
+							<textarea
+								value={publicDescription}
+								onChange={(e) => setPublicDescription(e.target.value)}
+								rows={3}
+								placeholder="Marketing copy for the public shop"
+								maxLength={2000}
+								disabled={saving}
+								className="flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-[var(--foreground)] text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+							/>
+						</div>
+						<div className="space-y-1">
+							<label className="font-medium text-[var(--foreground)] text-sm">
+								Public image
+							</label>
+							<ProfileImageUploader
+								initialImageUrl={null}
+								onChange={(imageData) => setPublicImageDataUrl(imageData)}
+							/>
+							<p className="text-[var(--muted-foreground)] text-xs">
+								Hero image used on the public shop detail page (PNG, ≤5MB).
+							</p>
+						</div>
 					</div>
 				</div>
 

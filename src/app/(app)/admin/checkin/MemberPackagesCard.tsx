@@ -20,6 +20,32 @@ function formatDate(date: Date | string | null) {
 	});
 }
 
+/**
+ * Family-share label (public-shop.md #15 + D7). Renders only when the row
+ * isn't the current user's own pack — i.e. when the credits are flowing from
+ * a parent/sibling's package via `consumeCredit` widening. Matches the small
+ * pill pattern used by user tags in `UsersClient.tsx` (rounded-full + xs).
+ */
+function OwnerBadge({
+	ownedBy,
+}: {
+	ownedBy: {
+		firstName: string | null;
+		lastName: string | null;
+		isCurrentUser: boolean;
+	};
+}) {
+	if (ownedBy.isCurrentUser) return null;
+	const name =
+		[ownedBy.firstName, ownedBy.lastName].filter(Boolean).join(" ").trim() ||
+		"family member";
+	return (
+		<span className="inline-flex items-center whitespace-nowrap rounded-full bg-[var(--muted)] px-2 py-0.5 font-medium text-[var(--muted-foreground)] text-xs">
+			Owned by {name}
+		</span>
+	);
+}
+
 export default function MemberPackagesCard({
 	userId,
 	memberName,
@@ -73,9 +99,12 @@ export default function MemberPackagesCard({
 								>
 									<div className="flex items-center justify-between gap-2">
 										<div className="min-w-0">
-											<p className="truncate font-medium text-[var(--foreground)] text-sm">
-												{p.planName}
-											</p>
+											<div className="flex flex-wrap items-center gap-1.5">
+												<p className="truncate font-medium text-[var(--foreground)] text-sm">
+													{p.planName}
+												</p>
+												<OwnerBadge ownedBy={p.ownedBy} />
+											</div>
 											<p className="text-[var(--muted-foreground)] text-xs">
 												{p.isGeneralDropIn
 													? "General open play"
@@ -120,9 +149,12 @@ export default function MemberPackagesCard({
 											className="flex items-center justify-between gap-2 rounded border border-[var(--border)] p-2 opacity-60"
 										>
 											<div className="min-w-0">
-												<p className="truncate font-medium text-[var(--foreground)] text-xs">
-													{p.planName}
-												</p>
+												<div className="flex flex-wrap items-center gap-1.5">
+													<p className="truncate font-medium text-[var(--foreground)] text-xs">
+														{p.planName}
+													</p>
+													<OwnerBadge ownedBy={p.ownedBy} />
+												</div>
 												<p className="text-[var(--muted-foreground)] text-xs">
 													{p.status}
 												</p>

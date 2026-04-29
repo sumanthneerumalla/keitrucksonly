@@ -25,7 +25,12 @@ const selfCheckinSchema = z.object({
 
 const searchMembersSchema = z.object({
 	query: z.string().min(1),
-	facilityId: z.string(),
+	// Optional — the query body filters by ctx.user.clubShortName only and
+	// ignores facilityId, so this is effectively a club-wide typeahead.
+	// Kept in the schema for backward compatibility with existing callers.
+	// Made optional so the public-shop v1 Family card can reuse this procedure
+	// without supplying a facility (public-shop.md §"New tRPC Endpoints").
+	facilityId: z.string().optional(),
 });
 
 const getMemberCheckinCardSchema = z.object({

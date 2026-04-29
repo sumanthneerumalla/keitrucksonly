@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
+import { ProfileImageUploader } from "~/app/_components/shared/ProfileImageUploader";
 import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import {
 	Command,
@@ -52,6 +53,16 @@ export default function PackagePlanForm({
 	const [durationUnit, setDurationUnit] = useState<DurationUnit>("months");
 	const [saving, setSaving] = useState(false);
 
+	// Public Shop fields (decisions #2 + #5 + D2). The packages list query
+	// returns the full Prisma row so we have boolean + text on edit; image
+	// bytes are not surfaced as a data URL in v1 so we leave the initial
+	// empty per the design doc.
+	const [isPubliclyListed, setIsPubliclyListed] = useState(false);
+	const [publicDescription, setPublicDescription] = useState("");
+	const [publicImageDataUrl, setPublicImageDataUrl] = useState<
+		string | null | undefined
+	>(undefined);
+
 	// Queries
 	const { data: user, isLoading: isUserLoading } =
 		api.user.getOrCreateProfile.useQuery();
@@ -89,6 +100,10 @@ export default function PackagePlanForm({
 		} else {
 			setHasExpiry(false);
 		}
+		// Public shop scalar fields. Image bytes intentionally not rebuilt
+		// in v1 (TD-P2 — keep listings/detail server-side, not via the form).
+		setIsPubliclyListed(plan.isPubliclyListed);
+		setPublicDescription(plan.publicDescription ?? "");
 	}, [editPlanData, mode, packagePlanId]);
 
 	const utils = api.useUtils();
@@ -178,6 +193,10 @@ export default function PackagePlanForm({
 			durationValue: hasExpiry ? durationValue : null,
 			durationUnit: hasExpiry ? durationUnit : null,
 			sortOrder: 0,
+			isPubliclyListed,
+			publicDescription: publicDescription.trim() || null,
+			// undefined = leave existing image; null/string = clear/replace
+			...(publicImageDataUrl !== undefined ? { publicImageDataUrl } : {}),
 		};
 
 		if (mode === "create") {
@@ -492,6 +511,49 @@ export default function PackagePlanForm({
 							/>
 							<span className="text-[var(--foreground)]">No expiry</span>
 						</label>
+					</div>
+				</section>
+
+				{/* Public Shop (decisions #2 + #5 + D2) */}
+				<section className="space-y-4">
+					<h2 className="font-semibold text-[var(--foreground)] text-lg">
+						Public Shop
+					</h2>
+					<label className="flex cursor-pointer select-none items-center gap-2 text-[var(--foreground)] text-sm">
+						<input
+							type="checkbox"
+							checked={isPubliclyListed}
+							onChange={(e) => setIsPubliclyListed(e.target.checked)}
+							disabled={saving}
+							className="h-4 w-4 rounded border-input accent-[var(--primary)]"
+						/>
+						List on public shop
+					</label>
+					<div className="space-y-1">
+						<label className="font-medium text-[var(--foreground)] text-sm">
+							Public description (shown to shoppers)
+						</label>
+						<textarea
+							value={publicDescription}
+							onChange={(e) => setPublicDescription(e.target.value)}
+							rows={3}
+							placeholder="Marketing copy for the public shop"
+							maxLength={2000}
+							disabled={saving}
+							className="flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-[var(--foreground)] text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+						/>
+					</div>
+					<div className="space-y-1">
+						<label className="font-medium text-[var(--foreground)] text-sm">
+							Public image
+						</label>
+						<ProfileImageUploader
+							initialImageUrl={null}
+							onChange={(imageData) => setPublicImageDataUrl(imageData)}
+						/>
+						<p className="text-[var(--muted-foreground)] text-xs">
+							Hero image used on the public shop detail page (PNG, ≤5MB).
+						</p>
 					</div>
 				</section>
 

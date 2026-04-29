@@ -12,9 +12,22 @@
  *     (handles race conditions — if the WHERE clause fails, try the next package)
  *   - Multi-credit events: if no single package has enough credits, fail entirely (decision #60)
  *
+ * Family widening (public-shop.md FAM phase, decisions #15 / D7):
+ *   The package-search WHERE clause uses `userId IN [registrant, ...sameClubFamilyMembers]`
+ *   so any package owned by a registrant's family member (in the same club) can satisfy
+ *   the deduction. Cross-club is blocked by filtering family members by clubShortName.
+ *
  * Returns: { usage: PackageCreditUsage } on success, or { usage: null, reason } if no match.
  * Registration/check-in still succeeds — member just doesn't get a credit deducted (invoice
  * line item comes from Phase 9).
+ *
+ * Concurrency model (B1 review fix, 2026-04-28):
+ *   The conditional update uses `$executeRaw` with the WHERE clause checking
+ *   the LIVE DB value of `creditsUsed` — not a captured client-side literal.
+ *   This is the fix for HANDOFF.md open thread #4 / public-shop.md D4 / I7.
+ *   Two family members consuming the last credit in parallel: only one of the
+ *   two atomic UPDATEs will affect a row; the other returns affected=0 and the
+ *   loop falls through to the next candidate package or the no-match path.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -60,9 +73,30 @@ export async function consumeCredit({
 	// General check-in: match packagePlan.isGeneralDropIn === true
 	const now = new Date();
 
+	// Family widening (public-shop.md decision #15, D7):
+	// The registrant can also consume credits owned by any user in the same
+	// FamilyGroup, scoped to the same club. If the registrant has no group,
+	// fall back to just their own userId (preserves single-user behavior).
+	const registrant = await tx.user.findUnique({
+		where: { userId },
+		select: { familyGroupId: true, clubShortName: true },
+	});
+
+	const familyMemberIds = registrant?.familyGroupId
+		? (
+				await tx.user.findMany({
+					where: {
+						familyGroupId: registrant.familyGroupId,
+						clubShortName: registrant.clubShortName,
+					},
+					select: { userId: true },
+				})
+			).map((u) => u.userId)
+		: [userId];
+
 	const whereClause: Prisma.MemberPackageWhereInput = {
 		clubShortName,
-		userId,
+		userId: { in: familyMemberIds },
 		status: "active",
 		OR: [{ endDate: null }, { endDate: { gt: now } }],
 		packagePlan: eventId
@@ -121,21 +155,22 @@ export async function consumeCredit({
 			continue;
 		}
 
-		// Best-effort conditional update. NOTE: `candidate.creditsUsed` is a stale literal
-		// captured from the earlier findMany read — this WHERE clause does NOT check the
-		// current DB value of creditsUsed. Under rare concurrent deductions on the same
-		// package, this can allow over-deduction. Low risk in MVP (manual staff actions),
-		// but must be replaced with $executeRaw(`WHERE "creditsUsed" + $cost <= "creditsTotal"`)
-		// before self-service registration or 8b ships. See HANDOFF open thread #4.
-		const result = await tx.memberPackage.updateMany({
-			where: {
-				memberPackageId: candidate.memberPackageId,
-				creditsTotal: { gte: candidate.creditsUsed + cost },
-			},
-			data: { creditsUsed: { increment: cost } },
-		});
+		// Atomic conditional update — the WHERE clause re-checks the LIVE DB value
+		// of creditsUsed (not a captured literal). Returns the number of rows affected:
+		// 1 → we won the race, credit was deducted; 0 → another concurrent deduction
+		// depleted the package between our findMany and now → try the next candidate.
+		// This is the B1 fix that closes the consumeCredit stale-read race once and for all.
+		const affected = await tx.$executeRaw`
+			UPDATE "MemberPackage"
+			SET "creditsUsed" = "creditsUsed" + ${cost}
+			WHERE "memberPackageId" = ${candidate.memberPackageId}
+			  AND (
+			    "creditsTotal" IS NULL
+			    OR "creditsUsed" + ${cost} <= "creditsTotal"
+			  )
+		`;
 
-		if (result.count === 0) {
+		if (affected === 0) {
 			// Concurrent deduction depleted this package — try the next candidate
 			continue;
 		}

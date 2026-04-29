@@ -1,4 +1,3 @@
-import { clerkClient } from "@clerk/nextjs/server";
 import { Prisma, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -8,6 +7,10 @@ import {
 	facilityProcedure,
 	protectedProcedure,
 } from "~/server/api/trpc";
+import {
+	findOrCreateClerkUserId,
+	findOrCreateLocalUserAccount,
+} from "~/server/utils/createUserAccount";
 import { getCurrentWeekRange } from "~/server/utils/dateUtils";
 import { generateUniqueUsername } from "~/server/utils/generateUsername";
 import {
@@ -18,6 +21,7 @@ import {
 	formatUserForFrontend,
 	getCurrentUser,
 	isAnyAdmin,
+	isFacilityOrAbove,
 	isPlatformAdmin,
 	isSameClub,
 	processBase64Image,
@@ -207,6 +211,33 @@ function parseStudentProfileData(raw: unknown): StudentProfileData {
 const updateStudentProfileDataSchema = z.object({
 	userId: z.string(),
 	profileData: studentProfileDataSchema,
+});
+
+// ============================================================
+// FAMILY GROUP SCHEMAS (public-shop.md FAM phase, decisions #15/#16)
+// ============================================================
+
+const getFamilyGroupSchema = z.object({
+	userId: z.string(),
+});
+
+const joinFamilyGroupSchema = z.object({
+	// The "current" user on whose detail page the admin is acting
+	userId: z.string(),
+	// The user being added to the current user's family group
+	targetUserId: z.string(),
+	// When both users are in DIFFERENT groups, the server requires this flag
+	// so the UI can render a confirm dialog first (PRECONDITION_FAILED otherwise).
+	confirmMove: z.boolean().optional(),
+});
+
+const leaveFamilyGroupSchema = z.object({
+	userId: z.string(),
+});
+
+const renameFamilyGroupSchema = z.object({
+	familyGroupId: z.string(),
+	name: z.string().min(1).max(200),
 });
 
 const updateCoachProfileSchema = z.object({
@@ -1371,116 +1402,37 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
-			// Validate facility belongs to the target club (skip if we just created it)
-			if (!input.newClub) {
-				const facility = await ctx.db.clubFacility.findUnique({
-					where: { facilityId },
-					select: { clubShortName: true },
-				});
+			// Decision #24 Option A: Clerk find-or-create runs OUTSIDE the DB
+			// transaction so the network round-trip never holds a connection.
+			// For the new-club branch above, the Club + ClubFacility were
+			// already committed (separate writes) before this point — the
+			// facility exists by the time `findOrCreateLocalUserAccount`
+			// resolves it below.
+			const { clerkUserId } = await findOrCreateClerkUserId({
+				email: input.email,
+				firstName: input.firstName,
+				lastName: input.lastName,
+			});
 
-				if (!facility || facility.clubShortName !== clubShortName) {
-					throw new TRPCError({
-						code: "BAD_REQUEST",
-						message: "Facility does not belong to your club.",
-					});
-				}
-			}
-
-			const clerk = await clerkClient();
-			let clerkUserId: string;
-
-			try {
-				// Try creating a new Clerk account
-				const clerkUser = await clerk.users.createUser({
-					emailAddress: [input.email],
+			// `requireNewMembership: true` preserves the admin UX: when the
+			// target user already has a UserClub at this facility, the helper
+			// throws CONFLICT instead of returning idempotently. Cleaner than
+			// re-checking pre/post-call and avoids a separate findUnique.
+			const { userId } = await ctx.db.$transaction(async (tx) => {
+				return findOrCreateLocalUserAccount({
+					db: tx,
+					clerkUserId,
+					email: input.email,
 					firstName: input.firstName,
 					lastName: input.lastName,
-					skipPasswordRequirement: true,
-				});
-				clerkUserId = clerkUser.id;
-			} catch (err: any) {
-				// If email already exists in Clerk, find the existing user
-				if (
-					err?.errors?.[0]?.code === "form_identifier_exists" ||
-					err?.status === 422
-				) {
-					const existingClerkUsers = await clerk.users.getUserList({
-						emailAddress: [input.email],
-					});
-					const existingClerk = existingClerkUsers.data[0];
-
-					if (!existingClerk) {
-						throw new TRPCError({
-							code: "INTERNAL_SERVER_ERROR",
-							message: "Email exists in auth system but user not found.",
-						});
-					}
-					clerkUserId = existingClerk.id;
-				} else {
-					throw new TRPCError({
-						code: "INTERNAL_SERVER_ERROR",
-						message: "Failed to create user account.",
-					});
-				}
-			}
-
-			// Find or create the local User row
-			let user = await ctx.db.user.findUnique({
-				where: { clerkUserId },
-			});
-
-			if (!user) {
-				user = await ctx.db.user.create({
-					data: {
-						clerkUserId,
-						firstName: input.firstName,
-						lastName: input.lastName,
-						email: input.email,
-						userType: input.role,
-						clubShortName,
-						activeFacilityId: facilityId,
-					},
-				});
-			}
-
-			// Check if already at this facility
-			const existingMembership = await ctx.db.userClub.findUnique({
-				where: {
-					userId_facilityId: {
-						userId: user.userId,
-						facilityId,
-					},
-				},
-			});
-
-			if (existingMembership) {
-				throw new TRPCError({
-					code: "CONFLICT",
-					message: "User is already a member of this facility.",
-				});
-			}
-
-			// Create UserClub row
-			await ctx.db.userClub.create({
-				data: {
-					userId: user.userId,
 					clubShortName,
-					facilityId,
 					role: input.role,
-				},
+					facilityId,
+					requireNewMembership: true,
+				});
 			});
 
-			// Set the new facility as the user's active context
-			await ctx.db.user.update({
-				where: { userId: user.userId },
-				data: {
-					clubShortName,
-					activeFacilityId: facilityId,
-					userType: input.role,
-				},
-			});
-
-			return { userId: user.userId, email: user.email };
+			return { userId, email: input.email };
 		}),
 
 	// Update a user's role at a specific facility.
@@ -2210,5 +2162,408 @@ export const userRouter = createTRPCRouter({
 			});
 
 			return { success: true as const };
+		}),
+
+	// ============================================================
+	// FAMILY GROUPS (public-shop.md FAM phase — decisions #15/#16, B3, D6, D7)
+	// ============================================================
+
+	// Fetch the family group for a user (or null if they're not in one).
+	// Members include the target user themselves.
+	getFamilyGroup: facilityProcedure
+		.input(getFamilyGroupSchema)
+		.query(async ({ ctx, input }) => {
+			// Scope check: target user must be in caller's club.
+			const target = await ctx.db.user.findFirst({
+				where: {
+					userId: input.userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { userId: true, familyGroupId: true },
+			});
+
+			if (!target) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "User not found in your club.",
+				});
+			}
+
+			if (!target.familyGroupId) return null;
+
+			const group = await ctx.db.familyGroup.findUnique({
+				where: { familyGroupId: target.familyGroupId },
+				select: {
+					familyGroupId: true,
+					name: true,
+					clubShortName: true,
+					members: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+							email: true,
+						},
+						orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+					},
+				},
+			});
+
+			if (!group) return null;
+
+			// Cross-club guard (D7): only return if the group belongs to caller's club.
+			if (group.clubShortName !== ctx.user.clubShortName) return null;
+
+			return {
+				familyGroupId: group.familyGroupId,
+				name: group.name,
+				members: group.members.map((m) => ({
+					userId: m.userId,
+					firstName: m.firstName,
+					lastName: m.lastName,
+					email: m.email,
+				})),
+			};
+		}),
+
+	// Join two users into a family group. Table-driven semantics from
+	// public-shop.md §"Join semantics". Wrapped in $transaction with
+	// SELECT FOR UPDATE on touched FamilyGroup rows (B3) so concurrent
+	// admin actions on the same families produce a consistent member set.
+	joinFamilyGroup: facilityProcedure
+		.input(joinFamilyGroupSchema)
+		.mutation(async ({ ctx, input }) => {
+			const clubShortName = ctx.user.clubShortName;
+
+			// Scope check: both users must be in caller's club.
+			const [currentUser, targetUser] = await Promise.all([
+				ctx.db.user.findFirst({
+					where: { userId: input.userId, clubShortName },
+					select: {
+						userId: true,
+						lastName: true,
+						familyGroupId: true,
+					},
+				}),
+				ctx.db.user.findFirst({
+					where: { userId: input.targetUserId, clubShortName },
+					select: {
+						userId: true,
+						lastName: true,
+						familyGroupId: true,
+					},
+				}),
+			]);
+
+			if (!currentUser || !targetUser) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "User not found in your club.",
+				});
+			}
+
+			if (currentUser.userId === targetUser.userId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Cannot join a user to themselves.",
+				});
+			}
+
+			// Same group already → no-op
+			if (
+				currentUser.familyGroupId &&
+				currentUser.familyGroupId === targetUser.familyGroupId
+			) {
+				const group = await ctx.db.familyGroup.findUnique({
+					where: { familyGroupId: currentUser.familyGroupId },
+					select: { familyGroupId: true, name: true },
+				});
+				if (!group) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Family group not found.",
+					});
+				}
+				return { familyGroupId: group.familyGroupId, name: group.name };
+			}
+
+			// Different groups → require confirmMove
+			if (
+				currentUser.familyGroupId &&
+				targetUser.familyGroupId &&
+				currentUser.familyGroupId !== targetUser.familyGroupId &&
+				!input.confirmMove
+			) {
+				const [currentGroup, targetGroup] = await Promise.all([
+					ctx.db.familyGroup.findUnique({
+						where: { familyGroupId: currentUser.familyGroupId },
+						select: { name: true },
+					}),
+					ctx.db.familyGroup.findUnique({
+						where: { familyGroupId: targetUser.familyGroupId },
+						select: { name: true },
+					}),
+				]);
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: `Move user from "${targetGroup?.name ?? "Family"}" to "${currentGroup?.name ?? "Family"}"? They will no longer share packages with the remaining members.`,
+				});
+			}
+
+			return await ctx.db.$transaction(async (tx) => {
+				// B3: lock every FamilyGroup row we might touch so concurrent
+				// admin actions on the same families serialize. Lock taken on
+				// the OUTER-scope group ids first; we re-read users after, so
+				// any change applied by a parallel admin between the outer
+				// reads and our lock acquisition becomes visible below.
+				const groupIdsToLock = [
+					currentUser.familyGroupId,
+					targetUser.familyGroupId,
+				].filter((id): id is string => Boolean(id));
+
+				if (groupIdsToLock.length > 0) {
+					await tx.$queryRaw`SELECT 1 FROM "FamilyGroup" WHERE "familyGroupId" IN (${Prisma.join(
+						groupIdsToLock,
+					)}) FOR UPDATE`;
+				}
+
+				// I3 fix: re-read both users INSIDE the locked transaction so the
+				// case dispatch below operates on post-lock state. Without this,
+				// a concurrent move can flip a user's familyGroupId between our
+				// outer read and the lock taking effect, and we'd mutate based
+				// on stale data.
+				const [freshCurrent, freshTarget] = await Promise.all([
+					tx.user.findUnique({
+						where: { userId: currentUser.userId },
+						select: { userId: true, lastName: true, familyGroupId: true },
+					}),
+					tx.user.findUnique({
+						where: { userId: targetUser.userId },
+						select: { userId: true, lastName: true, familyGroupId: true },
+					}),
+				]);
+
+				if (!freshCurrent || !freshTarget) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message:
+							"One of the users was modified or removed mid-operation. Please retry.",
+					});
+				}
+
+				// Same group already → no-op (could have been raced into this state)
+				if (
+					freshCurrent.familyGroupId &&
+					freshCurrent.familyGroupId === freshTarget.familyGroupId
+				) {
+					const group = await tx.familyGroup.findUnique({
+						where: { familyGroupId: freshCurrent.familyGroupId },
+						select: { familyGroupId: true, name: true },
+					});
+					if (!group) {
+						throw new TRPCError({
+							code: "NOT_FOUND",
+							message: "Family group not found.",
+						});
+					}
+					return { familyGroupId: group.familyGroupId, name: group.name };
+				}
+
+				// Case: neither user has a group → create a new one with both.
+				if (!freshCurrent.familyGroupId && !freshTarget.familyGroupId) {
+					const derivedName = freshCurrent.lastName
+						? `${freshCurrent.lastName} family`
+						: "Family";
+					const newGroup = await tx.familyGroup.create({
+						data: { clubShortName, name: derivedName },
+						select: { familyGroupId: true, name: true },
+					});
+					await tx.user.updateMany({
+						where: {
+							userId: { in: [freshCurrent.userId, freshTarget.userId] },
+						},
+						data: { familyGroupId: newGroup.familyGroupId },
+					});
+					return { familyGroupId: newGroup.familyGroupId, name: newGroup.name };
+				}
+
+				// Case: only currentUser has a group → target joins.
+				if (freshCurrent.familyGroupId && !freshTarget.familyGroupId) {
+					await tx.user.update({
+						where: { userId: freshTarget.userId },
+						data: { familyGroupId: freshCurrent.familyGroupId },
+					});
+					const group = await tx.familyGroup.findUnique({
+						where: { familyGroupId: freshCurrent.familyGroupId },
+						select: { familyGroupId: true, name: true },
+					});
+					if (!group) {
+						throw new TRPCError({
+							code: "NOT_FOUND",
+							message: "Family group not found.",
+						});
+					}
+					return { familyGroupId: group.familyGroupId, name: group.name };
+				}
+
+				// Case: only targetUser has a group → current joins.
+				if (!freshCurrent.familyGroupId && freshTarget.familyGroupId) {
+					await tx.user.update({
+						where: { userId: freshCurrent.userId },
+						data: { familyGroupId: freshTarget.familyGroupId },
+					});
+					const group = await tx.familyGroup.findUnique({
+						where: { familyGroupId: freshTarget.familyGroupId },
+						select: { familyGroupId: true, name: true },
+					});
+					if (!group) {
+						throw new TRPCError({
+							code: "NOT_FOUND",
+							message: "Family group not found.",
+						});
+					}
+					return { familyGroupId: group.familyGroupId, name: group.name };
+				}
+
+				// Case: both in different groups + confirmMove === true → move target
+				// into current's group. Delete target's old group if it becomes empty.
+				if (
+					freshCurrent.familyGroupId &&
+					freshTarget.familyGroupId &&
+					freshCurrent.familyGroupId !== freshTarget.familyGroupId
+				) {
+					const oldGroupId = freshTarget.familyGroupId;
+					await tx.user.update({
+						where: { userId: freshTarget.userId },
+						data: { familyGroupId: freshCurrent.familyGroupId },
+					});
+
+					const remaining = await tx.user.count({
+						where: { familyGroupId: oldGroupId },
+					});
+					if (remaining === 0) {
+						await tx.familyGroup.delete({
+							where: { familyGroupId: oldGroupId },
+						});
+					}
+
+					const group = await tx.familyGroup.findUnique({
+						where: { familyGroupId: freshCurrent.familyGroupId },
+						select: { familyGroupId: true, name: true },
+					});
+					if (!group) {
+						throw new TRPCError({
+							code: "NOT_FOUND",
+							message: "Family group not found.",
+						});
+					}
+					return { familyGroupId: group.familyGroupId, name: group.name };
+				}
+
+				// Should not reach here.
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Unhandled join state.",
+				});
+			});
+		}),
+
+	// Remove a user from their family group. Deletes the group row when its
+	// last member leaves. Wrapped in $transaction with SELECT FOR UPDATE (B3).
+	leaveFamilyGroup: facilityProcedure
+		.input(leaveFamilyGroupSchema)
+		.mutation(async ({ ctx, input }) => {
+			// Scope check.
+			const target = await ctx.db.user.findFirst({
+				where: {
+					userId: input.userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { userId: true, familyGroupId: true },
+			});
+
+			if (!target) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "User not found in your club.",
+				});
+			}
+
+			if (!target.familyGroupId) {
+				return { removed: true as const, deletedGroup: false };
+			}
+
+			const oldGroupId = target.familyGroupId;
+
+			return await ctx.db.$transaction(async (tx) => {
+				// B3: lock the affected FamilyGroup row. (N2 review note:) Why
+				// the count-then-delete is safe under our concurrency model:
+				//   1. SELECT ... FOR UPDATE serializes ALL leave operations on
+				//      this group — only one tx can hold the lock at a time.
+				//   2. Inside the locked tx, the UPDATE that sets the leaving
+				//      user's familyGroupId to null commits to this tx's view
+				//      under READ COMMITTED — so the subsequent COUNT sees the
+				//      post-leave member set.
+				//   3. If COUNT === 0, no concurrent write can re-add a member
+				//      because they'd need to first take the same FOR UPDATE
+				//      lock, which we hold until commit.
+				// DO NOT "optimize" this by removing the SELECT FOR UPDATE — the
+				// count-then-delete pattern relies on it.
+				await tx.$queryRaw`SELECT 1 FROM "FamilyGroup" WHERE "familyGroupId" = ${oldGroupId} FOR UPDATE`;
+
+				await tx.user.update({
+					where: { userId: target.userId },
+					data: { familyGroupId: null },
+				});
+
+				const remaining = await tx.user.count({
+					where: { familyGroupId: oldGroupId },
+				});
+
+				let deletedGroup = false;
+				if (remaining === 0) {
+					await tx.familyGroup.delete({
+						where: { familyGroupId: oldGroupId },
+					});
+					deletedGroup = true;
+				}
+
+				return { removed: true as const, deletedGroup };
+			});
+		}),
+
+	// Rename a family group. FACILITY/CLUB_ADMIN/PLATFORM_ADMIN only (D6).
+	// facilityProcedure already enforces the role gate; the helper check is
+	// belt-and-suspenders in case the procedure base is ever broadened.
+	renameFamilyGroup: facilityProcedure
+		.input(renameFamilyGroupSchema)
+		.mutation(async ({ ctx, input }) => {
+			if (!isFacilityOrAbove(ctx.user)) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only facility staff or admins can rename family groups.",
+				});
+			}
+
+			// Scope check (D7): group's clubShortName must match caller's.
+			const group = await ctx.db.familyGroup.findUnique({
+				where: { familyGroupId: input.familyGroupId },
+				select: { familyGroupId: true, clubShortName: true },
+			});
+
+			if (!group || group.clubShortName !== ctx.user.clubShortName) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Family group not found in your club.",
+				});
+			}
+
+			const updated = await ctx.db.familyGroup.update({
+				where: { familyGroupId: input.familyGroupId },
+				data: { name: input.name.trim() },
+				select: { familyGroupId: true, name: true },
+			});
+
+			return { familyGroupId: updated.familyGroupId, name: updated.name };
 		}),
 });

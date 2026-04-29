@@ -7,6 +7,7 @@ import { packagesRouter } from "~/server/api/routers/packages";
 import { postRouter } from "~/server/api/routers/post";
 import { rentalsRouter } from "~/server/api/routers/rentals";
 import { productsRouter } from "~/server/api/routers/products";
+import { shopRouter } from "~/server/api/routers/shop";
 import { userRouter } from "~/server/api/routers/user";
 import { videoCollectionRouter } from "~/server/api/routers/videoCollection";
 import { createCallerFactory, createTRPCRouter } from "~/server/api/trpc";
@@ -28,6 +29,7 @@ export const appRouter = createTRPCRouter({
 	packages: packagesRouter,
 	products: productsRouter,
 	rentals: rentalsRouter,
+	shop: shopRouter,
 });
 
 // export type definition of API

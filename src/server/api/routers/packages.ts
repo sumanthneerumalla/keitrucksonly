@@ -9,6 +9,34 @@ import {
 } from "~/server/api/trpc";
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+/**
+ * Image storage bridge (public-shop.md D2 / I2). `ProfileImageUploader`
+ * returns a `data:image/png;base64,...` string; our schema stores raw bytes
+ * + MIME separately. Splits the data URL on the first comma.
+ */
+function parseDataUrl(dataUrl: string): {
+	bytes: Uint8Array<ArrayBuffer>;
+	mime: string;
+} {
+	const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+	if (!match) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid image data URL",
+		});
+	}
+	const buf = Buffer.from(match[2]!, "base64");
+	// Copy into a fresh Uint8Array<ArrayBuffer> so Prisma's `Bytes` typing accepts it.
+	const ab = new ArrayBuffer(buf.byteLength);
+	const bytes = new Uint8Array(ab);
+	bytes.set(buf);
+	return { mime: match[1]!, bytes };
+}
+
+// ============================================================
 // INPUT SCHEMAS
 // ============================================================
 
@@ -25,6 +53,13 @@ const createPackagePlanSchema = z
 		durationValue: z.number().int().min(1).max(1000).nullable(),
 		durationUnit: durationUnitSchema.nullable(),
 		sortOrder: z.number().int().min(0).default(0),
+		// Public shop fields (decisions #2 + #5 + #17). Stripe IDs accepted
+		// but unvalidated — Phase C populates them.
+		isPubliclyListed: z.boolean().optional(),
+		publicDescription: z.string().max(2000).optional().nullable(),
+		publicImageDataUrl: z.string().optional().nullable(),
+		stripeProductId: z.string().optional().nullable(),
+		stripePriceId: z.string().optional().nullable(),
 	})
 	.refine(
 		(data) => {
@@ -63,6 +98,12 @@ const updatePackagePlanSchema = z.object({
 	durationUnit: durationUnitSchema.nullable().optional(),
 	sortOrder: z.number().int().min(0).optional(),
 	isActive: z.boolean().optional(),
+	// Public shop fields (decisions #2 + #5 + #17).
+	isPubliclyListed: z.boolean().optional(),
+	publicDescription: z.string().max(2000).optional().nullable(),
+	publicImageDataUrl: z.string().optional().nullable(),
+	stripeProductId: z.string().optional().nullable(),
+	stripePriceId: z.string().optional().nullable(),
 });
 
 const archivePackagePlanSchema = z.object({
@@ -82,6 +123,10 @@ const sellPackageSchema = z.object({
 
 const getMemberPackagesSchema = z.object({
 	userId: z.string(),
+	// Wave 2 backfill (public-shop.md §"New tRPC Endpoints" → Modified, decisions #15
+	// + D7). Default true so existing callers (`MemberPackagesCard`, etc.) pick up
+	// family-shared packages without prop changes.
+	includeFamily: z.boolean().optional().default(true),
 });
 
 const reverseCreditSchema = z.object({
@@ -205,6 +250,18 @@ export const packagesRouter = createTRPCRouter({
 				}
 			}
 
+			// Public shop image: parse data URL → bytes + mime (D2).
+			let publicImageData: Uint8Array<ArrayBuffer> | null | undefined;
+			let publicImageType: string | null | undefined;
+			if (typeof input.publicImageDataUrl === "string") {
+				const parsed = parseDataUrl(input.publicImageDataUrl);
+				publicImageData = parsed.bytes;
+				publicImageType = parsed.mime;
+			} else if (input.publicImageDataUrl === null) {
+				publicImageData = null;
+				publicImageType = null;
+			}
+
 			const plan = await ctx.db.packagePlan.create({
 				data: {
 					clubShortName: ctx.user.clubShortName,
@@ -217,6 +274,12 @@ export const packagesRouter = createTRPCRouter({
 					durationValue: input.durationValue,
 					durationUnit: input.durationUnit,
 					sortOrder: input.sortOrder,
+					isPubliclyListed: input.isPubliclyListed ?? false,
+					publicDescription: input.publicDescription ?? null,
+					...(publicImageData !== undefined ? { publicImageData } : {}),
+					...(publicImageType !== undefined ? { publicImageType } : {}),
+					stripeProductId: input.stripeProductId ?? null,
+					stripePriceId: input.stripePriceId ?? null,
 				},
 			});
 
@@ -227,7 +290,7 @@ export const packagesRouter = createTRPCRouter({
 	updatePackagePlan: clubAdminProcedure
 		.input(updatePackagePlanSchema)
 		.mutation(async ({ ctx, input }) => {
-			const { packagePlanId, ...data } = input;
+			const { packagePlanId, publicImageDataUrl, ...rest } = input;
 
 			const existing = await ctx.db.packagePlan.findFirst({
 				where: {
@@ -244,10 +307,10 @@ export const packagesRouter = createTRPCRouter({
 			}
 
 			// If productId is being changed, verify it belongs to this club (mirrors createPackagePlan check)
-			if (data.productId !== undefined && data.productId !== null) {
+			if (rest.productId !== undefined && rest.productId !== null) {
 				const product = await ctx.db.product.findFirst({
 					where: {
-						productId: data.productId,
+						productId: rest.productId,
 						clubShortName: ctx.user.clubShortName,
 					},
 					select: { productId: true },
@@ -262,10 +325,10 @@ export const packagesRouter = createTRPCRouter({
 
 			// Verify business rule: exactly one of productId or isGeneralDropIn
 			const finalProductId =
-				data.productId !== undefined ? data.productId : existing.productId;
+				rest.productId !== undefined ? rest.productId : existing.productId;
 			const finalIsGeneral =
-				data.isGeneralDropIn !== undefined
-					? data.isGeneralDropIn
+				rest.isGeneralDropIn !== undefined
+					? rest.isGeneralDropIn
 					: existing.isGeneralDropIn;
 
 			if (!!finalProductId === finalIsGeneral) {
@@ -274,6 +337,25 @@ export const packagesRouter = createTRPCRouter({
 					message:
 						"Exactly one of productId or isGeneralDropIn=true must be set",
 				});
+			}
+
+			// Public shop image: parse data URL → bytes + mime, or clear both
+			// columns when explicitly null (D2 — image storage bridge).
+			const data: Record<string, unknown> = { ...rest };
+			if (typeof publicImageDataUrl === "string") {
+				const parsed = parseDataUrl(publicImageDataUrl);
+				data.publicImageData = parsed.bytes;
+				data.publicImageType = parsed.mime;
+			} else if (publicImageDataUrl === null) {
+				data.publicImageData = null;
+				data.publicImageType = null;
+			}
+
+			// I3 save-handler guard: archiving (isActive=false) auto-unlists
+			// from the public shop. Prevents the "archived but listed"
+			// inconsistency (decision #22).
+			if (data.isActive === false) {
+				data.isPubliclyListed = false;
 			}
 
 			const plan = await ctx.db.packagePlan.update({
@@ -378,7 +460,22 @@ export const packagesRouter = createTRPCRouter({
 			return { memberPackage };
 		}),
 
-	/** Get a member's packages (all statuses) with usage stats */
+	/**
+	 * Get a member's packages (all statuses) with usage stats.
+	 *
+	 * Wave 2 backfill (public-shop.md decisions #15 + D7): when `includeFamily`
+	 * is true (default) and the target user is in a `FamilyGroup`, also returns
+	 * packages owned by other family members in the *same club*. This closes
+	 * the display gap that Wave 1 missed: `consumeCredit` already deducts from
+	 * a parent's pack when a kid checks in, but without this widening the
+	 * check-in card showed "No packages" and the deduction was invisible.
+	 *
+	 * Each row carries `ownedBy: { userId, firstName, lastName, isCurrentUser }`
+	 * so the UI can label shared packages ("Owned by Jane Doe"). The shape is
+	 * always present — even when `includeFamily=false` or the user has no
+	 * family group, every row gets `ownedBy` with `isCurrentUser: true`. This
+	 * keeps client code free of optional handling.
+	 */
 	getMemberPackages: facilityProcedure
 		.input(getMemberPackagesSchema)
 		.query(async ({ ctx, input }) => {
@@ -387,7 +484,7 @@ export const packagesRouter = createTRPCRouter({
 					userId: input.userId,
 					clubShortName: ctx.user.clubShortName,
 				},
-				select: { userId: true },
+				select: { userId: true, firstName: true, lastName: true, familyGroupId: true },
 			});
 
 			if (!member) {
@@ -397,8 +494,50 @@ export const packagesRouter = createTRPCRouter({
 				});
 			}
 
+			// Build the (userId → name) lookup. Always seed with the input user so
+			// `ownedBy` resolves cleanly for the single-user path too.
+			const ownerLookup = new Map<
+				string,
+				{ firstName: string | null; lastName: string | null }
+			>();
+			ownerLookup.set(member.userId, {
+				firstName: member.firstName,
+				lastName: member.lastName,
+			});
+
+			// Decide which userIds the package query should cover.
+			let userIdsForQuery: string[] = [member.userId];
+			if (input.includeFamily && member.familyGroupId) {
+				// D7: hard cross-club guard — only family members who are in the
+				// SAME club as the calling staff. We do not trust the registrant's
+				// `familyGroupId` to scope clubs; we filter explicitly.
+				const familyMembers = await ctx.db.user.findMany({
+					where: {
+						familyGroupId: member.familyGroupId,
+						clubShortName: ctx.user.clubShortName,
+					},
+					select: { userId: true, firstName: true, lastName: true },
+				});
+				for (const fm of familyMembers) {
+					ownerLookup.set(fm.userId, {
+						firstName: fm.firstName,
+						lastName: fm.lastName,
+					});
+				}
+				userIdsForQuery = Array.from(ownerLookup.keys());
+			}
+
 			const packages = await ctx.db.memberPackage.findMany({
-				where: { userId: input.userId, clubShortName: ctx.user.clubShortName },
+				where:
+					userIdsForQuery.length > 1
+						? {
+								userId: { in: userIdsForQuery },
+								clubShortName: ctx.user.clubShortName,
+							}
+						: {
+								userId: input.userId,
+								clubShortName: ctx.user.clubShortName,
+							},
 				include: {
 					packagePlan: {
 						select: {
@@ -416,14 +555,25 @@ export const packagesRouter = createTRPCRouter({
 				orderBy: [{ status: "asc" }, { endDate: "asc" }, { createdAt: "desc" }],
 			});
 
+			// Sort-order tie-break (per task spec): within each status, prefer the
+			// input user's own packs above family-shared ones at the same status
+			// level. Stable client-side resort — keeps the DB orderBy untouched and
+			// avoids a Prisma raw-SQL escape hatch.
+			const sortedPackages = [...packages].sort((a, b) => {
+				const aMine = a.userId === input.userId ? 0 : 1;
+				const bMine = b.userId === input.userId ? 0 : 1;
+				return aMine - bMine; // stable: ties keep DB orderBy (status/endDate/createdAt)
+			});
+
 			// Compute effective status (always check endDate — decision #56)
 			const now = new Date();
 			return {
-				packages: packages.map((p) => {
+				packages: sortedPackages.map((p) => {
 					let effectiveStatus = p.status;
 					if (p.status === "active" && p.endDate && p.endDate <= now) {
 						effectiveStatus = "expired";
 					}
+					const owner = ownerLookup.get(p.userId);
 					return {
 						memberPackageId: p.memberPackageId,
 						planName: p.packagePlan.name,
@@ -442,6 +592,12 @@ export const packagesRouter = createTRPCRouter({
 						soldBy: p.soldByUser,
 						soldAt: p.soldAt,
 						notes: p.notes,
+						ownedBy: {
+							userId: p.userId,
+							firstName: owner?.firstName ?? null,
+							lastName: owner?.lastName ?? null,
+							isCurrentUser: p.userId === input.userId,
+						},
 					};
 				}),
 			};

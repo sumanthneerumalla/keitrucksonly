@@ -1,5 +1,6 @@
 "use client";
 
+import { SignInButton } from "@clerk/nextjs";
 import dayjs from "dayjs";
 import {
 	ArrowLeft,
@@ -16,6 +17,7 @@ import Link from "next/link";
 import { useState } from "react";
 import SellPackageModal from "~/app/(app)/admin/checkin/SellPackageModal";
 import AddStudentPopover from "~/app/(app)/events/[eventId]/AddStudentPopover";
+import GuestRegisterModal from "~/app/(app)/events/[eventId]/GuestRegisterModal";
 import BookableEventDetails from "~/app/(app)/events/_components/BookableEventDetails";
 import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
@@ -44,6 +46,12 @@ export default function EventDetailClient({
 		userId: string;
 		memberName: string;
 	} | null>(null);
+	// Guest-register modal + post-register success banner state (D3, Tier 1)
+	const [showGuestRegister, setShowGuestRegister] = useState(false);
+	const [guestRegisteredEmail, setGuestRegisteredEmail] = useState<
+		string | null
+	>(null);
+	const [bannerDismissed, setBannerDismissed] = useState(false);
 
 	const handleCopyLink = () => {
 		void navigator.clipboard.writeText(window.location.href).then(() => {
@@ -107,6 +115,14 @@ export default function EventDetailClient({
 		event._count.registrations >= event.maxParticipants;
 	const canRegister = isStudent && isBookable && !isFull && !myRegistration;
 	const canCancel = isStudent && myRegistration != null;
+	// Free-event detection — must mirror server-side `shop.guestRegisterForFreeEvent` validation
+	// exactly (review I2). Server checks BOTH price-is-zero AND credit-is-zero before letting
+	// a guest register. If we relax this client-side, a credit-required $0 event will show the
+	// guest-register CTA but then fail with "This event is not free" on submit.
+	const isFreeEvent =
+		event != null &&
+		(event.productId === null || event.product?.priceInCents === 0) &&
+		(event.creditCost === null || event.creditCost === 0);
 
 	if (isLoading) {
 		return (
@@ -224,7 +240,48 @@ export default function EventDetailClient({
 					readOnly={!editMode}
 				/>
 
-				{/* Registration actions — students only */}
+				{/* Post-register success banner — guest just registered (D3, Tier 1) */}
+				{guestRegisteredEmail && !bannerDismissed && isBookable && (
+					<div className="relative space-y-2 rounded-lg border border-green-200 bg-green-50 p-5">
+						<button
+							type="button"
+							onClick={() => setBannerDismissed(true)}
+							className="absolute top-3 right-3 rounded p-1 text-green-700/70 transition-colors hover:text-green-800"
+							aria-label="Dismiss banner"
+						>
+							<X size={16} />
+						</button>
+						<div className="flex items-center gap-2 font-medium text-green-700 text-sm">
+							<CalendarCheck size={16} />
+							You're registered for {event.title}!
+						</div>
+						<p className="text-green-800 text-sm">
+							We created an account for you with{" "}
+							<span className="font-medium">{guestRegisteredEmail}</span>.{" "}
+							{/*
+							 * D8: use SignInButton with initialValues to pre-fill the email
+							 * in Clerk's hosted sign-in (the codebase has no custom /sign-in
+							 * route — direct links would 404). Per Clerk docs, the
+							 * initialValues prop is forwarded to the SignIn flow and the
+							 * field name is `emailAddress`.
+							 */}
+							<SignInButton
+								mode="modal"
+								initialValues={{ emailAddress: guestRegisteredEmail }}
+							>
+								<button
+									type="button"
+									className="cursor-pointer bg-transparent p-0 font-medium text-green-700 underline hover:text-green-900"
+								>
+									Sign in
+								</button>
+							</SignInButton>{" "}
+							to view your registration.
+						</p>
+					</div>
+				)}
+
+				{/* Registration actions — students */}
 				{isStudent && isBookable && (
 					<div className="glass-card space-y-3 rounded-lg p-5">
 						{myRegistration ? (
@@ -258,16 +315,6 @@ export default function EventDetailClient({
 								This event is fully booked ({event._count.registrations}/
 								{event.maxParticipants} spots filled).
 							</p>
-						) : !userId ? (
-							<p className="text-[var(--muted-foreground)] text-sm">
-								<Link
-									href="/sign-in"
-									className="text-[var(--primary)] underline"
-								>
-									Sign in
-								</Link>{" "}
-								to register for this event.
-							</p>
 						) : (
 							<>
 								{event.maxParticipants !== null && (
@@ -294,6 +341,69 @@ export default function EventDetailClient({
 							</>
 						)}
 					</div>
+				)}
+
+				{/* Unauthenticated viewer CTA — guest register for free events (D3) */}
+				{!userId && isBookable && !guestRegisteredEmail && (
+					<div className="glass-card space-y-3 rounded-lg p-5">
+						{isFull ? (
+							<p className="text-[var(--muted-foreground)] text-sm">
+								This event is fully booked ({event._count.registrations}/
+								{event.maxParticipants} spots filled).
+							</p>
+						) : isFreeEvent ? (
+							<>
+								{event.maxParticipants !== null && (
+									<p className="text-[var(--muted-foreground)] text-sm">
+										{event.maxParticipants - event._count.registrations} spot
+										{event.maxParticipants - event._count.registrations === 1
+											? ""
+											: "s"}{" "}
+										remaining
+									</p>
+								)}
+								<p className="text-[var(--muted-foreground)] text-xs">
+									This is a free event — register without signing in.
+								</p>
+								<Button
+									size="sm"
+									onClick={() => setShowGuestRegister(true)}
+								>
+									<CalendarCheck size={14} />
+									Register
+								</Button>
+							</>
+						) : (
+							<p className="text-[var(--muted-foreground)] text-sm">
+								<SignInButton mode="modal">
+									<button
+										type="button"
+										className="cursor-pointer bg-transparent p-0 text-[var(--primary)] underline"
+									>
+										Sign in
+									</button>
+								</SignInButton>{" "}
+								to register for this event.
+							</p>
+						)}
+					</div>
+				)}
+
+				{/* Guest register modal */}
+				{showGuestRegister && (
+					<GuestRegisterModal
+						clubShortName={event.clubShortName}
+						eventId={event.eventId}
+						eventTitle={event.title}
+						onClose={() => setShowGuestRegister(false)}
+						onSuccess={(registeredEmail) => {
+							setGuestRegisteredEmail(registeredEmail);
+							setShowGuestRegister(false);
+							setBannerDismissed(false);
+							// Refresh public event data so the new registration is reflected.
+							void utils.calendar.getPublicEventById.invalidate({ eventId });
+						}}
+					/>
 				)}
 
 				{/* Event roster — FACILITY/ADMIN/COACH only */}

@@ -7,6 +7,7 @@ import { Button } from "~/app/_components/shared/Button";
 import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 import AttendanceHistoryCard from "./AttendanceHistoryCard";
+import FamilyCard from "./FamilyCard";
 import PaymentHistoryPlaceholder from "./PaymentHistoryPlaceholder";
 import ProfileFieldsCard from "./ProfileFieldsCard";
 
@@ -126,6 +127,9 @@ export default function StudentDetailClient({
 				email={user.email}
 				profileData={profileData}
 			/>
+
+			{/* Family — public-shop v1 (decision #16) */}
+			<FamilyCard userId={user.userId} memberName={fullName} />
 
 			{/* Packages (reuses MemberPackagesCard — handles its own sell modal) */}
 			<MemberPackagesCard userId={user.userId} memberName={fullName} />

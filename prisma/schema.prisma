@@ -40,6 +40,7 @@ model Club {
   memberPackages    MemberPackage[]
   tags              Tag[]
   rentalBookings    RentalBooking[]
+  familyGroups      FamilyGroup[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -86,9 +87,32 @@ model User {
 
   rentalBookings    RentalBooking[]
 
+  // Family group — opt-in grouping for shared package consumption (public-shop.md FAM phase).
+  // Two users with the same non-null familyGroupId share package credits via consumeCredit widening.
+  // Cross-club: a user in two clubs can be in two independent FamilyGroups (one per club).
+  familyGroupId String?
+  familyGroup   FamilyGroup? @relation(fields: [familyGroupId], references: [familyGroupId], onDelete: SetNull)
+
   @@index([clerkUserId])
   @@index([clubShortName])
   @@index([activeFacilityId])
+  @@index([familyGroupId])
+}
+
+// FamilyGroup — public-shop.md decision #15 (Option D). Members share package credits.
+// Admin-only management in v1 (no self-serve invitation flow yet, TD-P6).
+// On user delete: see TD-P8 — must call leaveFamilyGroup first; group row deletes when size hits 0.
+model FamilyGroup {
+  familyGroupId String   @id @default(cuid())
+  clubShortName String
+  club          Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  name          String?  // editable; auto-defaults to "{lastName} family" from first member
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  members User[]
+
+  @@index([clubShortName])
 }
 
 enum UserType {
@@ -520,6 +544,13 @@ model Product {
   taxRateId         String?
   taxRate           TaxRate?         @relation(fields: [taxRateId], references: [taxRateId])
   isActive          Boolean         @default(true)
+  // Public shop fields (public-shop.md decisions #2 + #5).
+  // isPubliclyListed: opt-in to appear on /club/[shortname]/shop. Save-handler guard (I3):
+  // setting isActive=false auto-flips isPubliclyListed=false.
+  isPubliclyListed  Boolean         @default(false)
+  publicDescription String?         @db.Text
+  publicImageData   Bytes?
+  publicImageType   String?
   createdByUserId   String
   createdByUser     User            @relation("CreatedProducts", fields: [createdByUserId], references: [userId])
   createdAt       DateTime        @default(now())
@@ -535,6 +566,7 @@ model Product {
   @@index([categoryId])
   @@index([stripeProductId])
   @@index([createdByUserId])
+  @@index([clubShortName, isPubliclyListed])
 }
 
 enum RentalBookingStatus {
@@ -687,6 +719,17 @@ model PackagePlan {
   durationUnit    String?   @db.VarChar(20) // "days" | "weeks" | "months" | "years" (null = no expiry)
   autoRenew       Boolean   @default(false) // deferred to 8c
   isActive        Boolean   @default(true)
+  // Public shop fields (public-shop.md decisions #2 + #5 + #17).
+  // PackagePlans are first-class Stripe SKUs (decision #17) — distinct from product.stripePriceId.
+  // Save-handler guard (I3): isActive=false auto-flips isPubliclyListed=false.
+  isPubliclyListed  Boolean @default(false)
+  publicDescription String? @db.Text
+  publicImageData   Bytes?
+  publicImageType   String?
+  // Phase 12: add @unique here in the same migration that introduces ProcessedStripeEvent.
+  // Held off in v1 to keep the migration prompt-free; nothing populates these fields until Phase C.
+  stripeProductId   String?
+  stripePriceId     String?
   sortOrder       Int       @default(0)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -695,6 +738,7 @@ model PackagePlan {
 
   @@index([clubShortName])
   @@index([productId])
+  @@index([clubShortName, isPubliclyListed])
 }
 
 // MemberPackage — an instance of a PackagePlan sold to a specific member.
