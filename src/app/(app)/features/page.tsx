@@ -356,7 +356,7 @@ function FeatureSection({ s, idx }: { s: Section; idx: number }) {
 		>
 			<div className="container mx-auto grid items-center gap-10 px-4 lg:gap-14">
 				<div
-					className={`grid items-center gap-10 lg:gap-14 ${reverse ? "lg:grid-cols-[1fr_1.05fr]" : "lg:grid-cols-[1.05fr_1fr]"}`}
+					className={`grid grid-cols-1 items-center gap-10 lg:gap-14 ${reverse ? "lg:grid-cols-[1fr_1.05fr]" : "lg:grid-cols-[1.05fr_1fr]"}`}
 				>
 					<div className={reverse ? "lg:order-2" : ""}>
 						<div className="flex items-center gap-3.5 font-mono text-[12px] text-[var(--ink-3)] uppercase tracking-[0.12em]">

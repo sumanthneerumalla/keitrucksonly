@@ -8,7 +8,7 @@ const STATS: Array<[string, string]> = [
 export function Testimonial() {
 	return (
 		<section className="py-20 md:py-[120px]">
-			<div className="container mx-auto grid items-center gap-12 px-4 lg:grid-cols-[1.3fr_1fr] lg:gap-16">
+			<div className="container mx-auto grid grid-cols-1 items-center gap-12 px-4 lg:grid-cols-[1.3fr_1fr] lg:gap-16">
 				<figure className="m-0">
 					<div className="mb-3.5 font-mono text-[11px] text-[var(--ink-3)] uppercase tracking-[0.12em]">
 						{"// Placeholder testimonial"}

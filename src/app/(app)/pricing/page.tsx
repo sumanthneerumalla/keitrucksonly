@@ -299,7 +299,7 @@ function Plans() {
 	return (
 		<section className="pb-16">
 			<div className="container mx-auto px-4">
-				<div className="grid items-stretch gap-[22px] lg:grid-cols-3">
+				<div className="grid grid-cols-1 items-stretch gap-[22px] lg:grid-cols-3">
 					{PLANS.map((p) => (
 						<PlanCard key={p.id} p={p} />
 					))}
@@ -343,7 +343,7 @@ function ROIComparison() {
 					lead="A typical 3-location Growth club, doing the math."
 				/>
 
-				<div className="grid items-center gap-8 lg:grid-cols-[1.2fr_auto_1fr]">
+				<div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-[1.2fr_auto_1fr]">
 					<div className="rounded-[18px] border border-[var(--line)] bg-[var(--paper)] p-6">
 						<div className="font-mono text-[11px] text-[var(--ink-3)] uppercase tracking-[0.1em]">
 							Your current stack
@@ -501,7 +501,7 @@ function Guarantee() {
 	return (
 		<section className="py-20 md:py-[120px]">
 			<div className="container mx-auto px-4">
-				<div className="grid items-center gap-8 rounded-[22px] border border-[var(--line)] bg-[var(--paper)] p-10 lg:grid-cols-[auto_1fr_auto]">
+				<div className="grid grid-cols-1 items-center gap-8 rounded-[22px] border border-[var(--line)] bg-[var(--paper)] p-10 lg:grid-cols-[auto_1fr_auto]">
 					<div className="inline-flex h-24 w-24 items-center justify-center rounded-3xl bg-[var(--brand-50)] text-[var(--brand)]">
 						<ShieldCheck size={44} />
 					</div>

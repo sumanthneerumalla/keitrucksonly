@@ -9,8 +9,12 @@ export function Hero() {
 	return (
 		<section className="relative overflow-hidden pt-8 pb-8 md:pt-12">
 			<div className="container relative z-10 mx-auto px-4">
-				<div className="grid items-center gap-10 lg:grid-cols-[1.05fr_1fr] lg:gap-16">
-					<div className="max-w-[640px]">
+				{/* grid-cols-1 forces a single 1fr column below lg, so the wide
+				 * ProductPreview content (CalendarMock has min-width: 864) can't
+				 * size the implicit grid track to its own max-content and force
+				 * the H1 wider than the viewport. */}
+				<div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-[1.05fr_1fr] lg:gap-16">
+					<div className="min-w-0 max-w-[640px]">
 						<div className="eyebrow">
 							<span className="eyebrow-dot">●</span>
 							&nbsp;&nbsp;FOR PICKLEBALL · TENNIS · PADEL CLUBS
@@ -57,7 +61,13 @@ export function Hero() {
 						</div>
 					</div>
 
-					<div className="w-full">
+					{/* On lg+, let the preview bleed past the container's right edge
+					 * (extends ~10vw beyond its grid column). The section's
+					 * overflow-hidden clips anything that goes past the viewport
+					 * right, giving the same "preview extends off-screen" effect
+					 * tourny.ca uses. Below lg the preview stacks under hero copy,
+					 * so we keep w-full there. */}
+					<div className="w-full min-w-0 lg:w-[calc(100%_+_10vw)]">
 						<ProductPreview />
 					</div>
 				</div>

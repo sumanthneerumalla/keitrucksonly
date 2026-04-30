@@ -30,10 +30,17 @@ const QR_PIXELS = Array.from({ length: 64 }, (_, i) => ({
 
 export function CheckInMock() {
 	return (
-		<div className="p-[22px] text-[var(--ink)]">
+		<div className="@container p-[22px] text-[var(--ink)]">
+			{/*
+			 * Stats and kiosk text scale with the check-in container's actual
+			 * width using container-query units (cqi). At narrow widths
+			 * (1024–1280px viewports where the dashboard sits in a nested
+			 * column), fixed 22px / 28px fonts overflow the panels; clamp()
+			 * keeps content readable and inside the box without clipping.
+			 */}
 			<div className="grid gap-[18px] sm:grid-cols-2">
 				{/* Member kiosk */}
-				<div className="rounded-[14px] border border-[var(--line)] bg-[var(--paper)] p-[18px]">
+				<div className="min-w-0 rounded-[14px] border border-[var(--line)] bg-[var(--paper)] p-[18px]">
 					<div className="flex items-center justify-between">
 						<div className="font-mono text-[12px] text-[var(--ink-3)] uppercase tracking-[0.08em]">
 							Member kiosk
@@ -46,7 +53,7 @@ export function CheckInMock() {
 					<div className="mt-[18px] rounded-[12px] border border-[var(--line)] bg-white p-[18px]">
 						<div className="flex items-center gap-[14px]">
 							<div
-								className="h-[88px] w-[88px] rounded-[12px] bg-[var(--ink)] p-2"
+								className="h-[88px] w-[88px] shrink-0 rounded-[12px] bg-[var(--ink)] p-2"
 								style={{
 									display: "grid",
 									gridTemplate: "repeat(8, 1fr) / repeat(8, 1fr)",
@@ -62,17 +69,17 @@ export function CheckInMock() {
 									/>
 								))}
 							</div>
-							<div>
-								<div className="text-[13px] text-[var(--ink-3)]">
+							<div className="min-w-0">
+								<div className="text-[12px] text-[var(--ink-3)]">
 									Welcome back
 								</div>
-								<div className="mt-0.5 font-semibold text-[22px]">
+								<div className="mt-0.5 truncate font-semibold text-[clamp(16px,3.2cqi,22px)]">
 									Maya Chen
 								</div>
-								<div className="mt-2 text-[13px] text-[var(--ink-2)]">
+								<div className="mt-2 text-[12px] text-[var(--ink-2)]">
 									Booking: Court 1 · 9:00–10:30
 								</div>
-								<div className="mt-1.5 text-[13px]">
+								<div className="mt-1.5 text-[12px]">
 									Credits:{" "}
 									<strong className="text-[var(--brand)]">8 of 12</strong>
 								</div>
@@ -93,20 +100,20 @@ export function CheckInMock() {
 				</div>
 
 				{/* Live attendance feed */}
-				<div className="rounded-[14px] border border-[var(--line)] bg-[var(--paper)] p-[18px]">
-					<div className="flex items-baseline justify-between">
-						<div>
+				<div className="min-w-0 rounded-[14px] border border-[var(--line)] bg-[var(--paper)] p-[18px]">
+					<div className="flex items-baseline justify-between gap-3">
+						<div className="min-w-0">
 							<div className="font-mono text-[12px] text-[var(--ink-3)] uppercase tracking-[0.08em]">
 								Who's on-site
 							</div>
-							<div className="mt-1 font-semibold text-[28px]">
+							<div className="mt-1 font-semibold text-[clamp(20px,3.6cqi,28px)]">
 								27{" "}
-								<span className="font-medium text-[14px] text-[var(--ink-3)]">
+								<span className="font-medium text-[13px] text-[var(--ink-3)]">
 									members on courts
 								</span>
 							</div>
 						</div>
-						<span className="text-[12px] text-[var(--good)]">
+						<span className="shrink-0 text-[12px] text-[var(--good)]">
 							↑ 12% vs. avg
 						</span>
 					</div>

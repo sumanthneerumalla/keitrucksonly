@@ -6,7 +6,7 @@ export function CTASection() {
 	return (
 		<section className="py-20 md:py-[120px]" id="demo">
 			<div className="container mx-auto px-4">
-				<div className="relative grid items-center gap-10 overflow-hidden rounded-[28px] bg-[var(--ink)] px-7 py-12 text-[var(--paper)] md:px-14 md:py-[72px] lg:grid-cols-[1.3fr_1fr] lg:gap-12">
+				<div className="relative grid grid-cols-1 items-center gap-10 overflow-hidden rounded-[28px] bg-[var(--ink)] px-7 py-12 text-[var(--paper)] md:px-14 md:py-[72px] lg:grid-cols-[1.3fr_1fr] lg:gap-12">
 					<div
 						className="pointer-events-none absolute inset-0"
 						style={{

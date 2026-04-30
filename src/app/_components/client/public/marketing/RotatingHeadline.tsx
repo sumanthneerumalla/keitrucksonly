@@ -25,7 +25,17 @@ const FADE_MS = 350;
 
 // Stack all variants in the same CSS grid cell so the container sizes to the
 // longest variant. Avoids layout shift when the active headline changes.
-const STACK_STYLE = { display: "grid" } as const;
+//
+// gridTemplateColumns: "minmax(0, 1fr)" — without this, the grid column
+// auto-sizes to the WIDEST child's intrinsic width, which forces the H1
+// off the right side of the viewport on narrow screens (longest variant
+// is "No more spreadsheets, clipboards & 4 tools."). minmax(0, 1fr) makes
+// the column fill the parent (1fr) with min 0 — and overrides the
+// default min-content sizing of grid items so text wraps normally.
+const STACK_STYLE = {
+	display: "grid",
+	gridTemplateColumns: "minmax(0, 1fr)",
+} as const;
 const STACK_ITEM_STYLE = { gridArea: "1 / 1" } as const;
 
 export function RotatingHeadline() {

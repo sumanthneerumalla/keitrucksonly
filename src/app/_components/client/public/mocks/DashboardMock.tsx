@@ -37,17 +37,30 @@ export function DashboardMock() {
 					<div className="font-mono text-[12px] text-[var(--ink-3)] uppercase tracking-[0.08em]">
 						This week
 					</div>
-					<div className="mt-3 grid grid-cols-3 gap-3">
+					{/*
+					 * Container query on the stats grid so the value font scales
+					 * with the grid's actual width — not the viewport. The
+					 * dashboard sits inside a narrow nested column at 1024–1280px
+					 * viewports, where a fixed 22px font runs longer values like
+					 * "$18,420" past the box edge. clamp(15px, 7cqi, 22px) keeps
+					 * the value readable down to a ~85px stat box without
+					 * clipping, and caps at 22px once there's room.
+					 */}
+					<div className="@container mt-3 grid grid-cols-3 gap-3">
 						{STATS.map(([l, v, d]) => (
 							<div
 								key={l}
-								className="rounded-[12px] border border-[var(--line)] bg-white p-3.5"
+								className="min-w-0 rounded-[12px] border border-[var(--line)] bg-white @[260px]:p-3.5 p-2.5"
 							>
-								<div className="text-[12px] text-[var(--ink-3)]">{l}</div>
-								<div className="mt-1 font-semibold text-[22px] tracking-[-0.02em]">
+								<div className="@[260px]:text-[12px] text-[11px] text-[var(--ink-3)]">
+									{l}
+								</div>
+								<div className="mt-1 truncate font-semibold text-[clamp(15px,7cqi,22px)] tracking-[-0.02em]">
 									{v}
 								</div>
-								<div className="mt-1 text-[12px] text-[var(--good)]">{d}</div>
+								<div className="mt-1 @[260px]:text-[12px] text-[11px] text-[var(--good)]">
+									{d}
+								</div>
 							</div>
 						))}
 					</div>

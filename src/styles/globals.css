@@ -365,20 +365,26 @@ body {
 		display: inline-block;
 	}
 
+	/* Strike-through styling for the rotating-headline phrases.
+	 *
+	 * Earlier iterations used an absolute-positioned ::after pseudo-element
+	 * for a -2° rotated bar, but it breaks on any phrase that wraps to a
+	 * second line: the single rotated rectangle gets stretched diagonally
+	 * across the inter-line gap. `white-space: nowrap` doesn't fully prevent
+	 * the wrap (browsers still break at hyphen-minus, and the inline-block
+	 * itself overflows when the phrase is wider than the parent column).
+	 *
+	 * Switching to native `text-decoration: line-through` makes the strike
+	 * follow text flow correctly on every viewport. Tradeoff: we lose the
+	 * -2° rotation flourish; gain reliability across single-line, multi-line,
+	 * and hyphenated phrases. */
 	.strike-bar {
-		position: relative;
-		display: inline-block;
-	}
-	.strike-bar::after {
-		content: "";
-		position: absolute;
-		left: -3%;
-		right: -3%;
-		top: 56%;
-		height: 4px;
-		background: var(--brand);
-		transform: rotate(-2deg);
-		border-radius: 4px;
+		text-decoration-line: line-through;
+		text-decoration-color: var(--brand);
+		text-decoration-thickness: 0.08em;
+		/* Don't lift the line over descenders — keep it solid through letters
+		 * like "p" in "spreadsheets". */
+		text-decoration-skip-ink: none;
 	}
 
 	.accent {
