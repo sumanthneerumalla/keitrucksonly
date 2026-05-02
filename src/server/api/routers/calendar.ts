@@ -1,6 +1,7 @@
 import {
 	EventType,
 	RegistrationStatus,
+	RegistrationType,
 	RentalBookingStatus,
 	type User,
 	UserType,
@@ -33,6 +34,7 @@ import {
 	checkRecurringEventConflicts,
 	formatRecurringConflictsMessage,
 } from "~/server/utils/resourceConflicts";
+import { buildRuleSetFromEvent } from "~/server/utils/rrule";
 import { formatEventTimeInZone } from "~/server/utils/dateUtils";
 
 // ============================================================
@@ -2292,6 +2294,163 @@ export const calendarRouter = createTRPCRouter({
 
 		return { registrations };
 	}),
+
+	// Admin-facing: return one user's active EventRegistrations, split by
+	// PER_INSTANCE (one occurrence) vs PER_SERIES (whole series). Series rows
+	// include the next upcoming session date computed from the rrule plus any
+	// modified-instance overrides. PER_INSTANCE rows in the past are filtered
+	// out; series with no remaining sessions are filtered out.
+	getEventRegistrationsForUser: facilityProcedure
+		.input(z.object({ userId: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const target = await ctx.db.user.findFirst({
+				where: {
+					userId: input.userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { userId: true },
+			});
+			if (!target) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "User not found in your club.",
+				});
+			}
+
+			const registrations = await ctx.db.eventRegistration.findMany({
+				where: {
+					userId: input.userId,
+					status: RegistrationStatus.REGISTERED,
+				},
+				include: {
+					event: {
+						select: {
+							eventId: true,
+							title: true,
+							start: true,
+							end: true,
+							eventType: true,
+							registrationType: true,
+							rrule: true,
+							exdates: true,
+							resource: { select: { title: true } },
+						},
+					},
+				},
+			});
+
+			const now = new Date();
+
+			const eventSignups = registrations
+				.filter((r) => r.event.registrationType !== RegistrationType.PER_SERIES)
+				.map((r) => ({
+					registrationId: r.registrationId,
+					createdAt: r.createdAt,
+					instanceDate: r.instanceDate,
+					occurrenceDate: r.instanceDate ?? r.event.start,
+					event: {
+						eventId: r.event.eventId,
+						title: r.event.title,
+						start: r.event.start,
+						end: r.event.end,
+						eventType: r.event.eventType,
+						resource: r.event.resource,
+					},
+				}))
+				.filter((s) => s.occurrenceDate.getTime() >= now.getTime())
+				.sort(
+					(a, b) => a.occurrenceDate.getTime() - b.occurrenceDate.getTime(),
+				);
+
+			const seriesRegs = registrations.filter(
+				(r) => r.event.registrationType === RegistrationType.PER_SERIES,
+			);
+
+			// Batch-fetch modified instances for all series base events to avoid N+1.
+			// See rrule.ts: combined exdates = base.exdates ∪ child.recurrenceId.
+			const baseEventIds = seriesRegs.map((r) => r.event.eventId);
+			const children = baseEventIds.length
+				? await ctx.db.calendarEvent.findMany({
+						where: {
+							parentEventId: { in: baseEventIds },
+							isDeleted: false,
+						},
+						select: {
+							parentEventId: true,
+							recurrenceId: true,
+							start: true,
+						},
+					})
+				: [];
+
+			const childrenByParent = new Map<string, typeof children>();
+			for (const child of children) {
+				if (!child.parentEventId) continue;
+				const list = childrenByParent.get(child.parentEventId) ?? [];
+				list.push(child);
+				childrenByParent.set(child.parentEventId, list);
+			}
+
+			const seriesSignups = seriesRegs
+				.map((r) => {
+					const event = r.event;
+					if (!event.rrule) return null;
+
+					const eventChildren = childrenByParent.get(event.eventId) ?? [];
+					const childExdates = eventChildren
+						.map((c) => (c.recurrenceId ? new Date(c.recurrenceId) : null))
+						.filter((d): d is Date => d !== null);
+					const combinedExdates = [...event.exdates, ...childExdates];
+
+					let nextRrule: Date | null = null;
+					try {
+						const ruleset = buildRuleSetFromEvent(
+							event.rrule,
+							combinedExdates,
+							event.start,
+						);
+						nextRrule = ruleset.after(now, true);
+					} catch {
+						nextRrule = null;
+					}
+
+					const futureChildStarts = eventChildren
+						.filter((c) => c.start.getTime() >= now.getTime())
+						.map((c) => c.start);
+					const nextChild =
+						futureChildStarts.length > 0
+							? futureChildStarts.reduce((earliest, d) =>
+									d.getTime() < earliest.getTime() ? d : earliest,
+								)
+							: null;
+
+					const candidates = [nextRrule, nextChild].filter(
+						(d): d is Date => d !== null,
+					);
+					if (candidates.length === 0) return null;
+					const nextSession = candidates.reduce((earliest, d) =>
+						d.getTime() < earliest.getTime() ? d : earliest,
+					);
+
+					return {
+						registrationId: r.registrationId,
+						createdAt: r.createdAt,
+						nextSession,
+						event: {
+							eventId: event.eventId,
+							title: event.title,
+							start: event.start,
+							end: event.end,
+							eventType: event.eventType,
+							resource: event.resource,
+						},
+					};
+				})
+				.filter((s): s is NonNullable<typeof s> => s !== null)
+				.sort((a, b) => a.nextSession.getTime() - b.nextSession.getTime());
+
+			return { eventSignups, seriesSignups };
+		}),
 
 	// Admin-managed status transitions: CANCEL, NO_SHOW, RESCHEDULE
 	// Students use cancelRegistration; staff use this for all status changes

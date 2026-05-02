@@ -10,6 +10,7 @@ import AttendanceHistoryCard from "./AttendanceHistoryCard";
 import FamilyCard from "./FamilyCard";
 import PaymentHistoryPlaceholder from "./PaymentHistoryPlaceholder";
 import ProfileFieldsCard from "./ProfileFieldsCard";
+import StudentSignupsCard from "./StudentSignupsCard";
 
 interface StudentDetailClientProps {
 	userId: string;
@@ -133,6 +134,9 @@ export default function StudentDetailClient({
 
 			{/* Packages (reuses MemberPackagesCard — handles its own sell modal) */}
 			<MemberPackagesCard userId={user.userId} memberName={fullName} />
+
+			{/* Active event sign-ups (event-level + series-level) */}
+			<StudentSignupsCard userId={user.userId} />
 
 			{/* Attendance history */}
 			<AttendanceHistoryCard userId={user.userId} />
