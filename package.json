@@ -44,7 +44,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@clerk/nextjs": "^6.35.6",
+		"@clerk/nextjs": "^6.39.3",
 		"@emotion/is-prop-valid": "^1.4.0",
 		"@ilamy/calendar": "^1.4.0",
 		"@prisma/client": "6.19.0",
