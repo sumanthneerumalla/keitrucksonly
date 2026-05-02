@@ -1,6 +1,7 @@
 "use client";
 
 import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
+import { Suspense } from "react";
 import { CoachesListing } from "~/app/_components/coaches/CoachesListing";
 
 export default function CoachesPage() {
@@ -24,7 +25,9 @@ export default function CoachesPage() {
 								</div>
 							</div>
 							<div className="lg:col-span-3">
-								<CoachesListing />
+								<Suspense fallback={null}>
+									<CoachesListing />
+								</Suspense>
 							</div>
 						</div>
 					</div>
