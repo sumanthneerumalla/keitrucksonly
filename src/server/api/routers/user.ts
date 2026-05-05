@@ -297,6 +297,7 @@ export const userRouter = createTRPCRouter({
 					create: {
 						clerkUserId: ctx.auth.userId,
 						userType: UserType.STUDENT, // Default to student
+						clubShortName: "cba",
 					},
 					include: {
 						studentProfile: true,
