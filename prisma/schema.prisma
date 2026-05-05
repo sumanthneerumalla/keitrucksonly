@@ -19,17 +19,20 @@ datasource db {
 
 // Club model - stores club information
 model Club {
-  clubShortName String   @id
-  clubName      String   @unique
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  clubShortName     String   @id
+  clubName          String   @unique
+  // Phase 9-EOD (2026-05-02): per-club sequential invoice number counter.
+  // Atomically incremented inside the same $transaction as the invoice insert.
+  nextInvoiceNumber Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  users          User[]
-  memberships    UserClub[]
-  facilities     ClubFacility[]
-  resourceTypes  ClubResourceType[]
-  resources      ClubResource[]
-  calendarEvents CalendarEvent[]
+  users             User[]
+  memberships       UserClub[]
+  facilities        ClubFacility[]
+  resourceTypes     ClubResourceType[]
+  resources         ClubResource[]
+  calendarEvents    CalendarEvent[]
   products          Product[]
   productCategories ProductCategory[]
   revenueCategories RevenueCategory[]
@@ -41,21 +44,22 @@ model Club {
   tags              Tag[]
   rentalBookings    RentalBooking[]
   familyGroups      FamilyGroup[]
+  invoices          Invoice[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
 model User {
-  userId        String   @id @default(cuid())
-  clerkUserId   String   @unique // Links to Clerk's user ID
-  email         String?
-  firstName     String?
-  lastName      String?
-  profileImage  String?
-  userType      UserType @default(STUDENT)
-  timeZone      String   @default("America/New_York")
+  userId           String        @id @default(cuid())
+  clerkUserId      String        @unique // Links to Clerk's user ID
+  email            String?
+  firstName        String?
+  lastName         String?
+  profileImage     String?
+  userType         UserType      @default(STUDENT)
+  timeZone         String        @default("America/New_York")
   clubShortName    String        @default("shuttlementor")
   club             Club          @relation(fields: [clubShortName], references: [clubShortName])
-  activeFacilityId String?       // Currently active facility — determines calendar view
+  activeFacilityId String? // Currently active facility — determines calendar view
   activeFacility   ClubFacility? @relation(fields: [activeFacilityId], references: [facilityId])
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
@@ -70,14 +74,20 @@ model User {
 
   // Calendaring relations
   createdCalendarEvents CalendarEvent[]
-  createdProducts       Product[]            @relation("CreatedProducts")
-  eventRegistrations    EventRegistration[]  @relation("EventRegistrations")
-  attendances           Attendance[]         @relation("MemberAttendances")
-  performedCheckins     Attendance[]         @relation("CheckedInByUser")
+  createdProducts       Product[]               @relation("CreatedProducts")
+  eventRegistrations    EventRegistration[]     @relation("EventRegistrations")
+  attendances           Attendance[]            @relation("MemberAttendances")
+  performedCheckins     Attendance[]            @relation("CheckedInByUser")
   statusLogsAffected    RegistrationStatusLog[] @relation("StatusLogUser")
   statusLogsPerformed   RegistrationStatusLog[] @relation("StatusLogChangedBy")
-  memberPackages        MemberPackage[]      @relation("MemberPackageOwner")
-  soldPackages          MemberPackage[]      @relation("MemberPackageSeller")
+  memberPackages        MemberPackage[]         @relation("MemberPackageOwner")
+  soldPackages          MemberPackage[]         @relation("MemberPackageSeller")
+
+  // Phase 9-EOD invoicing relations
+  invoices         Invoice[]        @relation("InvoiceMember")
+  createdInvoices  Invoice[]        @relation("InvoiceCreatedBy")
+  receivedPayments InvoicePayment[] @relation("PaymentReceivedBy")
+  issuedRefunds    InvoiceRefund[]  @relation("RefundIssuedBy")
 
   // Multi-club membership registry
   clubMemberships UserClub[]
@@ -85,7 +95,7 @@ model User {
   // User tags
   userTags UserTag[]
 
-  rentalBookings    RentalBooking[]
+  rentalBookings RentalBooking[]
 
   // Family group — opt-in grouping for shared package consumption (public-shop.md FAM phase).
   // Two users with the same non-null familyGroupId share package credits via consumeCredit widening.
@@ -106,7 +116,7 @@ model FamilyGroup {
   familyGroupId String   @id @default(cuid())
   clubShortName String
   club          Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  name          String?  // editable; auto-defaults to "{lastName} family" from first member
+  name          String? // editable; auto-defaults to "{lastName} family" from first member
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -127,12 +137,12 @@ enum UserType {
 // User.clubShortName + User.userType + User.activeFacilityId remain the live active fields
 // used by all auth logic. Switching facilities updates those fields from the matching UserClub row.
 model UserClub {
-  id            String       @id @default(cuid())
+  id            String   @id @default(cuid())
   userId        String
   clubShortName String
-  facilityId    String       // The facility this membership grants access to
-  role          UserType     // Role at this specific facility (e.g., STUDENT at one, FACILITY at another)
-  joinedAt      DateTime     @default(now())
+  facilityId    String // The facility this membership grants access to
+  role          UserType // Role at this specific facility (e.g., STUDENT at one, FACILITY at another)
+  joinedAt      DateTime @default(now())
 
   user     User         @relation(fields: [userId], references: [userId], onDelete: Cascade)
   club     Club         @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
@@ -203,20 +213,20 @@ enum MediaCoachNoteType {
 
 // VideoCollection model - represents a collection of gameplay videos
 model VideoCollection {
-  collectionId    String    @id @default(cuid())
-  userId          String // Links to the user that owns this collection
-  user            User      @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  collectionId     String    @id @default(cuid())
+  userId           String // Links to the user that owns this collection
+  user             User      @relation(fields: [userId], references: [userId], onDelete: Cascade)
   uploadedByUserId String?
   uploadedByUser   User?     @relation("UploadedBy", fields: [uploadedByUserId], references: [userId], onDelete: SetNull)
-  title           String
-  description     String?   @db.Text
-  mediaType       MediaType // Either URL_VIDEO or FILE_VIDEO
-  assignedCoachId String? // Optional coach assignment
-  assignedCoach   User?     @relation("AssignedCoach", fields: [assignedCoachId], references: [userId], onDelete: SetNull)
-  isDeleted       Boolean   @default(false) // Soft deletion flag
-  deletedAt       DateTime? // When the item was soft-deleted
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  title            String
+  description      String?   @db.Text
+  mediaType        MediaType // Either URL_VIDEO or FILE_VIDEO
+  assignedCoachId  String? // Optional coach assignment
+  assignedCoach    User?     @relation("AssignedCoach", fields: [assignedCoachId], references: [userId], onDelete: SetNull)
+  isDeleted        Boolean   @default(false) // Soft deletion flag
+  deletedAt        DateTime? // When the item was soft-deleted
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   // Relations
   media Media[]
@@ -256,16 +266,16 @@ model Media {
 
 // MediaCoachNote model - links Media items with Coach feedback and timestamps
 model MediaCoachNote {
-  noteId      String   @id @default(cuid())
+  noteId      String             @id @default(cuid())
   mediaId     String
-  media       Media    @relation(fields: [mediaId], references: [mediaId], onDelete: Cascade)
+  media       Media              @relation(fields: [mediaId], references: [mediaId], onDelete: Cascade)
   coachId     String // References User.userId where userType is COACH or ADMIN
-  coach       User     @relation(fields: [coachId], references: [userId], onDelete: Cascade)
+  coach       User               @relation(fields: [coachId], references: [userId], onDelete: Cascade)
   noteType    MediaCoachNoteType @default(TEXT)
-  noteContent String?  @db.VarChar(2000) // Maximum 2000 characters for coaching note content
-  videoUrl    String?  @db.Text
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  noteContent String?            @db.VarChar(2000) // Maximum 2000 characters for coaching note content
+  videoUrl    String?            @db.Text
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
 
   @@index([mediaId])
   @@index([coachId])
@@ -278,41 +288,41 @@ model MediaCoachNote {
 // Enums for calendaring feature
 
 enum EventType {
-  BLOCK          // Internal scheduling (maintenance, reserved, staff-only)
-  BOOKABLE       // Facility-created bookable event (drop-in, league, open gym)
-  COACHING_SLOT  // Coach-created training slot
-  RENTAL_WINDOW  // Facility-defined rentable time window
+  BLOCK // Internal scheduling (maintenance, reserved, staff-only)
+  BOOKABLE // Facility-created bookable event (drop-in, league, open gym)
+  COACHING_SLOT // Coach-created training slot
+  RENTAL_WINDOW // Facility-defined rentable time window
   RENTAL_BOOKING // Member booking within a rental window
 }
 
 enum RegistrationType {
   PER_INSTANCE // Sign up for individual occurrences (drop-in)
-  PER_SERIES   // Sign up for the whole series (league)
+  PER_SERIES // Sign up for the whole series (league)
 }
 
 enum RegistrationStatus {
-  REGISTERED   // Active registration, credit consumed at registration time
-  CHECKED_IN   // Member attended — no credit change (credit already consumed at REGISTERED).
-               // Walk-in check-in (was never REGISTERED) deducts credit at check-in time (Phase 8a, checkin.ts:631-642).
+  REGISTERED // Active registration, credit consumed at registration time
+  CHECKED_IN // Member attended — no credit change (credit already consumed at REGISTERED).
+  // Walk-in check-in (was never REGISTERED) deducts credit at check-in time (Phase 8a, checkin.ts:631-642).
   EARLY_CANCEL // Cancelled before earlyCancelCutoffHours — credit returned (deferred from MVP, see decision #26)
-  LATE_CANCEL  // Cancelled after cutoff — credit forfeited
-  RESCHEDULED  // Admin rescheduled — credit transfers to new registration (no new deduction, decision #25/#53)
-  NO_SHOW      // Did not attend — credit forfeited
+  LATE_CANCEL // Cancelled after cutoff — credit forfeited
+  RESCHEDULED // Admin rescheduled — credit transfers to new registration (no new deduction, decision #25/#53)
+  NO_SHOW // Did not attend — credit forfeited
 }
 
 // ProductCategory — hierarchical, club-scoped product categories (replaces the old ProductCategory enum)
 model ProductCategory {
-  categoryId        String    @id @default(cuid())
-  clubShortName     String
-  club              Club      @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  name              String    @db.VarChar(200)
-  parentCategoryId  String?
-  parent            ProductCategory?   @relation("CategoryTree", fields: [parentCategoryId], references: [categoryId])
-  children          ProductCategory[]  @relation("CategoryTree")
-  sortOrder         Int       @default(0)
-  isActive          Boolean   @default(true)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  categoryId       String            @id @default(cuid())
+  clubShortName    String
+  club             Club              @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  name             String            @db.VarChar(200)
+  parentCategoryId String?
+  parent           ProductCategory?  @relation("CategoryTree", fields: [parentCategoryId], references: [categoryId])
+  children         ProductCategory[] @relation("CategoryTree")
+  sortOrder        Int               @default(0)
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   revenueCategoryId String?
   revenueCategory   RevenueCategory? @relation(fields: [revenueCategoryId], references: [revenueCategoryId])
@@ -327,17 +337,17 @@ model ProductCategory {
 
 // RevenueCategory — hierarchical revenue classification for reporting (Phase 5c — stub only in 5a)
 model RevenueCategory {
-  revenueCategoryId String    @id @default(cuid())
+  revenueCategoryId String            @id @default(cuid())
   clubShortName     String
-  club              Club      @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  code              String    @db.VarChar(50)
-  label             String    @db.VarChar(200)
+  club              Club              @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  code              String            @db.VarChar(50)
+  label             String            @db.VarChar(200)
   parentId          String?
-  parent            RevenueCategory?   @relation("RevCatTree", fields: [parentId], references: [revenueCategoryId])
-  children          RevenueCategory[]  @relation("RevCatTree")
-  remarks           String?   @db.Text
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  parent            RevenueCategory?  @relation("RevCatTree", fields: [parentId], references: [revenueCategoryId])
+  children          RevenueCategory[] @relation("RevCatTree")
+  remarks           String?           @db.Text
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   productCategories ProductCategory[]
   products          Product[]
@@ -349,16 +359,16 @@ model RevenueCategory {
 
 // TaxRate — tax rate configuration (Phase 5b — stub only in 5a)
 model TaxRate {
-  taxRateId     String    @id @default(cuid())
+  taxRateId     String   @id @default(cuid())
   clubShortName String
-  club          Club      @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  code          String    @db.VarChar(50)
-  label         String    @db.VarChar(200)
-  rate          Decimal   @db.Decimal(5, 2) // Percentage, e.g. 8.25
+  club          Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  code          String   @db.VarChar(50)
+  label         String   @db.VarChar(200)
+  rate          Decimal  @db.Decimal(5, 2) // Percentage, e.g. 8.25
   effectiveDate DateTime
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   productCategories ProductCategory[]
   products          Product[]
@@ -373,8 +383,8 @@ model ClubResourceType {
   clubShortName   String
   club            Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   name            String   @db.VarChar(100) // e.g., "Court", "Swim Lane", "Field"
-  color           String?  @db.VarChar(20)  // Default hex color for resources of this type
-  backgroundColor String?  @db.VarChar(20)  // Default background hex color
+  color           String?  @db.VarChar(20) // Default hex color for resources of this type
+  backgroundColor String?  @db.VarChar(20) // Default background hex color
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -405,12 +415,13 @@ model ClubFacility {
   updatedAt     DateTime @updatedAt
 
   // Relations
-  activeUsers    User[]           // Users currently viewing this facility
-  memberships    UserClub[]       // Per-facility membership rows
+  activeUsers    User[] // Users currently viewing this facility
+  memberships    UserClub[] // Per-facility membership rows
   resources      ClubResource[]
   calendarEvents CalendarEvent[]
   attendances    Attendance[]
   rentalBookings RentalBooking[]
+  invoices       Invoice[]
 
   @@unique([clubShortName, name])
   @@index([clubShortName])
@@ -423,20 +434,20 @@ model ClubResource {
   club            Club             @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   resourceTypeId  String
   resourceType    ClubResourceType @relation(fields: [resourceTypeId], references: [resourceTypeId], onDelete: Restrict)
-  facilityId      String?          // null = unassigned (visible in "All Facilities" only)
+  facilityId      String? // null = unassigned (visible in "All Facilities" only)
   facility        ClubFacility?    @relation(fields: [facilityId], references: [facilityId], onDelete: Restrict)
   title           String           @db.VarChar(200) // Display name, e.g., "Court 1"
   description     String?          @db.Text
-  color           String?          @db.VarChar(20)  // Override color (hex), falls back to type color
-  backgroundColor String?          @db.VarChar(20)  // Override background color (hex)
-  position        Int              @default(0)      // Display order in calendar
-  isActive        Boolean          @default(true)   // Soft disable (inactive resources hidden from calendar)
+  color           String?          @db.VarChar(20) // Override color (hex), falls back to type color
+  backgroundColor String?          @db.VarChar(20) // Override background color (hex)
+  position        Int              @default(0) // Display order in calendar
+  isActive        Boolean          @default(true) // Soft disable (inactive resources hidden from calendar)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
   // Relations
-  businessHours ResourceBusinessHours[]
-  events        CalendarEvent[]
+  businessHours  ResourceBusinessHours[]
+  events         CalendarEvent[]
   rentalBookings RentalBooking[]
 
   @@index([clubShortName])
@@ -449,9 +460,9 @@ model ResourceBusinessHours {
   businessHoursId String       @id @default(cuid())
   resourceId      String
   resource        ClubResource @relation(fields: [resourceId], references: [resourceId], onDelete: Cascade)
-  daysOfWeek      String[]     // e.g., ["monday", "tuesday", "wednesday", "thursday", "friday"]
-  startTime       Int          // Hour 0-23 (inclusive), e.g., 6 for 6:00 AM
-  endTime         Int          // Hour 0-23 (exclusive), e.g., 22 for 10:00 PM
+  daysOfWeek      String[] // e.g., ["monday", "tuesday", "wednesday", "thursday", "friday"]
+  startTime       Int // Hour 0-23 (inclusive), e.g., 6 for 6:00 AM
+  endTime         Int // Hour 0-23 (exclusive), e.g., 22 for 10:00 PM
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
@@ -460,43 +471,43 @@ model ResourceBusinessHours {
 
 // CalendarEvent — a calendar event, optionally recurring, scoped to a club
 model CalendarEvent {
-  eventId        String        @id @default(cuid())
-  clubShortName  String
-  club           Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  resourceId     String?
-  resource       ClubResource? @relation(fields: [resourceId], references: [resourceId], onDelete: SetNull)
-  facilityId     String
-  facility       ClubFacility  @relation(fields: [facilityId], references: [facilityId], onDelete: Restrict)
-  title          String        @db.VarChar(500)
-  description    String?       @db.Text
-  start          DateTime
-  end            DateTime
-  allDay         Boolean       @default(false)
-  color          String?       @db.VarChar(20)  // Event text color (hex)
-  backgroundColor String?      @db.VarChar(20)  // Event background color (hex)
+  eventId         String        @id @default(cuid())
+  clubShortName   String
+  club            Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  resourceId      String?
+  resource        ClubResource? @relation(fields: [resourceId], references: [resourceId], onDelete: SetNull)
+  facilityId      String
+  facility        ClubFacility  @relation(fields: [facilityId], references: [facilityId], onDelete: Restrict)
+  title           String        @db.VarChar(500)
+  description     String?       @db.Text
+  start           DateTime
+  end             DateTime
+  allDay          Boolean       @default(false)
+  color           String?       @db.VarChar(20) // Event text color (hex)
+  backgroundColor String?       @db.VarChar(20) // Event background color (hex)
 
   // iCal / Recurrence fields
-  uid           String    // Unique iCal UID — same across base event and all its modified instances
-  rrule         String?   @db.Text // RFC 5545 RRULE string, e.g., "RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20251231T235959Z"
-  exdates       DateTime[] // Exception dates — occurrences to skip (for recurring events)
-  recurrenceId  String?   // ISO timestamp of the original occurrence this instance overrides (for modified instances)
-  parentEventId String?   // FK to the base CalendarEvent (for modified instances)
-  parentEvent   CalendarEvent?  @relation("EventInstances", fields: [parentEventId], references: [eventId], onDelete: Cascade)
+  uid               String // Unique iCal UID — same across base event and all its modified instances
+  rrule             String?         @db.Text // RFC 5545 RRULE string, e.g., "RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20251231T235959Z"
+  exdates           DateTime[] // Exception dates — occurrences to skip (for recurring events)
+  recurrenceId      String? // ISO timestamp of the original occurrence this instance overrides (for modified instances)
+  parentEventId     String? // FK to the base CalendarEvent (for modified instances)
+  parentEvent       CalendarEvent?  @relation("EventInstances", fields: [parentEventId], references: [eventId], onDelete: Cascade)
   modifiedInstances CalendarEvent[] @relation("EventInstances")
 
   // Bookable event fields (defaults allow V1 code to ignore them)
-  eventType        EventType         @default(BLOCK)
-  isBlocking       Boolean           @default(true)  // Whether this event blocks the resource for conflict detection
-  isPublic         Boolean           @default(false) // Whether this event is visible on the public calendar
-  showRegistrantNames Boolean          @default(false) // Whether confirmed registrant names are shown on the public event page
-  maxParticipants  Int?                               // Capacity cap (null = unlimited)
-  registrationType RegistrationType?                  // PER_INSTANCE (drop-in) or PER_SERIES (league)
-  creditCost       Int?                               // Credits required to check in (Phase 5, null = not credit-based)
-  earlyCancelCutoffHours Int?                         // Hours before event start for early-cancel credit refund (null = use club default)
-  maxBookingHours  Int?              @default(2)      // Max hours per rental booking session (for RENTAL_WINDOW events)
-  productId        String?                            // FK to Product (null for BLOCK events)
-  product          Product?          @relation(fields: [productId], references: [productId], onDelete: SetNull)
-  resourceIds      String[]                           // Additional resource IDs for cross-resource events
+  eventType              EventType         @default(BLOCK)
+  isBlocking             Boolean           @default(true) // Whether this event blocks the resource for conflict detection
+  isPublic               Boolean           @default(false) // Whether this event is visible on the public calendar
+  showRegistrantNames    Boolean           @default(false) // Whether confirmed registrant names are shown on the public event page
+  maxParticipants        Int? // Capacity cap (null = unlimited)
+  registrationType       RegistrationType? // PER_INSTANCE (drop-in) or PER_SERIES (league)
+  creditCost             Int? // Credits required to check in (Phase 5, null = not credit-based)
+  earlyCancelCutoffHours Int? // Hours before event start for early-cancel credit refund (null = use club default)
+  maxBookingHours        Int?              @default(2) // Max hours per rental booking session (for RENTAL_WINDOW events)
+  productId              String? // FK to Product (null for BLOCK events)
+  product                Product?          @relation(fields: [productId], references: [productId], onDelete: SetNull)
+  resourceIds            String[] // Additional resource IDs for cross-resource events
 
   // Metadata
   createdByUserId String
@@ -507,11 +518,11 @@ model CalendarEvent {
   updatedAt       DateTime  @updatedAt
 
   // Relations
-  registrations EventRegistration[]
-  attendances   Attendance[]
-  creditUsages  PackageCreditUsage[]
-  rentalWindowBookings  RentalBooking[] @relation("RentalWindow")
-  bookingBlockEvent     RentalBooking?  @relation("BookingBlock")
+  registrations        EventRegistration[]
+  attendances          Attendance[]
+  creditUsages         PackageCreditUsage[]
+  rentalWindowBookings RentalBooking[]      @relation("RentalWindow")
+  bookingBlockEvent    RentalBooking?       @relation("BookingBlock")
 
   @@index([clubShortName])
   @@index([resourceId])
@@ -527,40 +538,41 @@ model CalendarEvent {
 
 // Product — a generic purchasable product
 model Product {
-  productId       String          @id @default(cuid())
-  clubShortName   String
-  club            Club            @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  categoryId      String
-  category        ProductCategory @relation(fields: [categoryId], references: [categoryId])
-  name            String          @db.VarChar(200)
-  description     String?         @db.Text
-  sku             String?         @db.VarChar(100)
-  priceInCents    Int             // Price in cents (0 for free events)
-  currency        String          @default("usd") @db.VarChar(3)
-  stripeProductId   String?         @unique
+  productId         String           @id @default(cuid())
+  clubShortName     String
+  club              Club             @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  categoryId        String
+  category          ProductCategory  @relation(fields: [categoryId], references: [categoryId])
+  name              String           @db.VarChar(200)
+  description       String?          @db.Text
+  sku               String?          @db.VarChar(100)
+  priceInCents      Int // Price in cents (0 for free events)
+  currency          String           @default("usd") @db.VarChar(3)
+  stripeProductId   String?          @unique
   stripePriceId     String?
   revenueCategoryId String?
   revenueCategory   RevenueCategory? @relation(fields: [revenueCategoryId], references: [revenueCategoryId])
   taxRateId         String?
   taxRate           TaxRate?         @relation(fields: [taxRateId], references: [taxRateId])
-  isActive          Boolean         @default(true)
+  isActive          Boolean          @default(true)
   // Public shop fields (public-shop.md decisions #2 + #5).
   // isPubliclyListed: opt-in to appear on /club/[shortname]/shop. Save-handler guard (I3):
   // setting isActive=false auto-flips isPubliclyListed=false.
-  isPubliclyListed  Boolean         @default(false)
-  publicDescription String?         @db.Text
+  isPubliclyListed  Boolean          @default(false)
+  publicDescription String?          @db.Text
   publicImageData   Bytes?
   publicImageType   String?
   createdByUserId   String
-  createdByUser     User            @relation("CreatedProducts", fields: [createdByUserId], references: [userId])
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdByUser     User             @relation("CreatedProducts", fields: [createdByUserId], references: [userId])
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   // Relations
-  calendarEvents CalendarEvent[]
-  registrations  EventRegistration[]
-  packagePlans   PackagePlan[]
-  rentalBookings RentalBooking[]
+  calendarEvents   CalendarEvent[]
+  registrations    EventRegistration[]
+  packagePlans     PackagePlan[]
+  rentalBookings   RentalBooking[]
+  invoiceLineItems InvoiceLineItem[]
 
   @@index([clubShortName])
   @@index([categoryId])
@@ -578,27 +590,27 @@ enum RentalBookingStatus {
 }
 
 model RentalBooking {
-  bookingId           String        @id @default(cuid())
+  bookingId           String              @id @default(cuid())
   clubShortName       String
-  club                Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  club                Club                @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   facilityId          String
-  facility            ClubFacility  @relation(fields: [facilityId], references: [facilityId])
+  facility            ClubFacility        @relation(fields: [facilityId], references: [facilityId])
   rentalWindowEventId String
-  rentalWindowEvent   CalendarEvent @relation("RentalWindow", fields: [rentalWindowEventId], references: [eventId])
+  rentalWindowEvent   CalendarEvent       @relation("RentalWindow", fields: [rentalWindowEventId], references: [eventId])
   userId              String
-  user                User          @relation(fields: [userId], references: [userId])
+  user                User                @relation(fields: [userId], references: [userId])
   resourceId          String
-  resource            ClubResource  @relation(fields: [resourceId], references: [resourceId])
+  resource            ClubResource        @relation(fields: [resourceId], references: [resourceId])
   startTime           DateTime
   endTime             DateTime
-  blockingEventId     String?       @unique  // @unique required for 1:1 relation (decision #69)
-  blockingEvent       CalendarEvent? @relation("BookingBlock", fields: [blockingEventId], references: [eventId])
+  blockingEventId     String?             @unique // @unique required for 1:1 relation (decision #69)
+  blockingEvent       CalendarEvent?      @relation("BookingBlock", fields: [blockingEventId], references: [eventId])
   productId           String?
-  product             Product?      @relation(fields: [productId], references: [productId])
+  product             Product?            @relation(fields: [productId], references: [productId])
   status              RentalBookingStatus @default(CONFIRMED)
   notes               String?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   @@index([clubShortName])
   @@index([rentalWindowEventId])
@@ -619,17 +631,17 @@ model EventRegistration {
   product                 Product?           @relation(fields: [productId], references: [productId])
   userId                  String
   user                    User               @relation("EventRegistrations", fields: [userId], references: [userId])
-  instanceDate            DateTime?          // For PER_INSTANCE (drop-in): the specific occurrence date
-  stripeCheckoutSessionId String?            // Stripe Checkout session ID for traceability
-  stripePaymentIntentId   String?            // Stripe PaymentIntent ID for traceability
+  instanceDate            DateTime? // For PER_INSTANCE (drop-in): the specific occurrence date
+  stripeCheckoutSessionId String? // Stripe Checkout session ID for traceability
+  stripePaymentIntentId   String? // Stripe PaymentIntent ID for traceability
   status                  RegistrationStatus @default(REGISTERED)
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt
 
   // Relations
-  attendances             Attendance[]
-  statusLogs              RegistrationStatusLog[]
-  creditUsages            PackageCreditUsage[]
+  attendances  Attendance[]
+  statusLogs   RegistrationStatusLog[]
+  creditUsages PackageCreditUsage[]
 
   @@index([eventId])
   @@index([productId])
@@ -645,26 +657,26 @@ model EventRegistration {
 // Attendance — lightweight check-in log. Does NOT replace EventRegistration.
 // EventRegistration = billing state machine. Attendance = operational log of arrivals.
 model Attendance {
-  attendanceId   String           @id @default(cuid())
-  clubShortName  String
-  club           Club             @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  facilityId     String
-  facility       ClubFacility     @relation(fields: [facilityId], references: [facilityId])
-  userId         String           // the member who arrived
-  user           User             @relation("MemberAttendances", fields: [userId], references: [userId])
-  eventId        String?          // null = general facility check-in (open court play)
-  event          CalendarEvent?   @relation(fields: [eventId], references: [eventId])
-  registrationId String?          // links to EventRegistration when checking into a registered event
-  registration   EventRegistration? @relation(fields: [registrationId], references: [registrationId])
-  checkedInBy    String           // staff userId who performed check-in, or member's own userId for self-check-in
-  checkedInByUser User            @relation("CheckedInByUser", fields: [checkedInBy], references: [userId])
-  checkedInAt    DateTime         @default(now())
-  source         String           // "staff" | "self" | "scan"
-  notes          String?          @db.Text
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  attendanceId    String             @id @default(cuid())
+  clubShortName   String
+  club            Club               @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  facilityId      String
+  facility        ClubFacility       @relation(fields: [facilityId], references: [facilityId])
+  userId          String // the member who arrived
+  user            User               @relation("MemberAttendances", fields: [userId], references: [userId])
+  eventId         String? // null = general facility check-in (open court play)
+  event           CalendarEvent?     @relation(fields: [eventId], references: [eventId])
+  registrationId  String? // links to EventRegistration when checking into a registered event
+  registration    EventRegistration? @relation(fields: [registrationId], references: [registrationId])
+  checkedInBy     String // staff userId who performed check-in, or member's own userId for self-check-in
+  checkedInByUser User               @relation("CheckedInByUser", fields: [checkedInBy], references: [userId])
+  checkedInAt     DateTime           @default(now())
+  source          String // "staff" | "self" | "scan"
+  notes           String?            @db.Text
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
-  creditUsages   PackageCreditUsage[]
+  creditUsages PackageCreditUsage[]
 
   @@index([clubShortName])
   @@index([facilityId])
@@ -680,13 +692,13 @@ model RegistrationStatusLog {
   club            Club                @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   registrationId  String
   registration    EventRegistration   @relation(fields: [registrationId], references: [registrationId])
-  userId          String              // the member affected
+  userId          String // the member affected
   user            User                @relation("StatusLogUser", fields: [userId], references: [userId])
-  changedByUserId String              // staff or system who made the change
+  changedByUserId String // staff or system who made the change
   changedByUser   User                @relation("StatusLogChangedBy", fields: [changedByUserId], references: [userId])
   oldStatus       RegistrationStatus? // null for initial creation
   newStatus       RegistrationStatus
-  source          String?             // "admin_dashboard" | "self_service" | "system"
+  source          String? // "admin_dashboard" | "self_service" | "system"
   reason          String?             @db.Text
   metadata        Json?
   createdAt       DateTime            @default(now())
@@ -705,36 +717,37 @@ model RegistrationStatusLog {
 // PackagePlan — a template for a bundle of credits/sessions that can be sold to members.
 // Exactly one of productId or isGeneralDropIn=true must be set (enforced in business logic).
 model PackagePlan {
-  packagePlanId   String    @id @default(cuid())
-  clubShortName   String
-  club            Club      @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  productId       String?   // null when isGeneralDropIn = true
-  product         Product?  @relation(fields: [productId], references: [productId])
-  isGeneralDropIn Boolean   @default(false) // if true: deduct at any facility check-in (open court play)
-  name            String    @db.VarChar(200)
-  description     String?   @db.Text
-  sessionCount    Int?      // null = unlimited (deferred to 8b)
-  priceInCents    Int       // Stripe-native: amount in smallest currency unit
-  durationValue   Int?      // e.g., 1, 3, 6, 12 (null = no expiry)
-  durationUnit    String?   @db.VarChar(20) // "days" | "weeks" | "months" | "years" (null = no expiry)
-  autoRenew       Boolean   @default(false) // deferred to 8c
-  isActive        Boolean   @default(true)
+  packagePlanId     String   @id @default(cuid())
+  clubShortName     String
+  club              Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  productId         String? // null when isGeneralDropIn = true
+  product           Product? @relation(fields: [productId], references: [productId])
+  isGeneralDropIn   Boolean  @default(false) // if true: deduct at any facility check-in (open court play)
+  name              String   @db.VarChar(200)
+  description       String?  @db.Text
+  sessionCount      Int? // null = unlimited (deferred to 8b)
+  priceInCents      Int // Stripe-native: amount in smallest currency unit
+  durationValue     Int? // e.g., 1, 3, 6, 12 (null = no expiry)
+  durationUnit      String?  @db.VarChar(20) // "days" | "weeks" | "months" | "years" (null = no expiry)
+  autoRenew         Boolean  @default(false) // deferred to 8c
+  isActive          Boolean  @default(true)
   // Public shop fields (public-shop.md decisions #2 + #5 + #17).
   // PackagePlans are first-class Stripe SKUs (decision #17) — distinct from product.stripePriceId.
   // Save-handler guard (I3): isActive=false auto-flips isPubliclyListed=false.
-  isPubliclyListed  Boolean @default(false)
-  publicDescription String? @db.Text
+  isPubliclyListed  Boolean  @default(false)
+  publicDescription String?  @db.Text
   publicImageData   Bytes?
   publicImageType   String?
   // Phase 12: add @unique here in the same migration that introduces ProcessedStripeEvent.
   // Held off in v1 to keep the migration prompt-free; nothing populates these fields until Phase C.
   stripeProductId   String?
   stripePriceId     String?
-  sortOrder       Int       @default(0)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  memberPackages  MemberPackage[]
+  memberPackages   MemberPackage[]
+  invoiceLineItems InvoiceLineItem[]
 
   @@index([clubShortName])
   @@index([productId])
@@ -743,48 +756,51 @@ model PackagePlan {
 
 // MemberPackage — an instance of a PackagePlan sold to a specific member.
 model MemberPackage {
-  memberPackageId String    @id @default(cuid())
+  memberPackageId String      @id @default(cuid())
   clubShortName   String
-  club            Club      @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  club            Club        @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   userId          String
-  user            User      @relation("MemberPackageOwner", fields: [userId], references: [userId])
+  user            User        @relation("MemberPackageOwner", fields: [userId], references: [userId])
   packagePlanId   String
   packagePlan     PackagePlan @relation(fields: [packagePlanId], references: [packagePlanId])
   startDate       DateTime
   endDate         DateTime? // calculated at sale time using facility timezone; null = no expiry
-  creditsTotal    Int?      // null = unlimited (deferred to 8b)
-  creditsUsed     Int       @default(0)
-  status          String    @db.VarChar(20) // "active" | "depleted" | "expired" (cancelled deferred)
-  soldBy          String    // staff userId who sold it
-  soldByUser      User      @relation("MemberPackageSeller", fields: [soldBy], references: [userId])
-  soldAt          DateTime  @default(now())
-  invoiceId       String?   // link to invoice (Phase 9)
-  notes           String?   @db.Text
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  creditsTotal    Int? // null = unlimited (deferred to 8b)
+  creditsUsed     Int         @default(0)
+  status          String      @db.VarChar(20) // "active" | "depleted" | "expired" (cancelled deferred)
+  soldBy          String // staff userId who sold it
+  soldByUser      User        @relation("MemberPackageSeller", fields: [soldBy], references: [userId])
+  soldAt          DateTime    @default(now())
+  invoiceId       String? // Phase 9-EOD (2026-05-02): populated for new sales; null for historical rows.
+  invoice         Invoice?    @relation(fields: [invoiceId], references: [invoiceId])
+  notes           String?     @db.Text
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
-  creditUsages    PackageCreditUsage[]
+  creditUsages     PackageCreditUsage[]
+  invoiceLineItems InvoiceLineItem[]
 
   @@index([clubShortName])
   @@index([userId])
   @@index([packagePlanId])
   @@index([status])
   @@index([endDate])
+  @@index([invoiceId])
 }
 
 // PackageCreditUsage — records a single credit deduction from a MemberPackage.
 model PackageCreditUsage {
-  usageId          String    @id @default(cuid())
-  memberPackageId  String
-  memberPackage    MemberPackage @relation(fields: [memberPackageId], references: [memberPackageId], onDelete: Cascade)
-  eventId          String?   // null for general facility check-ins (no specific event)
-  event            CalendarEvent? @relation(fields: [eventId], references: [eventId])
-  registrationId   String?   // set when credit deducted at registration (primary path)
-  registration     EventRegistration? @relation(fields: [registrationId], references: [registrationId])
-  attendanceId     String?   // set when credit deducted at check-in (walk-in or general)
-  attendance       Attendance? @relation(fields: [attendanceId], references: [attendanceId])
-  creditsConsumed  Int       // from event.creditCost (or 1 for general check-ins)
-  createdAt        DateTime  @default(now())
+  usageId         String             @id @default(cuid())
+  memberPackageId String
+  memberPackage   MemberPackage      @relation(fields: [memberPackageId], references: [memberPackageId], onDelete: Cascade)
+  eventId         String? // null for general facility check-ins (no specific event)
+  event           CalendarEvent?     @relation(fields: [eventId], references: [eventId])
+  registrationId  String? // set when credit deducted at registration (primary path)
+  registration    EventRegistration? @relation(fields: [registrationId], references: [registrationId])
+  attendanceId    String? // set when credit deducted at check-in (walk-in or general)
+  attendance      Attendance?        @relation(fields: [attendanceId], references: [attendanceId])
+  creditsConsumed Int // from event.creditCost (or 1 for general check-ins)
+  createdAt       DateTime           @default(now())
 
   @@index([memberPackageId])
   @@index([registrationId])
@@ -798,14 +814,14 @@ model PackageCreditUsage {
 
 // Tag — club-scoped label that can be assigned to users (e.g., "Beginner", "VIP", "League Player")
 model Tag {
-  tagId         String    @id @default(cuid())
+  tagId         String   @id @default(cuid())
   clubShortName String
-  club          Club      @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  name          String    @db.VarChar(50)
-  bgColor       String    @db.VarChar(20)
-  textColor     String    @db.VarChar(20)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  club          Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  name          String   @db.VarChar(50)
+  bgColor       String   @db.VarChar(20)
+  textColor     String   @db.VarChar(20)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   userTags UserTag[]
 
@@ -824,4 +840,143 @@ model UserTag {
   @@unique([userId, tagId])
   @@index([userId])
   @@index([tagId])
+}
+
+// ============================================================
+// INVOICING (Phase 9-EOD, 2026-05-02)
+// See designFiles/roadmap/phase9-invoicing.md for design + decisions.
+// ============================================================
+
+// Invoice — a billable document for one member. v1 ships invoice-per-package-sale
+// (sellPackage creates one finalized invoice with one line item). Schema also
+// supports the running-tab shape (multi-line, draft → open → paid) for future.
+model Invoice {
+  invoiceId         String        @id @default(cuid())
+  clubShortName     String
+  club              Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  invoiceNumber     String // human-readable, e.g., "INV-000042"; sequential per club
+  userId            String
+  user              User          @relation("InvoiceMember", fields: [userId], references: [userId])
+  facilityId        String?
+  facility          ClubFacility? @relation(fields: [facilityId], references: [facilityId])
+  status            String        @db.VarChar(20) // "draft" | "open" | "partially_paid" | "paid" | "void" | "overdue"
+  issueDate         DateTime      @default(now())
+  dueDate           DateTime?
+  // Money in cents (matches existing priceInCents pattern). No Decimal.
+  subtotalInCents   Int
+  taxTotalInCents   Int           @default(0)
+  totalInCents      Int
+  // amountPaidInCents is net of refunds: sum(payments.amount) - sum(refunds.amount).
+  // Outstanding balance is computed at query time as totalInCents - amountPaidInCents.
+  amountPaidInCents Int           @default(0)
+  notes             String?       @db.Text
+  createdBy         String // staff userId
+  createdByUser     User          @relation("InvoiceCreatedBy", fields: [createdBy], references: [userId])
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  lineItems      InvoiceLineItem[]
+  payments       InvoicePayment[]
+  refunds        InvoiceRefund[]
+  memberPackages MemberPackage[]
+
+  @@unique([clubShortName, invoiceNumber])
+  @@index([clubShortName])
+  @@index([userId])
+  @@index([clubShortName, userId])
+  @@index([status])
+  @@index([facilityId])
+  @@index([createdBy])
+}
+
+// InvoiceLineItem — a single charge on an invoice. unitPriceInCents is a SNAPSHOT
+// at invoice creation time so historical totals are immune to later plan-price edits.
+model InvoiceLineItem {
+  lineItemId       String         @id @default(cuid())
+  invoiceId        String
+  invoice          Invoice        @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  productId        String?
+  product          Product?       @relation(fields: [productId], references: [productId])
+  packagePlanId    String?
+  packagePlan      PackagePlan?   @relation(fields: [packagePlanId], references: [packagePlanId])
+  memberPackageId  String?
+  memberPackage    MemberPackage? @relation(fields: [memberPackageId], references: [memberPackageId])
+  description      String         @db.VarChar(500)
+  quantity         Int            @default(1)
+  unitPriceInCents Int
+  discountInCents  Int            @default(0)
+  // Tax stored as basis points (1bp = 0.01%); 0 = no tax. Snapshot at creation.
+  taxRateBps       Int            @default(0)
+  taxAmountInCents Int            @default(0)
+  totalInCents     Int // (unitPrice * quantity - discount) + taxAmount
+  sortOrder        Int            @default(0)
+  createdAt        DateTime       @default(now())
+
+  @@index([invoiceId])
+  @@index([productId])
+  @@index([packagePlanId])
+  @@index([memberPackageId])
+}
+
+// InvoicePayment — a payment received against an invoice. Multi-processor by design:
+// processor + processorTransactionId pair is unique to make webhook retries safe.
+// Manual payments (cash/check) have processor = null.
+model InvoicePayment {
+  paymentId     String  @id @default(cuid())
+  invoiceId     String
+  invoice       Invoice @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  amountInCents Int // gross amount paid (refunds tracked separately in InvoiceRefund)
+  paymentMethod String  @db.VarChar(30) // "cash" | "check" | "credit_card" | "pos_transaction" | "stripe" | "paysafe" | "other"
+  status        String  @default("succeeded") @db.VarChar(20) // "pending" | "succeeded" | "failed" | "refunded" | "partially_refunded" | "disputed"
+
+  // Multi-processor extensibility (see phase9-invoicing.md)
+  processor              String? @db.VarChar(30) // "stripe" | "paysafe" | "square" | "valor" | null
+  processorTransactionId String? @db.VarChar(255)
+  processorChargeId      String? @db.VarChar(255)
+  processorFeeInCents    Int?
+
+  reference      String?  @db.VarChar(255) // legacy/manual: check number, free-text
+  notes          String?  @db.Text
+  receivedBy     String // staff userId
+  receivedByUser User     @relation("PaymentReceivedBy", fields: [receivedBy], references: [userId])
+  receivedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  refunds InvoiceRefund[]
+
+  // Webhook idempotency: same processor tx id can't be recorded twice.
+  // Postgres treats multiple NULLs as distinct, so manual cash/check payments don't conflict.
+  @@unique([processor, processorTransactionId])
+  @@index([invoiceId])
+  @@index([status])
+  @@index([receivedBy])
+}
+
+// InvoiceRefund — a refund row. Separate from InvoicePayment so we can support
+// partial refunds and multiple refunds per payment, with a clean audit trail.
+// Sum of refunds reduces invoice.amountPaidInCents at query time.
+model InvoiceRefund {
+  refundId       String         @id @default(cuid())
+  paymentId      String
+  payment        InvoicePayment @relation(fields: [paymentId], references: [paymentId], onDelete: Cascade)
+  invoiceId      String // denormalized for invoice-level queries
+  invoice        Invoice        @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  amountInCents  Int // positive amount being refunded
+  reason         String?        @db.VarChar(500)
+  refundedBy     String // staff userId
+  refundedByUser User           @relation("RefundIssuedBy", fields: [refundedBy], references: [userId])
+  refundedAt     DateTime       @default(now())
+
+  // Processor fields — null for manual refunds (handing back cash)
+  processor           String? @db.VarChar(30)
+  processorRefundId   String? @db.VarChar(255)
+  processorFeeInCents Int? // some processors return original fee on refund, some don't
+
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@unique([processor, processorRefundId])
+  @@index([paymentId])
+  @@index([invoiceId])
+  @@index([refundedBy])
 }
