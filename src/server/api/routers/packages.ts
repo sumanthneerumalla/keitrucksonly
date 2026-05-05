@@ -82,7 +82,8 @@ const createPackagePlanSchema = z
 			);
 		},
 		{
-			message: "durationValue and durationUnit must both be set or both be null",
+			message:
+				"durationValue and durationUnit must both be set or both be null",
 		},
 	);
 
@@ -396,7 +397,22 @@ export const packagesRouter = createTRPCRouter({
 	// Sell / manage MemberPackage
 	// ------------------------------------------------------------------
 
-	/** Sell a package to a member — creates a MemberPackage */
+	/**
+	 * Sell a package to a member — creates a MemberPackage and appends a line
+	 * item to the member's running-tab Invoice (Phase 9-EOD, 2026-05-02).
+	 *
+	 * Running tab semantics: charges accumulate on the member's open invoice
+	 * (status in `draft` | `open` | `partially_paid`) until they pay it down.
+	 * If no such invoice exists, one is created with the next sequential
+	 * invoice number for the club. The line item snapshots the plan's
+	 * `priceInCents` at sale time so historical totals are immune to later
+	 * plan-price edits.
+	 *
+	 * Concurrency note: two staff selling to the same member in the same
+	 * millisecond could each create a fresh invoice (the find doesn't lock).
+	 * Acceptable for EOD; revisit with a Postgres advisory lock on
+	 * (userId, clubShortName) when the running-tab UI ships.
+	 */
 	sellPackage: facilityProcedure
 		.input(sellPackageSchema)
 		.mutation(async ({ ctx, input }) => {
@@ -406,7 +422,7 @@ export const packagesRouter = createTRPCRouter({
 					userId: input.userId,
 					clubShortName: ctx.user.clubShortName,
 				},
-				select: { userId: true },
+				select: { userId: true, activeFacilityId: true },
 			});
 
 			if (!member) {
@@ -442,22 +458,97 @@ export const packagesRouter = createTRPCRouter({
 				timezone,
 			);
 
-			const memberPackage = await ctx.db.memberPackage.create({
-				data: {
-					clubShortName: ctx.user.clubShortName,
-					userId: input.userId,
-					packagePlanId: input.packagePlanId,
-					startDate,
-					endDate,
-					creditsTotal: plan.sessionCount,
-					creditsUsed: 0,
-					status: "active",
-					soldBy: ctx.user.userId,
-					notes: input.notes ?? null,
-				},
+			// Snapshot the price at sale time onto the line item.
+			const unitPriceInCents = plan.priceInCents;
+			const lineTotalInCents = unitPriceInCents; // qty 1, no discount, no tax in 9-EOD
+
+			const result = await ctx.db.$transaction(async (tx) => {
+				// Find member's running tab. Excludes void/paid/overdue —
+				// only `draft`, `open`, `partially_paid` absorb new charges.
+				let invoice = await tx.invoice.findFirst({
+					where: {
+						userId: input.userId,
+						clubShortName: ctx.user.clubShortName,
+						status: { in: ["draft", "open", "partially_paid"] },
+					},
+					orderBy: { issueDate: "asc" }, // oldest first if ever multiple
+				});
+
+				if (!invoice) {
+					// No open tab — open a new invoice with the next sequential number.
+					// Atomic increment: post-bump value minus 1 is the number we just
+					// consumed. With @default(1), the first invoice is INV-000001.
+					const club = await tx.club.update({
+						where: { clubShortName: ctx.user.clubShortName },
+						data: { nextInvoiceNumber: { increment: 1 } },
+						select: { nextInvoiceNumber: true },
+					});
+					const seq = club.nextInvoiceNumber - 1;
+					const invoiceNumber = `INV-${String(seq).padStart(6, "0")}`;
+
+					invoice = await tx.invoice.create({
+						data: {
+							clubShortName: ctx.user.clubShortName,
+							invoiceNumber,
+							userId: input.userId,
+							facilityId: member.activeFacilityId,
+							status: "open",
+							subtotalInCents: 0,
+							taxTotalInCents: 0,
+							totalInCents: 0,
+							amountPaidInCents: 0,
+							createdBy: ctx.user.userId,
+						},
+					});
+				}
+
+				const memberPackage = await tx.memberPackage.create({
+					data: {
+						clubShortName: ctx.user.clubShortName,
+						userId: input.userId,
+						packagePlanId: input.packagePlanId,
+						startDate,
+						endDate,
+						creditsTotal: plan.sessionCount,
+						creditsUsed: 0,
+						status: "active",
+						soldBy: ctx.user.userId,
+						notes: input.notes ?? null,
+						invoiceId: invoice.invoiceId,
+					},
+				});
+
+				// Append the line item to the running tab.
+				await tx.invoiceLineItem.create({
+					data: {
+						invoiceId: invoice.invoiceId,
+						productId: plan.productId,
+						packagePlanId: plan.packagePlanId,
+						memberPackageId: memberPackage.memberPackageId,
+						description: plan.name,
+						quantity: 1,
+						unitPriceInCents,
+						discountInCents: 0,
+						taxRateBps: 0,
+						taxAmountInCents: 0,
+						totalInCents: lineTotalInCents,
+						sortOrder: 0,
+					},
+				});
+
+				// Bump invoice rollups by this line's contribution.
+				const updatedInvoice = await tx.invoice.update({
+					where: { invoiceId: invoice.invoiceId },
+					data: {
+						subtotalInCents: { increment: unitPriceInCents },
+						totalInCents: { increment: lineTotalInCents },
+					},
+				});
+
+				return { memberPackage, invoice: updatedInvoice };
 			});
 
-			return { memberPackage };
+			return result;
 		}),
 
 	/**
@@ -484,7 +575,12 @@ export const packagesRouter = createTRPCRouter({
 					userId: input.userId,
 					clubShortName: ctx.user.clubShortName,
 				},
-				select: { userId: true, firstName: true, lastName: true, familyGroupId: true },
+				select: {
+					userId: true,
+					firstName: true,
+					lastName: true,
+					familyGroupId: true,
+				},
 			});
 
 			if (!member) {

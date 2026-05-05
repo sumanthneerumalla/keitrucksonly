@@ -8,7 +8,7 @@ import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 import AttendanceHistoryCard from "./AttendanceHistoryCard";
 import FamilyCard from "./FamilyCard";
-import PaymentHistoryPlaceholder from "./PaymentHistoryPlaceholder";
+import BillingPanel from "./BillingPanel";
 import ProfileFieldsCard from "./ProfileFieldsCard";
 import StudentSignupsCard from "./StudentSignupsCard";
 
@@ -141,8 +141,8 @@ export default function StudentDetailClient({
 			{/* Attendance history */}
 			<AttendanceHistoryCard userId={user.userId} />
 
-			{/* Payment history placeholder — TD-3 */}
-			<PaymentHistoryPlaceholder />
+			{/* Billing — Phase 9-EOD (2026-05-02): read-only invoice list + 3 rollup tiles */}
+			<BillingPanel userId={user.userId} />
 		</div>
 	);
 }
