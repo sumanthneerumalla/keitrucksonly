@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { ProfileImageUploader } from "~/app/_components/shared/ProfileImageUploader";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import {
 	Command,
 	CommandEmpty,
@@ -37,7 +37,7 @@ export default function PackagePlanForm({
 	packagePlanId,
 }: PackagePlanFormProps) {
 	const router = useRouter();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 
 	const [name, setName] = useState("");
 	const [description, setDescription] = useState("");
@@ -235,7 +235,6 @@ export default function PackagePlanForm({
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Header */}
 			<div className="mb-6">

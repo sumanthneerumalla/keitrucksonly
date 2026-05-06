@@ -6,7 +6,7 @@ import { useState } from "react";
 import { CalendarDays, Clock, MapPin } from "lucide-react";
 import { Button } from "~/app/_components/shared/Button";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { toDateInputValue, parseLocalDate } from "~/app/(app)/rentals/utils";
 import RentalBookingForm from "~/app/(app)/rentals/RentalBookingForm";
 import { api } from "~/trpc/react";
@@ -18,7 +18,7 @@ export default function RentalsClient() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const pathname = usePathname();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const utils = api.useUtils();
 
 	// Fetch authed user profile for club fallback
@@ -143,7 +143,6 @@ export default function RentalsClient() {
 
 	return (
 		<div className="container mx-auto max-w-4xl px-4 py-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			<h1 className="mb-6 font-bold text-2xl text-[var(--foreground)]">
 				Court Rentals

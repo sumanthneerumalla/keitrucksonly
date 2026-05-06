@@ -20,7 +20,7 @@ import { CalendarNowLine } from "~/app/(app)/calendar/CalendarNowLine";
 import EventFormModal from "~/app/(app)/calendar/EventFormModal";
 import { CalendarEventBadge } from "~/app/_components/shared/CalendarEventBadge";
 import { FacilitySelector } from "~/app/_components/shared/FacilitySelector";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 
 const DEFAULT_STANDARD_BUSINESS_HOURS = {
 	daysOfWeek: [
@@ -175,7 +175,7 @@ export default function CalendarClient() {
 
 	// Mutations
 	const utils = api.useUtils();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 
 	const createEventMutation = api.calendar.createEvent.useMutation({
 		onSuccess: () => {
@@ -413,7 +413,6 @@ export default function CalendarClient() {
 
 	return (
 		<div className="flex h-[calc(100vh-7.5rem)] flex-col overflow-hidden md:h-[calc(100vh-5rem)]">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 			{/* Mono eyebrow + section title strip — matches the marketing
 			 * CalendarMock's "Court calendar / Saturday, May 16" treatment but
 			 * keeps the date itself owned by ilamy's internal header (per

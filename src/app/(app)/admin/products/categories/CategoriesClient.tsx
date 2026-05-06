@@ -10,7 +10,7 @@ import {
 import { useCallback, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
@@ -280,7 +280,7 @@ function CategoryRow({
 // ---------------------------------------------------------------------------
 
 export default function CategoriesClient() {
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const [showInactive, setShowInactive] = useState(false);
 	const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
@@ -476,7 +476,6 @@ export default function CategoriesClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

@@ -177,6 +177,18 @@ body {
 	font-weight: 500;
 }
 
+/* Re-skin ilamy's hardcoded blue current-hour highlight to use brand
+ * indigo on warm-paper, matching the calendar palette. ilamy applies
+ * `bg-blue-50 text-blue-600 font-medium` to the time-column header cell
+ * for whichever hour is "now" in horizontal resource views (day + week).
+ * Targeting the compiled utility class directly because the className is
+ * baked into ilamy's source via cn() and there's no prop hook for it. */
+[data-calendar-root] [data-testid^="resource-day-time-label-"].bg-blue-50,
+[data-calendar-root] [data-testid^="resource-week-time-label-"].bg-blue-50 {
+	background-color: var(--brand-50) !important;
+	color: var(--brand-ink) !important;
+}
+
 /* Horizontal row separators in the resources column. ilamy applies
  * border-b only to the time-grid cells on the right, not to the
  * sticky resource label cells on the left — so resource rows visually

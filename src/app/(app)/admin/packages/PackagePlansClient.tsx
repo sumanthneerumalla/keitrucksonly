@@ -5,12 +5,12 @@ import Link from "next/link";
 import { useState } from "react";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { isAnyAdmin, isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
 export default function PackagePlansClient() {
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const [showInactive, setShowInactive] = useState(false);
 	const [archiveTarget, setArchiveTarget] = useState<{
 		packagePlanId: string;
@@ -101,7 +101,6 @@ export default function PackagePlansClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

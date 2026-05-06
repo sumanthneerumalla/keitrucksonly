@@ -5,7 +5,7 @@ import { CheckCircle, Clock, LogIn } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Button } from "~/app/_components/shared/Button";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 
 // ---------------------------------------------------------------------------
@@ -200,7 +200,7 @@ export default function CheckinClient({
 	facilityId: string;
 }) {
 	const { isSignedIn, isLoaded } = useAuth();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const [confirmReg, setConfirmReg] = useState<Registration | null>(null);
 
 	const currentPath = `/checkin/${clubShortName}/${facilityId}`;
@@ -301,7 +301,6 @@ export default function CheckinClient({
 
 	return (
 		<div className="mx-auto min-h-dvh max-w-lg px-4 py-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Confirm dialog */}
 			{confirmReg && (

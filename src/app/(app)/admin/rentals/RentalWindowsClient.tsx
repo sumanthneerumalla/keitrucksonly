@@ -13,7 +13,7 @@ import { parseLocalDate, toDateInputValue } from "~/app/(app)/rentals/utils";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { FacilitySelector } from "~/app/_components/shared/FacilitySelector";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
@@ -35,7 +35,7 @@ const DEFAULT_RESOURCE_BUSINESS_HOURS = {
 
 export default function RentalWindowsClient() {
 	const router = useRouter();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const utils = api.useUtils();
 
 	const [selectedDate, setSelectedDate] = useState(() =>
@@ -212,7 +212,6 @@ export default function RentalWindowsClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

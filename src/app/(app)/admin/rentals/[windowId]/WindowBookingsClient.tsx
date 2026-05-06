@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { formatTime } from "~/app/(app)/rentals/utils";
 import { api } from "~/trpc/react";
@@ -14,7 +14,7 @@ import { api } from "~/trpc/react";
 export default function WindowBookingsClient() {
 	const params = useParams();
 	const windowId = params.windowId as string;
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const utils = api.useUtils();
 
 	const [cancelTarget, setCancelTarget] = useState<{
@@ -111,7 +111,6 @@ export default function WindowBookingsClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Back + Header */}
 			<div className="mb-6">

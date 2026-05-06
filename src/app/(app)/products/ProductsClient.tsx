@@ -7,7 +7,7 @@ import ProductFormModal from "~/app/(app)/products/ProductFormModal";
 import { useUrlPagination } from "~/app/_components/hooks/use-url-pagination";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { PaginationControls } from "~/app/_components/shared/ui/pagination-controls";
 import { Select } from "~/app/_components/shared/ui/select";
 import { isFacilityOrAbove } from "~/lib/utils";
@@ -40,7 +40,7 @@ export default function ProductsClient() {
 	const [isFormOpen, setIsFormOpen] = useState(false);
 	const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 	const [showInactive, setShowInactive] = useState(false);
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 
 	// URL-driven pagination and search
 	const {
@@ -206,7 +206,6 @@ export default function ProductsClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

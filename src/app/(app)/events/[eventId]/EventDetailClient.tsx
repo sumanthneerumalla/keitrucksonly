@@ -19,7 +19,7 @@ import SellPackageModal from "~/app/(app)/admin/checkin/SellPackageModal";
 import AddStudentPopover from "~/app/(app)/events/[eventId]/AddStudentPopover";
 import GuestRegisterModal from "~/app/(app)/events/[eventId]/GuestRegisterModal";
 import BookableEventDetails from "~/app/(app)/events/_components/BookableEventDetails";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 import "~/lib/dayjs-config";
@@ -36,7 +36,7 @@ export default function EventDetailClient({
 	userType,
 	userId,
 }: EventDetailClientProps) {
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const isFacilityOrAdmin = userType ? isFacilityOrAbove({ userType }) : false;
 	const isCoach = userType === "COACH";
 	const isStudent = userType === "STUDENT";
@@ -155,7 +155,6 @@ export default function EventDetailClient({
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Back nav */}
 			<div className="mb-6">

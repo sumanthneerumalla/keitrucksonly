@@ -16,7 +16,7 @@ import MemberPackagesCard from "~/app/(app)/admin/checkin/MemberPackagesCard";
 import { Button } from "~/app/_components/shared/Button";
 import { FacilitySelector } from "~/app/_components/shared/FacilitySelector";
 import { Input } from "~/app/_components/shared/Input";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
@@ -106,7 +106,7 @@ type RecentCheckin = {
 // ---------------------------------------------------------------------------
 
 export default function AdminCheckinClient() {
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const utils = api.useUtils();
 
 	// Search state
@@ -359,7 +359,6 @@ export default function AdminCheckinClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Walk-in confirmation dialog */}
 			{walkinConfirm && (
