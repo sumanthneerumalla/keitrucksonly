@@ -51,6 +51,12 @@ log "main advanced ${LAST:0:7} -> ${REMOTE:0:7}; redeploying prod"
 git checkout "$BRANCH" >> "$LOG_FILE" 2>&1
 git reset --hard "$REMOTE" >> "$LOG_FILE" 2>&1
 
+# Surface the deployed SHA + timestamp to the running container via env vars.
+# docker-compose.yml substitutes ${BUILD_SHA}/${BUILD_TIMESTAMP} from this
+# shell, so /api/health can echo back what's actually running.
+export BUILD_SHA="$REMOTE"
+export BUILD_TIMESTAMP="$(date -Iseconds)"
+
 # Detached sibling of `docker:prod:redeploy`: same down → image prune → up
 # pipeline, but with `-d` (so cron doesn't hang on foreground logs) and a
 # trailing `docker container prune -f` for stopped containers.
