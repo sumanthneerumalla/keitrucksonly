@@ -11,7 +11,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { Select } from "~/app/_components/shared/ui/select";
@@ -68,20 +68,43 @@ function ResourceTypeForm({
 	onCancel,
 	isSaving,
 }: {
-	initial?: { name: string; color: string; backgroundColor: string };
+	initial?: {
+		name: string;
+		color: string | null;
+		backgroundColor: string | null;
+	};
+	// `color` / `backgroundColor` may be null when the operator opts out of
+	// custom colors — in that case the calendar renders the resource with
+	// the cascade-driven neutral look.
 	onSave: (data: {
 		name: string;
-		color: string;
-		backgroundColor: string;
+		color: string | null;
+		backgroundColor: string | null;
 	}) => void;
 	onCancel: () => void;
 	isSaving: boolean;
 }) {
 	const [name, setName] = useState(initial?.name ?? "");
-	const [color, setColor] = useState(initial?.color ?? DEFAULT_COLOR);
+	// `useCustomColors` defaults to false on new types and inherits from the
+	// existing record on edit. When false, color/bg submit as null. When
+	// true, the pickers are shown and submitted values are used as hex.
+	const [useCustomColors, setUseCustomColors] = useState(
+		initial?.color != null,
+	);
+	const [color, setColor] = useState(
+		initial?.color ?? DEFAULT_COLOR,
+	);
 	const [backgroundColor, setBackgroundColor] = useState(
 		initial?.backgroundColor ?? DEFAULT_BG_COLOR,
 	);
+
+	const handleSave = () => {
+		onSave({
+			name,
+			color: useCustomColors ? color : null,
+			backgroundColor: useCustomColors ? backgroundColor : null,
+		});
+	};
 
 	return (
 		<div className="glass-panel space-y-3 rounded-lg p-4">
@@ -97,33 +120,47 @@ function ResourceTypeForm({
 					maxLength={100}
 				/>
 			</div>
-			<div className="flex gap-4">
-				<div>
-					<label className="mb-1 block font-medium text-[var(--foreground)] text-sm">
-						Text color
-					</label>
-					<input
-						type="color"
-						value={color}
-						onChange={(e) => setColor(e.target.value)}
-						className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
-					/>
+			<label className="flex items-center gap-2 text-[var(--foreground)] text-sm">
+				<input
+					type="checkbox"
+					checked={useCustomColors}
+					onChange={(e) => setUseCustomColors(e.target.checked)}
+					className="h-4 w-4 cursor-pointer"
+				/>
+				Customize colors
+				<span className="text-[var(--muted-foreground)] text-xs">
+					(applied as the default for new resources of this type)
+				</span>
+			</label>
+			{useCustomColors && (
+				<div className="flex gap-4">
+					<div>
+						<label className="mb-1 block font-medium text-[var(--foreground)] text-sm">
+							Text color
+						</label>
+						<input
+							type="color"
+							value={color}
+							onChange={(e) => setColor(e.target.value)}
+							className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
+						/>
+					</div>
+					<div>
+						<label className="mb-1 block font-medium text-[var(--foreground)] text-sm">
+							Background color
+						</label>
+						<input
+							type="color"
+							value={backgroundColor}
+							onChange={(e) => setBackgroundColor(e.target.value)}
+							className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
+						/>
+					</div>
 				</div>
-				<div>
-					<label className="mb-1 block font-medium text-[var(--foreground)] text-sm">
-						Background color
-					</label>
-					<input
-						type="color"
-						value={backgroundColor}
-						onChange={(e) => setBackgroundColor(e.target.value)}
-						className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
-					/>
-				</div>
-			</div>
+			)}
 			<div className="flex gap-2">
 				<Button
-					onClick={() => onSave({ name, color, backgroundColor })}
+					onClick={handleSave}
 					disabled={!name.trim() || isSaving}
 					size="sm"
 				>
@@ -339,6 +376,13 @@ export default function ResourceManagerClient() {
 
 	// ── Resource Types ──────────────────────────────────────────────────────────
 	const { data: typesData } = api.calendar.getResourceTypes.useQuery({});
+	// Memoize so the auto-fill effect's dependency stays stable across
+	// renders (the inline `?? []` would return a new array each time and
+	// retrigger the effect on every keystroke in the form).
+	const resourceTypes = useMemo(
+		() => typesData?.resourceTypes ?? [],
+		[typesData],
+	);
 	const [showTypeForm, setShowTypeForm] = useState(false);
 	const [editingTypeId, setEditingTypeId] = useState<string | null>(null);
 
@@ -371,8 +415,43 @@ export default function ResourceManagerClient() {
 	const [resDescription, setResDescription] = useState("");
 	const [resTypeId, setResTypeId] = useState("");
 	const [resFacilityId, setResFacilityId] = useState<string | "">("");
+	// Resources default to no custom color — they inherit the calendar's
+	// neutral cascade. Operators opt into custom colors per resource via
+	// the checkbox below; on opt-out, color/bg submit as null.
+	const [useCustomResColors, setUseCustomResColors] = useState(false);
 	const [resColor, setResColor] = useState(DEFAULT_COLOR);
 	const [resBgColor, setResBgColor] = useState(DEFAULT_BG_COLOR);
+
+	// Auto-fill colors from the selected Resource Type's defaults whenever
+	// the user picks (or changes) a type while creating a NEW resource.
+	// This makes Type colors meaningful — they act as templates for new
+	// resources of that type. Edit flow is exempt (existing resource's
+	// stored colors stay put). User edits to colors are intentionally NOT
+	// preserved across type changes — switching the type re-applies the
+	// new type's defaults so the form is predictable.
+	useEffect(() => {
+		// Editing an existing resource: preserve its stored colors.
+		if (editingResourceId !== null) return;
+		// No type picked yet — wait until the user selects one.
+		if (!resTypeId) return;
+		// Defensive: typesData might be stale or the type was deleted in
+		// another tab. Bail rather than crash.
+		const selectedType = resourceTypes.find(
+			(rt) => rt.resourceTypeId === resTypeId,
+		);
+		if (!selectedType) return;
+
+		if (selectedType.color != null || selectedType.backgroundColor != null) {
+			setUseCustomResColors(true);
+			if (selectedType.color != null) setResColor(selectedType.color);
+			if (selectedType.backgroundColor != null) {
+				setResBgColor(selectedType.backgroundColor);
+			}
+		} else {
+			// Type has no preferred colors — keep the resource neutral.
+			setUseCustomResColors(false);
+		}
+	}, [resTypeId, editingResourceId, resourceTypes]);
 
 	const createResourceMutation = api.calendar.createResource.useMutation({
 		onSuccess: () => {
@@ -402,6 +481,7 @@ export default function ResourceManagerClient() {
 		setResDescription("");
 		setResTypeId("");
 		setResFacilityId("");
+		setUseCustomResColors(false);
 		setResColor(DEFAULT_COLOR);
 		setResBgColor(DEFAULT_BG_COLOR);
 	}
@@ -420,6 +500,9 @@ export default function ResourceManagerClient() {
 		setResDescription(r.description ?? "");
 		setResTypeId(r.resourceType.resourceTypeId);
 		setResFacilityId(r.facilityId ?? "");
+		// Existing color → enable the custom-colors UI and pre-fill pickers.
+		// No existing color → start unchecked, picker hidden.
+		setUseCustomResColors(r.color != null);
 		setResColor(r.color ?? DEFAULT_COLOR);
 		setResBgColor(r.backgroundColor ?? DEFAULT_BG_COLOR);
 		setShowResourceForm(false);
@@ -428,6 +511,12 @@ export default function ResourceManagerClient() {
 	function handleSaveResource() {
 		if (!resTitle.trim() || !resTypeId) return;
 		const facilityId = resFacilityId || undefined;
+		// When custom colors are off, send null so the DB stores no color
+		// and the calendar renders the cascade-driven neutral look. Update
+		// schema accepts nullable; create schema is optional-only so we
+		// pass undefined there.
+		const colorForSubmit = useCustomResColors ? resColor : null;
+		const bgForSubmit = useCustomResColors ? resBgColor : null;
 		if (editingResourceId) {
 			updateResourceMutation.mutate({
 				resourceId: editingResourceId,
@@ -435,8 +524,8 @@ export default function ResourceManagerClient() {
 				description: resDescription || undefined,
 				resourceTypeId: resTypeId,
 				facilityId: facilityId ?? null,
-				color: resColor,
-				backgroundColor: resBgColor,
+				color: colorForSubmit,
+				backgroundColor: bgForSubmit,
 			});
 		} else {
 			createResourceMutation.mutate({
@@ -444,13 +533,12 @@ export default function ResourceManagerClient() {
 				description: resDescription || undefined,
 				resourceTypeId: resTypeId,
 				facilityId,
-				color: resColor,
-				backgroundColor: resBgColor,
+				color: colorForSubmit ?? undefined,
+				backgroundColor: bgForSubmit ?? undefined,
 			});
 		}
 	}
 
-	const resourceTypes = typesData?.resourceTypes ?? [];
 	const allResources = resourcesData?.resources ?? [];
 	// Filter resources by selected facility
 	const resources =
@@ -691,7 +779,16 @@ export default function ResourceManagerClient() {
 					{showTypeForm && (
 						<div className="mb-4">
 							<ResourceTypeForm
-								onSave={(data) => createTypeMutation.mutate(data)}
+								// createResourceType's input schema treats color as
+								// `.optional()` (not nullable), so we strip nulls
+								// before sending. Update accepts null directly.
+								onSave={(data) =>
+									createTypeMutation.mutate({
+										name: data.name,
+										color: data.color ?? undefined,
+										backgroundColor: data.backgroundColor ?? undefined,
+									})
+								}
 								onCancel={() => setShowTypeForm(false)}
 								isSaving={createTypeMutation.isPending}
 							/>
@@ -718,8 +815,8 @@ export default function ResourceManagerClient() {
 									<ResourceTypeForm
 										initial={{
 											name: rt.name,
-											color: rt.color ?? DEFAULT_COLOR,
-											backgroundColor: rt.backgroundColor ?? DEFAULT_BG_COLOR,
+											color: rt.color,
+											backgroundColor: rt.backgroundColor,
 										}}
 										onSave={(data) =>
 											updateTypeMutation.mutate({
@@ -733,9 +830,15 @@ export default function ResourceManagerClient() {
 								) : (
 									<div className="flex items-center justify-between">
 										<div className="flex items-center gap-3">
+											{/* Show the type's chosen color, or a soft warm-paper
+											 * swatch with a dashed outline if none is set
+											 * (operator opted into the cascade-driven neutral). */}
 											<span
 												className="h-4 w-4 rounded-full border border-[var(--border)]"
-												style={{ backgroundColor: rt.color ?? DEFAULT_COLOR }}
+												style={{
+													backgroundColor: rt.color ?? "var(--paper-2)",
+													borderStyle: rt.color ? "solid" : "dashed",
+												}}
 											/>
 											<span className="font-medium text-[var(--foreground)]">
 												{rt.name}
@@ -871,30 +974,45 @@ export default function ResourceManagerClient() {
 									placeholder="Short description"
 								/>
 							</div>
-							<div className="flex gap-4">
-								<div>
-									<label className="mb-1 block text-[var(--muted-foreground)] text-xs">
-										Text color
-									</label>
-									<input
-										type="color"
-										value={resColor}
-										onChange={(e) => setResColor(e.target.value)}
-										className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
-									/>
+							<label className="flex items-center gap-2 text-[var(--foreground)] text-sm">
+								<input
+									type="checkbox"
+									checked={useCustomResColors}
+									onChange={(e) => setUseCustomResColors(e.target.checked)}
+									className="h-4 w-4 cursor-pointer"
+								/>
+								Customize colors
+								<span className="text-[var(--muted-foreground)] text-xs">
+									(otherwise uses the type's default, or neutral if the type
+									has none)
+								</span>
+							</label>
+							{useCustomResColors && (
+								<div className="flex gap-4">
+									<div>
+										<label className="mb-1 block text-[var(--muted-foreground)] text-xs">
+											Text color
+										</label>
+										<input
+											type="color"
+											value={resColor}
+											onChange={(e) => setResColor(e.target.value)}
+											className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
+										/>
+									</div>
+									<div>
+										<label className="mb-1 block text-[var(--muted-foreground)] text-xs">
+											Background
+										</label>
+										<input
+											type="color"
+											value={resBgColor}
+											onChange={(e) => setResBgColor(e.target.value)}
+											className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
+										/>
+									</div>
 								</div>
-								<div>
-									<label className="mb-1 block text-[var(--muted-foreground)] text-xs">
-										Background
-									</label>
-									<input
-										type="color"
-										value={resBgColor}
-										onChange={(e) => setResBgColor(e.target.value)}
-										className="h-9 w-16 cursor-pointer rounded border border-[var(--border)] bg-transparent"
-									/>
-								</div>
-							</div>
+							)}
 							{(createResourceMutation.error ??
 								updateResourceMutation.error) && (
 								<p className="text-red-500 text-xs">
@@ -947,9 +1065,15 @@ export default function ResourceManagerClient() {
 							<div key={r.resourceId} className="glass-card rounded-lg p-4">
 								<div className="flex items-start justify-between">
 									<div className="flex items-center gap-3">
+										{/* Same swatch convention as the resource-types list:
+										 * solid for custom-colored, dashed warm-paper for the
+										 * neutral default. */}
 										<span
 											className="mt-0.5 h-3 w-3 flex-shrink-0 rounded-full border border-[var(--border)]"
-											style={{ backgroundColor: r.color ?? DEFAULT_COLOR }}
+											style={{
+												backgroundColor: r.color ?? "var(--paper-2)",
+												borderStyle: r.color ? "solid" : "dashed",
+											}}
 										/>
 										<div>
 											<p className="font-medium text-[var(--foreground)]">

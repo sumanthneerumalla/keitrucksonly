@@ -13,19 +13,15 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { RRule } from "rrule";
-import {
-	DEFAULT_BG_COLOR,
-	DEFAULT_COLOR,
-	isFacilityOrAbove,
-} from "~/lib/utils";
+import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 import "~/lib/dayjs-config";
+import { CalendarNowLine } from "~/app/(app)/calendar/CalendarNowLine";
 import EventFormModal from "~/app/(app)/calendar/EventFormModal";
 import { CalendarEventBadge } from "~/app/_components/shared/CalendarEventBadge";
 import { FacilitySelector } from "~/app/_components/shared/FacilitySelector";
 import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 
-// DEFAULT_COLOR and DEFAULT_BG_COLOR imported from ~/lib/utils
 const DEFAULT_STANDARD_BUSINESS_HOURS = {
 	daysOfWeek: [
 		"sunday",
@@ -55,12 +51,25 @@ const DEFAULT_RESOURCE_BUSINESS_HOURS = {
 // backdrop-blur-sm removed: CSS backdrop-filter creates a new stacking context that traps
 // portalled dropdowns (DatePopover uses createPortal + z-index:9999 which is capped inside
 // any ancestor that has a backdrop-filter applied).
+//
+// Warm-paper theming: bg uses --paper (set globally on [data-calendar-root]) so ilamy's
+// default `bg-background` resolves to paper across cells, headers, and view-header bands.
 const CALENDAR_HEADER_CLASSNAME =
-	"rounded-t-xl border-b border-[var(--border)] bg-white px-3 py-2 shadow-sm";
-const CALENDAR_VIEW_HEADER_CLASSNAME = "bg-white";
+	"rounded-t-xl border-b border-[var(--line)] bg-[var(--paper)] px-3 py-2";
+const CALENDAR_VIEW_HEADER_CLASSNAME = "bg-[var(--paper)]";
 const CALENDAR_CLASSES_OVERRIDE = {
-	disabledCell: "bg-slate-50/80 text-slate-400 pointer-events-none",
+	disabledCell:
+		"bg-[var(--paper-2)]/80 text-[var(--ink-4)] pointer-events-none",
 };
+
+// Custom now-line override — wired via renderCurrentTimeIndicator on the
+// calendar components. Pulled out so the inline JSX inside
+// commonCalendarProps stays tidy. Only the `progress` prop is used; the
+// other props (currentTime, resource, view) are available if we ever want
+// to show a time badge or per-view variant.
+function renderNowLine({ progress }: { progress: number }) {
+	return <CalendarNowLine progress={progress} />;
+}
 
 // Parse RRULE string into rrule.js options — defined outside component to avoid re-creation on every render
 function parseRRule(rruleString: string) {
@@ -200,14 +209,22 @@ export default function CalendarClient() {
 	const canCreateEvents = isCoach || isFacilityOrAdmin;
 
 	// Transform DB resources → ilamy Resource[]
+	//
+	// Resources without an explicit color in the DB pass `undefined` for
+	// color/backgroundColor — so ilamy's ResourceCell renders no inline
+	// style and the cell inherits the warm-paper background + dark ink
+	// text from the [data-calendar-root] cascade. Resources WITH a custom
+	// color stored use that color (operators can color-code specific
+	// courts). The legacy DEFAULT_COLOR / DEFAULT_BG_COLOR fallbacks were
+	// removed in favor of cascade-driven neutrals.
 	const resources: Resource[] = useMemo(() => {
 		if (!resourcesData?.resources) return [];
 
 		return resourcesData.resources.map((r) => ({
 			id: r.resourceId,
 			title: r.title,
-			color: r.color ?? DEFAULT_COLOR,
-			backgroundColor: r.backgroundColor ?? DEFAULT_BG_COLOR,
+			color: r.color ?? undefined,
+			backgroundColor: r.backgroundColor ?? undefined,
 			position: r.position,
 			businessHours:
 				r.businessHours.length > 0
@@ -337,6 +354,7 @@ export default function CalendarClient() {
 		initialView: currentView,
 		onDateChange: handleDateChange,
 		onViewChange: handleViewChange,
+		renderCurrentTimeIndicator: renderNowLine,
 		timeFormat: "12-hour" as const,
 		timezone: userTimezone,
 		viewHeaderClassName: CALENDAR_VIEW_HEADER_CLASSNAME,
@@ -388,11 +406,25 @@ export default function CalendarClient() {
 		setTimeout(() => setEmbedCopied(false), 2000);
 	};
 
+	// Pill-shaped toolbar buttons — matches the marketing aesthetic.
+	// `text-sm` is preserved so existing layout doesn't shift.
+	const TOOLBAR_BTN_CLASS =
+		"inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--paper)] px-3.5 py-1.5 text-[13.5px] font-medium text-[var(--ink-2)] transition-colors hover:bg-[var(--paper-2)] hover:text-[var(--ink)]";
+
 	return (
 		<div className="flex h-[calc(100vh-7.5rem)] flex-col overflow-hidden md:h-[calc(100vh-5rem)]">
 			<ToastContainer toasts={toasts} onDismiss={dismiss} />
+			{/* Mono eyebrow + section title strip — matches the marketing
+			 * CalendarMock's "Court calendar / Saturday, May 16" treatment but
+			 * keeps the date itself owned by ilamy's internal header (per
+			 * decision to not replace ilamy's header in this round). */}
+			<div className="px-4 pt-3">
+				<div className="font-mono text-[11px] text-[var(--ink-3)] uppercase tracking-[0.12em]">
+					Court calendar
+				</div>
+			</div>
 			{/* Calendar toolbar */}
-			<div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+			<div className="flex flex-wrap items-center gap-2 px-4 pt-2">
 				{facilityMemberships && (
 					<FacilitySelector
 						facilities={facilityMemberships}
@@ -409,6 +441,7 @@ export default function CalendarClient() {
 						<>
 							{/* Resource ↔ Standard view toggle */}
 							<button
+								type="button"
 								onClick={() => {
 									const next =
 										calendarMode === "standard" ? "resource" : "standard";
@@ -417,7 +450,7 @@ export default function CalendarClient() {
 									setCalendarMode(next);
 									syncUrl({ mode: next });
 								}}
-								className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-gray-700 text-sm transition-colors hover:bg-[var(--accent)]"
+								className={TOOLBAR_BTN_CLASS}
 								title={
 									calendarMode === "resource"
 										? "Switch to standard calendar"
@@ -436,13 +469,14 @@ export default function CalendarClient() {
 							{/* Orientation toggle — only in resource mode */}
 							{calendarMode === "resource" && (
 								<button
+									type="button"
 									onClick={() => {
 										const next =
 											orientation === "horizontal" ? "vertical" : "horizontal";
 										setOrientation(next);
 										syncUrl({ orientation: next });
 									}}
-									className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-gray-700 text-sm transition-colors hover:bg-[var(--accent)]"
+									className={TOOLBAR_BTN_CLASS}
 								>
 									{orientation === "horizontal"
 										? "Vertical Layout"
@@ -452,12 +486,13 @@ export default function CalendarClient() {
 							{/* Embed code copy — only for facility/admin who have a club */}
 							{isFacilityOrAdmin && embedCode && (
 								<button
+									type="button"
 									onClick={() => void handleCopyEmbed()}
-									className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-gray-700 text-sm transition-colors hover:bg-[var(--accent)]"
+									className={TOOLBAR_BTN_CLASS}
 									title="Copy embed code for your public calendar"
 								>
 									{embedCopied ? (
-										<Check size={16} className="text-green-600" />
+										<Check size={16} className="text-[var(--good)]" />
 									) : (
 										<Clipboard size={16} />
 									)}
@@ -465,10 +500,7 @@ export default function CalendarClient() {
 								</button>
 							)}
 							{isFacilityOrAdmin && (
-								<Link
-									href="/calendar/resources"
-									className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-gray-700 text-sm transition-colors hover:bg-[var(--accent)]"
-								>
+								<Link href="/calendar/resources" className={TOOLBAR_BTN_CLASS}>
 									<Settings size={16} />
 									Manage Resources
 								</Link>
@@ -482,10 +514,14 @@ export default function CalendarClient() {
 				    against the overflow-hidden clip boundary, causing the inner corners to appear
 				    square. ring renders as an inset box-shadow so the rounded clip applies cleanly.
 				    All modes use overflow-hidden on the inner card; the outer flex-1 container
-				    scrolls so the full time range (9am–midnight) is always reachable. */}
+				    scrolls so the full time range (9am–midnight) is always reachable.
+				    bg uses --paper directly (not via --background) so that ilamy's interior
+				    cells — which DO consume --background via the var override on this same
+				    [data-calendar-root] selector — render warm paper without the outer card's
+				    bg fighting the cascade. */}
 				<div
 					data-calendar-root
-					className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-[var(--border)]"
+					className="overflow-hidden rounded-2xl bg-[var(--paper)] shadow-sm ring-1 ring-[var(--line)]"
 				>
 					{isStudent ? (
 						// Students: standard calendar (no resource columns), click navigates directly to event page

@@ -26,7 +26,7 @@ import { RecurrenceEditor } from "~/app/(app)/calendar/RecurrenceEditor";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
-import { useToast } from "~/app/_components/shared/Toast";
+import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import {
 	Command,
 	CommandEmpty,
@@ -215,7 +215,13 @@ export default function EventFormModal({
 
 	// All hooks must be above early return (rules of hooks)
 	const utils = api.useUtils();
-	const { toast } = useToast();
+	// useToast is an independent state hook (no shared context). The
+	// ToastContainer in CalendarClient renders ITS toast list, not ours —
+	// so we also render a ToastContainer here for any toasts emitted from
+	// inside the modal (mutation errors, validation failures, etc.).
+	// Otherwise toast() calls here are silent: the message is appended to
+	// our local list with no UI rendering it. See <ToastContainer/> below.
+	const { toasts, toast, dismiss } = useToast();
 
 	// Fetch products for the selector (BOOKABLE/COACHING_SLOT only)
 	const { data: productsData } = api.products.getProducts.useQuery(
@@ -594,6 +600,13 @@ export default function EventFormModal({
 
 	return (
 		<>
+			{/* Toast container for mutation errors / validation messages
+			 * emitted from inside this modal. CalendarClient has its own
+			 * separate toast list (independent useState — no shared
+			 * context), so toasts fired here would be invisible without a
+			 * container scoped to this hook instance. */}
+			<ToastContainer toasts={toasts} onDismiss={dismiss} />
+
 			{/* Backdrop */}
 			<div
 				className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"

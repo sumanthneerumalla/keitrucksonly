@@ -9,11 +9,6 @@ import {
 import { TRPCError } from "@trpc/server";
 import { RRule } from "rrule";
 import { z } from "zod";
-import { DEFAULT_BG_COLOR, DEFAULT_COLOR } from "~/lib/utils";
-import {
-	assertRegistrable,
-	createRegistrationTx,
-} from "~/server/utils/eventRegistration";
 import {
 	createTRPCRouter,
 	facilityProcedure, // user must be FACILITY or ADMIN
@@ -22,6 +17,17 @@ import {
 	staffProcedure, // user must be FACILITY, ADMIN, or COACH
 } from "~/server/api/trpc";
 import { validateDateRange } from "~/server/utils/dateUtils";
+import { formatEventTimeInZone } from "~/server/utils/dateUtils";
+import {
+	assertRegistrable,
+	createRegistrationTx,
+} from "~/server/utils/eventRegistration";
+import {
+	checkRecurringEventConflicts,
+	checkResourceConflicts,
+	formatRecurringConflictsMessage,
+} from "~/server/utils/resourceConflicts";
+import { buildRuleSetFromEvent } from "~/server/utils/rrule";
 import {
 	getCurrentUser,
 	isAnyAdmin,
@@ -29,13 +35,6 @@ import {
 	isPlatformAdmin,
 	isSameClub,
 } from "~/server/utils/utils";
-import {
-	checkResourceConflicts,
-	checkRecurringEventConflicts,
-	formatRecurringConflictsMessage,
-} from "~/server/utils/resourceConflicts";
-import { buildRuleSetFromEvent } from "~/server/utils/rrule";
-import { formatEventTimeInZone } from "~/server/utils/dateUtils";
 
 // ============================================================
 // SHARED HELPERS
@@ -1103,7 +1102,8 @@ export const calendarRouter = createTRPCRouter({
 			if (!effectiveFacilityId) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "A facility must be selected. Please set your active facility in profile settings.",
+					message:
+						"A facility must be selected. Please set your active facility in profile settings.",
 				});
 			}
 
@@ -1301,8 +1301,7 @@ export const calendarRouter = createTRPCRouter({
 			) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message:
-						"Rental events must be managed from the Court Rentals page.",
+					message: "Rental events must be managed from the Court Rentals page.",
 				});
 			}
 
@@ -1417,8 +1416,7 @@ export const calendarRouter = createTRPCRouter({
 				// expand the new rrule and check each occurrence. CR-c.13: if the update
 				// clears rrule (recurring → non-recurring), the Tier A check above is
 				// sufficient and we skip Tier B.
-				const newRrule =
-					data.rrule !== undefined ? data.rrule : existing.rrule;
+				const newRrule = data.rrule !== undefined ? data.rrule : existing.rrule;
 				if (newRrule) {
 					const recurringConflicts = await checkRecurringEventConflicts({
 						db: ctx.db,
@@ -1598,8 +1596,7 @@ export const calendarRouter = createTRPCRouter({
 			) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message:
-						"Rental events must be managed from the Court Rentals page.",
+					message: "Rental events must be managed from the Court Rentals page.",
 				});
 			}
 
@@ -2261,7 +2258,9 @@ export const calendarRouter = createTRPCRouter({
 						changedByUserId: user.userId,
 						oldStatus: RegistrationStatus.REGISTERED,
 						newStatus: RegistrationStatus.LATE_CANCEL,
-						source: isFacilityOrAbove(user) ? "admin_dashboard" : "self_service",
+						source: isFacilityOrAbove(user)
+							? "admin_dashboard"
+							: "self_service",
 					},
 				});
 			});
@@ -2682,7 +2681,10 @@ export const calendarRouter = createTRPCRouter({
 							oldStatus: RegistrationStatus.REGISTERED,
 							newStatus: RegistrationStatus.RESCHEDULED,
 							source: "admin_dashboard",
-							metadata: { newEventId, newRegistrationId: newReg.registrationId },
+							metadata: {
+								newEventId,
+								newRegistrationId: newReg.registrationId,
+							},
 						},
 					});
 

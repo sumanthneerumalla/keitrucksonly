@@ -25,7 +25,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { RRule } from "rrule";
-import { DEFAULT_BG_COLOR, DEFAULT_COLOR } from "~/lib/utils";
 import "~/lib/dayjs-config";
 import { CalendarEventBadge } from "~/app/_components/shared/CalendarEventBadge";
 import { FacilitySelector } from "~/app/_components/shared/FacilitySelector";
@@ -336,7 +335,6 @@ function CalendarHeader({
 	);
 }
 
-// DEFAULT_COLOR and DEFAULT_BG_COLOR imported from ~/lib/utils
 const DEFAULT_BUSINESS_HOURS: BusinessHours = {
 	daysOfWeek: [
 		"sunday",
@@ -472,8 +470,13 @@ export default function PublicCalendarClient({
 		return resourcesData.resources.map((r) => ({
 			id: r.resourceId,
 			title: r.title,
-			color: r.color ?? DEFAULT_COLOR,
-			backgroundColor: r.backgroundColor ?? DEFAULT_BG_COLOR,
+			// Pass through DB color/bg only if explicitly set; otherwise let
+			// ilamy render with no inline style so the calendar canvas
+			// cascade (warm paper bg, ink text) takes over. Matches the
+			// behaviour in CalendarClient — the public/embed view shouldn't
+			// look different from the staff view.
+			color: r.color ?? undefined,
+			backgroundColor: r.backgroundColor ?? undefined,
 			position: r.position,
 			businessHours:
 				r.businessHours.length > 0

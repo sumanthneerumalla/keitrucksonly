@@ -47,7 +47,7 @@ export function CalendarEventBadge({ event }: CalendarEventBadgeProps) {
 
 	return (
 		<div
-			className="flex h-full w-full items-center gap-1 overflow-hidden rounded-sm border-[1.5px] border-white/30 px-1 py-0.5"
+			className="flex h-full w-full items-center gap-1 overflow-hidden rounded-md border-[1.5px] border-white/30 px-1.5 py-0.5"
 			style={{ backgroundColor: bgColor, color: textColor }}
 		>
 			<span className="min-w-0 flex-1 truncate font-medium text-xs leading-tight">
