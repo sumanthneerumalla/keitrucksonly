@@ -219,6 +219,20 @@ body {
 	letter-spacing: 0.04em;
 }
 
+/* Widen hour columns in horizontal resource views so event titles aren't
+ * clipped. ilamy hardcodes `min-w-20 flex-1` (80px floor) on every header
+ * hour label AND every body event cell — both share the class so the
+ * header and body grid stay aligned when we lift the floor. Bumping to
+ * 128px gives short 1-hour bookings ~16 characters of room (fits labels
+ * like "League Night", "Round Robin", "Adv. Clinic"); longer events scale
+ * linearly. The horizontal-grid-scroll wrapper handles the extra width
+ * via overflow-x. !important is required because utility classes win the
+ * cascade against attribute selectors. Tweak the value to widen further
+ * (introduces more horizontal scrolling on desktop). */
+[data-calendar-root] .min-w-20 {
+	min-width: 128px !important;
+}
+
 /* Horizontal row separators in the resources column. ilamy applies
  * border-b only to the time-grid cells on the right, not to the
  * sticky resource label cells on the left — so resource rows visually
