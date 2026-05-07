@@ -28,7 +28,7 @@ function DeployStamp() {
 			className="mt-6 font-mono text-[12px] text-white/55 uppercase tracking-[0.06em]"
 			title={shaShort}
 		>
-			{`// deployed ${ago}`}
+			{`// Last Deployed:  ${ago}`}
 		</div>
 	);
 }
