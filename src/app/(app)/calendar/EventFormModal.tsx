@@ -137,6 +137,29 @@ export default function EventFormModal({
 	// Populate form when modal opens
 	useEffect(() => {
 		if (!open) return;
+		// [debug-eventcreate] dump selectedEvent on form open. Pair with handleSave
+		// log to trace where `end` becomes Invalid Date in BYDAY-recurring create.
+		console.log("[debug-eventcreate] populate effect", {
+			isEdit,
+			hasSelectedEvent: !!selectedEvent,
+			selectedEventId: selectedEvent?.id,
+			selectedEventStart: selectedEvent?.start,
+			selectedEventEnd: selectedEvent?.end,
+			startIsDayjs: selectedEvent?.start
+				? dayjs.isDayjs(selectedEvent.start)
+				: "no-start",
+			endIsDayjs: selectedEvent?.end
+				? dayjs.isDayjs(selectedEvent.end)
+				: "no-end",
+			startIsValid:
+				selectedEvent?.start && dayjs.isDayjs(selectedEvent.start)
+					? selectedEvent.start.isValid()
+					: "n/a",
+			endIsValid:
+				selectedEvent?.end && dayjs.isDayjs(selectedEvent.end)
+					? selectedEvent.end.isValid()
+					: "n/a",
+		});
 		// Reset rental-specific fields on every open; the second useEffect seeds them
 		// from fetchedEvent for edits and they stay at defaults for new events.
 		setResourceIds([]);
@@ -471,6 +494,30 @@ export default function EventFormModal({
 			: undefined;
 		const startDate = dayjs(start).toDate();
 		const endDate = dayjs(end).toDate();
+
+		// [debug-eventcreate] dump form state right before mutation fires.
+		// Bug: createEvent payload sometimes shows end as Invalid Date for BYDAY rrule.
+		// Goal: confirm whether `end` state is empty/Invalid here vs corrupted elsewhere.
+		console.log("[debug-eventcreate] handleSave", {
+			startState: start,
+			endState: end,
+			startDateValid: !Number.isNaN(startDate.getTime()),
+			endDateValid: !Number.isNaN(endDate.getTime()),
+			startDate: startDate.toString(),
+			endDate: endDate.toString(),
+			rruleString,
+			eventType,
+			isEdit,
+			allDay,
+			selectedEventStart: selectedEvent?.start,
+			selectedEventEnd: selectedEvent?.end,
+			selectedEventStartIsDayjs: selectedEvent?.start
+				? dayjs.isDayjs(selectedEvent.start)
+				: "no-start",
+			selectedEventEndIsDayjs: selectedEvent?.end
+				? dayjs.isDayjs(selectedEvent.end)
+				: "no-end",
+		});
 
 		if (eventType === "RENTAL_WINDOW") {
 			if (resourceIds.length === 0) {

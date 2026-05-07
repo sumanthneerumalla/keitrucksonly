@@ -159,6 +159,21 @@ export default function CalendarClient() {
 			...(effectiveFacilityId && { facilityId: effectiveFacilityId }),
 		});
 
+	// [debug-resources] log fetch state for "1 court shown when 2 exist" bug —
+	// runs every render so we can see how effectiveFacilityId and resourcesData
+	// evolve as user data loads / facility is switched.
+	console.log("[debug-resources] query state", {
+		effectiveFacilityId,
+		userActiveFacilityId: user?.activeFacilityId,
+		selectedFacilityId,
+		queryInput: effectiveFacilityId ? { facilityId: effectiveFacilityId } : {},
+		userLoading,
+		resourcesLoading,
+		rawCount: resourcesData?.resources.length ?? null,
+		rawIds: resourcesData?.resources.map((r) => r.resourceId) ?? null,
+		rawFacilityIds: resourcesData?.resources.map((r) => r.facilityId) ?? null,
+	});
+
 	// Fetch events — gated on profile load so timezone is known before the first range is computed
 	const { data: eventsData, isLoading: eventsLoading } =
 		api.calendar.getEvents.useQuery(
