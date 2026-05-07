@@ -215,8 +215,14 @@ body {
 [data-calendar-root]
 	[data-testid^="resource-week-time-label-"]:not(:has(div)) {
 	font-family: var(--font-mono);
-	color: var(--ink-3);
-	letter-spacing: 0.04em;
+	color: var(--ink);
+	/* Bumping past ilamy's `text-[10px] sm:text-xs` (10-12px) so JetBrains
+	 * Mono lands above its hinting-rough small-size zone. Weight 500 gives
+	 * the glyphs enough body to stay legible against warm paper without
+	 * looking bold. !important is required to beat the Tailwind text-size
+	 * utilities ilamy bakes into the cell className. */
+	font-size: 13px !important;
+	font-weight: 500;
 }
 
 /* Widen hour columns in horizontal resource views so event titles aren't
@@ -231,6 +237,31 @@ body {
  * (introduces more horizontal scrolling on desktop). */
 [data-calendar-root] .min-w-20 {
 	min-width: 128px !important;
+}
+
+/* Event bars fill the resource row vertically with a small bottom margin,
+ * so adjacent resources still have visible separation. ilamy hardcodes
+ * `height: 24px` (its internal G0 constant) as an inline style on every
+ * `[data-testid^="horizontal-event-"]` div, and the child renderer inside
+ * uses `h-full` so it stretches with the parent. !important is required
+ * to beat the inline style.
+ *
+ * `calc(100% - 4px)` picks up whatever row height ilamy ultimately gives
+ * (currently min-h-[60px]) and trims 4px off the bottom. Combined with
+ * ilamy's natural `top: 1px`, that leaves ~1px above the event and ~3px
+ * below — plus the row's border-b gives an extra pixel of separator
+ * between resources. Asymmetric on purpose: overriding `top` would also
+ * break ilamy's stacking math (events of different stackIndex all
+ * collapse to the same top), so we leave `top` alone.
+ *
+ * Caveat: ilamy's stacking math (`top = baseOffset + stackIndex * (G0 + gap)`)
+ * still uses 24px as the unit, so when two events overlap in time on the
+ * SAME resource row, the second event's `top` lands 24px below the first
+ * — taller bars then visually collide. Court calendars rarely double-book
+ * a single court, so this is a no-op for the common case; revisit if
+ * stacked-overlap layouts become real. */
+[data-calendar-root] [data-testid^="horizontal-event-"] {
+	height: calc(100% - 4px) !important;
 }
 
 /* Horizontal row separators in the resources column. ilamy applies
