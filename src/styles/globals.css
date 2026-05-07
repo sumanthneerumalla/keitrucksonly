@@ -83,13 +83,16 @@
 }
 
 /* ---------------------------------------------------------------------------
- * --background is white globally so ilamy sticky cells, Sheet drawers, and
- * all shadcn components get solid white backgrounds (including ilamy's
+ * --background stays white globally so ilamy sticky cells, Sheet drawers, and
+ * all shadcn components keep solid white backgrounds (including ilamy's
  * portalled view-switcher modal which escapes any scoped override).
- * The page shell blue-grey tint is applied directly on body below.
+ * The page shell warm-paper tint is applied directly on body below — the
+ * authed app inherits the marketing palette while individual cards and
+ * sheets keep their own opaque backgrounds.
  * ---------------------------------------------------------------------------*/
 body {
-	background-color: rgb(246 249 252);
+	background-color: var(--paper);
+	color: var(--ink);
 }
 
 /* ilamy resource calendar: each resource row renders border-b on its cells.
@@ -247,25 +250,37 @@ body {
 }
 
 @layer components {
-	/* Glass components */
+	/* Card primitives — paper-aware refresh of the legacy authed-app shell.
+	 * Mirrors the marketing .mk-card aesthetic (warm paper, soft line border,
+	 * 18px radius, hover lift). Padding is intentionally NOT set so existing
+	 * callers keep control of their own internal spacing. */
 	.glass-card {
-		background-color: white;
-		border: 1px solid var(--border);
-		box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+		background-color: var(--paper);
+		border: 1px solid var(--line);
+		border-radius: 18px;
+		transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s
+			ease;
+	}
+	.glass-card:hover {
+		border-color: var(--line-2);
+		transform: translateY(-2px);
+		box-shadow: 0 1px 0 rgba(20, 19, 14, 0.04), 0 6px 24px -8px
+			rgba(20, 19, 14, 0.1);
 	}
 
 	.glass-panel {
-		background-color: white;
-		border: 1px solid var(--border);
-		box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -2px
-			rgb(0 0 0 / 0.05);
+		background-color: var(--paper);
+		border: 1px solid var(--line);
+		border-radius: 18px;
+		box-shadow: 0 1px 0 rgba(20, 19, 14, 0.04), 0 6px 24px -8px
+			rgba(20, 19, 14, 0.08);
 	}
 
 	/* Inset container — subdued background for form areas, editors, nested panels */
 	.glass-inset {
-		background-color: rgb(249 250 251); /* gray-50 */
-		border: 1px solid rgb(243 244 246); /* gray-100 */
-		border-radius: 0.5rem; /* rounded-lg */
+		background-color: var(--paper-2);
+		border: 1px solid var(--line);
+		border-radius: 0.5rem;
 	}
 
 	/* Badge components */
@@ -361,29 +376,21 @@ body {
 		background-color: var(--accent);
 	}
 
-	/* Section styles */
+	/* Section styles — matched to marketing h2 visual rhythm
+	 * (display font, ink color, tighter kerning, smoother responsive scale). */
 	.section-heading {
-		font-size: 1.5rem;
-		font-weight: 700;
-		letter-spacing: -0.025em;
+		font-family: var(--font-display);
+		font-size: clamp(1.5rem, 3vw, 2.25rem);
+		line-height: 1.1;
+		font-weight: 600;
+		letter-spacing: -0.028em;
+		color: var(--ink);
 		margin-bottom: 1rem;
-	}
-
-	@media (min-width: 640px) {
-		.section-heading {
-			font-size: 1.875rem;
-		}
-	}
-
-	@media (min-width: 768px) {
-		.section-heading {
-			font-size: 2.25rem;
-		}
 	}
 
 	.section-subheading {
 		font-size: 1rem;
-		color: rgb(107 114 128);
+		color: var(--ink-3);
 		max-width: 48rem;
 		margin-left: auto;
 		margin-right: auto;
@@ -565,6 +572,14 @@ body {
 	.btn-sm {
 		padding: 8px 14px;
 		font-size: 14px;
+	}
+
+	/* Shared shadow used by the brand-fill pill button (shadcn Button default
+	 * variant). Lifted into its own utility so the multi-stop box-shadow stays
+	 * readable instead of getting crammed into a Tailwind arbitrary value. */
+	.shadow-brand-pill {
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 6px 18px -6px
+			var(--brand);
 	}
 
 	.kbd {
