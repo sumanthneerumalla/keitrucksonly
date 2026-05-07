@@ -70,6 +70,8 @@ export BUILD_TIMESTAMP="$(date -Iseconds)"
 #       layers immediately after build completes — avoid that in automation.
 #   - volumes:prune:dev: cleans the orphan /app/node_modules anonymous volume
 #       that the app service creates per redeploy (see docker-compose.yml).
+#       Wrapped in `|| true` — its safety guard can race with `up -d`, and a
+#       prune-only failure shouldn't cause cron to retry the whole rebuild.
 if npm run docker:dev:redeploy:detached >> "$LOG_FILE" 2>&1; then
   echo "$REMOTE" > "$DEPLOYED_FILE"
   log "redeploy ok @ $(git rev-parse --short HEAD)"
