@@ -192,6 +192,33 @@ body {
 	color: var(--brand-ink) !important;
 }
 
+/* Time-of-day labels — adopt the marketing CalendarMock's mono + ink-3
+ * aesthetic so the live calendar reads like the home-page product preview.
+ *
+ * Targets:
+ *  - Vertical day/week time gutter via the column container's
+ *    `vertical-col-time-col` test ID — font-family inherits to the
+ *    renderCell text inside (the column has `gridType: "hour"` with
+ *    `noEvents: true`, so the only text inside is hour labels).
+ *  - Horizontal resource day/week hour labels via the templated
+ *    `resource-{day|week}-time-label-${HH}` test IDs.
+ *
+ * The week-resource view reuses the same `resource-week-time-label-`
+ * testid prefix for the day-of-week column header (Mon / Tue /…) which
+ * nests two <div>s; `:not(:has(div))` skips those so the mono treatment
+ * lands only on actual hour cells.
+ *
+ * No !important — the current-hour brand-ink override above keeps its
+ * color. */
+[data-calendar-root] [data-testid="vertical-col-time-col"],
+[data-calendar-root] [data-testid^="resource-day-time-label-"],
+[data-calendar-root]
+	[data-testid^="resource-week-time-label-"]:not(:has(div)) {
+	font-family: var(--font-mono);
+	color: var(--ink-3);
+	letter-spacing: 0.04em;
+}
+
 /* Horizontal row separators in the resources column. ilamy applies
  * border-b only to the time-grid cells on the right, not to the
  * sticky resource label cells on the left — so resource rows visually
