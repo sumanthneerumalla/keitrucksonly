@@ -53,9 +53,23 @@ git reset --hard "$REMOTE" >> "$LOG_FILE" 2>&1
 export BUILD_SHA="$REMOTE"
 export BUILD_TIMESTAMP="$(date -Iseconds)"
 
-# Detached sibling of `docker:dev:redeploy`: same down → image prune → up
-# pipeline, but with `-d` (so cron doesn't hang on foreground logs) and a
-# trailing `docker container prune -f` for stopped containers.
+# Detached sibling of `docker:dev:redeploy` (see package.json). Pipeline:
+#   build → stop → up -d → image/container/builder/volume prune
+# with `-d` so cron doesn't hang on foreground logs.
+#
+# Disk hygiene cadence (each step runs every redeploy):
+#   - image prune     --filter until=168h: keep one week of old images
+#   - container prune --filter until=168h: keep one week of stopped containers
+#       so `docker logs <prev-container-id>` still works for post-mortems
+#       (default json-file driver stores logs inside each container, so
+#       pruning a stopped container destroys its logs with it).
+#   - builder prune   --keep-storage 12G: bound BuildKit cache. Sized from
+#       a clean-build measurement: dev image = 2.5GB, dev+prod = ~5GB
+#       successfully built; 12G gives ~2x headroom so a redeploy never has
+#       to rebuild from scratch. Plain `--force` (no size cap) wipes cache
+#       layers immediately after build completes — avoid that in automation.
+#   - volumes:prune:dev: cleans the orphan /app/node_modules anonymous volume
+#       that the app service creates per redeploy (see docker-compose.yml).
 if npm run docker:dev:redeploy:detached >> "$LOG_FILE" 2>&1; then
   echo "$REMOTE" > "$DEPLOYED_FILE"
   log "redeploy ok @ $(git rev-parse --short HEAD)"
