@@ -5,33 +5,22 @@ import { CTASection } from "~/app/_components/client/public/marketing/CTASection
 import { FAQ } from "~/app/_components/client/public/marketing/FAQ";
 import { SectionHead } from "~/app/_components/client/public/marketing/SectionHead";
 import { CALENDLY_URL } from "~/lib/marketing";
+import { type Plan, PlansSection } from "./PlansClient";
 
 export const metadata: Metadata = {
 	title: "Pricing | Facility Presence",
 	description:
-		"Honest pricing for racquet clubs. Free for up to 100 members, $149/mo for up to 3 locations, custom for everything else. No per-transaction fees.",
+		"Honest pricing for racquet clubs. Free for up to 100 members, $300/mo (or $250/mo billed annually) for up to 3 locations, custom for everything else. No per-transaction fees.",
 };
 
-interface Plan {
-	id: string;
-	name: string;
-	forWho: string;
-	price: string | null;
-	priceSuffix?: string;
-	custom?: string;
-	anchor: string;
-	cta: string;
-	popular: boolean;
-	includes: string[];
-}
-
+// Yearly pricing is "2 months free" — pay 10 months when billing annually.
+// Growth: $300/mo monthly  →  $250/mo billed annually  ($3,000/yr)
 const PLANS: Plan[] = [
 	{
 		id: "free",
 		name: "Free",
 		forWho: "Solo operators getting started",
-		price: "$0",
-		priceSuffix: "/ month",
+		pricing: { monthly: 0, yearly: 0 },
 		anchor: "Up to 100 members, 1 location",
 		cta: "Let's talk",
 		popular: false,
@@ -50,8 +39,7 @@ const PLANS: Plan[] = [
 		id: "growth",
 		name: "Growth",
 		forWho: "Independent clubs running leagues, lessons, retail",
-		price: "$149",
-		priceSuffix: "/ month",
+		pricing: { monthly: 300, yearly: 250 },
 		anchor: "Up to 3 locations, unlimited members",
 		cta: "Let's talk",
 		popular: true,
@@ -71,7 +59,7 @@ const PLANS: Plan[] = [
 		id: "scale",
 		name: "Custom",
 		forWho: "Multi-location operators (4+) and enterprise",
-		price: null,
+		pricing: null,
 		custom: "Let's talk",
 		anchor: "Unlimited locations, SSO, dedicated CSM",
 		cta: "Let's talk",
@@ -200,129 +188,6 @@ function PageHero() {
 	);
 }
 
-function PlanCard({ p }: { p: Plan }) {
-	const popular = p.popular;
-	return (
-		<div
-			className={`relative flex flex-col rounded-[22px] p-8 ${
-				popular
-					? "bg-[var(--ink)] text-[var(--paper)]"
-					: "border border-[var(--line)] bg-[var(--paper)] text-[var(--ink)]"
-			}`}
-			style={
-				popular
-					? {
-							boxShadow: "0 32px 80px -30px rgba(79,70,229,0.5)",
-							border: "1px solid var(--ink)",
-						}
-					: {
-							boxShadow:
-								"0 1px 0 rgba(20,19,14,.04), 0 1px 2px rgba(20,19,14,.05)",
-						}
-			}
-		>
-			{popular ? (
-				<span className="-top-3 absolute left-6 rounded-full bg-[var(--brand)] px-2.5 py-1 font-mono font-semibold text-[11px] text-white uppercase tracking-[0.1em]">
-					Most popular
-				</span>
-			) : null}
-			<div
-				className="font-mono text-[11px] uppercase tracking-[0.12em]"
-				style={{ color: popular ? "rgba(250,248,243,0.6)" : "var(--ink-3)" }}
-			>
-				{p.name}
-			</div>
-			<div
-				className="mt-2 min-h-[42px] text-[14px]"
-				style={{ color: popular ? "rgba(250,248,243,0.7)" : "var(--ink-2)" }}
-			>
-				{p.forWho}
-			</div>
-
-			<div className="mt-5 flex items-baseline gap-1.5">
-				{p.price ? (
-					<>
-						<span className="font-semibold text-[56px] leading-none tracking-[-0.03em]">
-							{p.price}
-						</span>
-						<span
-							className="text-[14px]"
-							style={{
-								color: popular ? "rgba(250,248,243,0.6)" : "var(--ink-3)",
-							}}
-						>
-							{p.priceSuffix}
-						</span>
-					</>
-				) : (
-					<span className="font-semibold text-[44px] tracking-[-0.02em]">
-						{p.custom}
-					</span>
-				)}
-			</div>
-			<div
-				className="mt-1.5 text-[13px]"
-				style={{ color: popular ? "rgba(250,248,243,0.55)" : "var(--ink-3)" }}
-			>
-				{p.anchor}
-			</div>
-
-			<a
-				href={CALENDLY_URL}
-				target="_blank"
-				rel="noopener noreferrer"
-				className={popular ? "btn btn-primary" : "btn btn-secondary"}
-				style={{ marginTop: 22, justifyContent: "center" }}
-			>
-				{p.cta} <span className="arrow">→</span>
-			</a>
-
-			<ul className="m-0 mt-6 flex list-none flex-col gap-2.5 p-0">
-				{p.includes.map((it) => (
-					<li key={it} className="flex items-start gap-2.5 text-[14px]">
-						<CheckCircle
-							size={16}
-							className="mt-0.5 flex-shrink-0"
-							style={{
-								color: popular ? "var(--brand-200)" : "var(--brand)",
-							}}
-						/>
-						<span>{it}</span>
-					</li>
-				))}
-			</ul>
-		</div>
-	);
-}
-
-function Plans() {
-	return (
-		<section className="pb-16">
-			<div className="container mx-auto px-4">
-				<div className="grid grid-cols-1 items-stretch gap-[22px] lg:grid-cols-3">
-					{PLANS.map((p) => (
-						<PlanCard key={p.id} p={p} />
-					))}
-				</div>
-				<div className="mt-6 flex flex-wrap justify-center gap-4 text-[13.5px] text-[var(--ink-3)]">
-					<span className="inline-flex items-center gap-1.5">
-						<CheckCircle size={14} className="text-[var(--good)]" />
-						No credit card to start
-					</span>
-					<span className="inline-flex items-center gap-1.5">
-						<CheckCircle size={14} className="text-[var(--good)]" />
-						Cancel anytime
-					</span>
-					<span className="inline-flex items-center gap-1.5">
-						<CheckCircle size={14} className="text-[var(--good)]" />
-						Free migration on Growth & Custom
-					</span>
-				</div>
-			</div>
-		</section>
-	);
-}
-
 function ROIComparison() {
 	const stack: Array<[string, number]> = [
 		["Booking software", 99],
@@ -332,7 +197,9 @@ function ROIComparison() {
 		["Front-desk hours saved (10 hr/wk × $20)", 800],
 	];
 	const total = stack.reduce((a, [, v]) => a + v, 0);
-	const fp = 149;
+	// Compare ROI against Growth's monthly price (conservative — most clubs start
+	// monthly). Falls back to 0 if Growth is removed; the layout still renders.
+	const fp = PLANS.find((p) => p.id === "growth")?.pricing?.monthly ?? 0;
 
 	return (
 		<section className="bg-[var(--paper-2)] py-20 md:py-[120px]">
@@ -535,7 +402,7 @@ export default function PricingPage() {
 	return (
 		<div className="marketing-page">
 			<PageHero />
-			<Plans />
+			<PlansSection plans={PLANS} />
 			<ROIComparison />
 			<ComparisonTable />
 			<Guarantee />
