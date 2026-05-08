@@ -57,9 +57,14 @@ git reset --hard "$REMOTE" >> "$LOG_FILE" 2>&1
 export BUILD_SHA="$REMOTE"
 export BUILD_TIMESTAMP="$(date -Iseconds)"
 
-# Detached sibling of `docker:prod:redeploy`: same down → image prune → up
-# pipeline, but with `-d` (so cron doesn't hang on foreground logs) and a
-# trailing `docker container prune -f` for stopped containers.
+# Detached sibling of `docker:prod:redeploy` (see package.json). Pipeline:
+#   build → stop → up -d → image/container/builder/volume prune
+# with `-d` so cron doesn't hang on foreground logs.
+#
+# Disk hygiene cadence — kept identical to dev so a single host running both
+# pollers has predictable steady-state disk usage. See poll-dev-redeploy.sh
+# for the rationale behind each filter value (notably builder prune's
+# --keep-storage 12G, sized from a clean-build measurement).
 if npm run docker:prod:redeploy:detached >> "$LOG_FILE" 2>&1; then
   echo "$REMOTE" > "$DEPLOYED_FILE"
   log "redeploy ok @ $(git rev-parse --short HEAD)"
