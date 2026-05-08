@@ -2,9 +2,12 @@
 # Cron-driven dev deploy poller. Install via crontab:
 #   * * * * * /home/<user>/Desktop/projects/shuttleMentor/scripts/poll-dev-redeploy.sh
 # Polls origin/dev once per minute; on advance, hard-resets local dev,
-# redeploys the dev compose stack detached, prunes stopped containers
-# (volumes preserved). State (lock, log, last-deployed sha) lives in
-# ~/.shuttlementor-dev-poll/ so `git reset --hard` cannot wipe it.
+# redeploys the dev compose stack detached. State (lock, log, last-
+# deployed sha) lives in ~/.shuttlementor-dev-poll/ so `git reset --hard`
+# cannot wipe it. Container logs are snapshotted to <repo>/logs/ before
+# each redeploy (see scripts/snapshot-logs.sh); old snapshots are
+# pruned below on every tick (independent of redeploys, so retention
+# kicks in even during long quiet periods).
 
 set -euo pipefail
 
@@ -30,6 +33,10 @@ cd "$REPO_DIR"
 
 log() { printf '%s %s\n' "$(date -Iseconds)" "$*" >> "$LOG_FILE"; }
 
+# Retention sweep on every tick (cheap on a small dir). Runs independent
+# of redeploys so the 14-day cap holds even when origin/dev is quiet.
+find "$REPO_DIR/logs" -name "*.log.gz" -mtime +14 -delete 2>/dev/null || true
+
 if ! git fetch --quiet origin "$BRANCH"; then
   log "fetch failed; retrying next tick"
   exit 0
@@ -54,15 +61,15 @@ export BUILD_SHA="$REMOTE"
 export BUILD_TIMESTAMP="$(date -Iseconds)"
 
 # Detached sibling of `docker:dev:redeploy` (see package.json). Pipeline:
-#   build → stop → up -d → image/container/builder/volume prune
+#   build → snapshot-logs → stop → up -d → image/container/builder/volume prune
 # with `-d` so cron doesn't hang on foreground logs.
 #
 # Disk hygiene cadence (each step runs every redeploy):
-#   - image prune     --filter until=168h: keep one week of old images
-#   - container prune --filter until=168h: keep one week of stopped containers
-#       so `docker logs <prev-container-id>` still works for post-mortems
-#       (default json-file driver stores logs inside each container, so
-#       pruning a stopped container destroys its logs with it).
+#   - snapshot-logs:dev: gzip current container logs to <repo>/logs/ before
+#       `compose down` destroys them. Best-effort; never fails the deploy.
+#   - image prune     --filter until=168h: keep one week of old images.
+#   - container prune --filter until=168h: plain stopped-container hygiene
+#       (logs are already preserved by the snapshot step above).
 #   - builder prune   --keep-storage 12G: bound BuildKit cache. Sized from
 #       a clean-build measurement: dev image = 2.5GB, dev+prod = ~5GB
 #       successfully built; 12G gives ~2x headroom so a redeploy never has
