@@ -9,12 +9,12 @@ import { CalendarDays, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import EventFormModal from "~/app/(app)/calendar/EventFormModal";
-import { toDateInputValue, parseLocalDate } from "~/app/(app)/rentals/utils";
+import { parseLocalDate, toDateInputValue } from "~/app/(app)/rentals/utils";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { FacilitySelector } from "~/app/_components/shared/FacilitySelector";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
-import { DEFAULT_BG_COLOR, DEFAULT_COLOR, isFacilityOrAbove } from "~/lib/utils";
+import { useToast } from "~/app/_components/shared/Toast";
+import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
 const DEFAULT_RESOURCE_BUSINESS_HOURS = {
@@ -35,7 +35,7 @@ const DEFAULT_RESOURCE_BUSINESS_HOURS = {
 
 export default function RentalWindowsClient() {
 	const router = useRouter();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const utils = api.useUtils();
 
 	const [selectedDate, setSelectedDate] = useState(() =>
@@ -58,10 +58,10 @@ export default function RentalWindowsClient() {
 
 	const canManage = user ? isFacilityOrAbove(user) : false;
 
-	const { data: facilityMemberships } = api.user.getFacilityMemberships.useQuery(
-		undefined,
-		{ enabled: !isUserLoading && !!user },
-	);
+	const { data: facilityMemberships } =
+		api.user.getFacilityMemberships.useQuery(undefined, {
+			enabled: !isUserLoading && !!user,
+		});
 
 	const effectiveFacilityId =
 		selectedFacilityId ?? user?.activeFacilityId ?? null;
@@ -102,8 +102,12 @@ export default function RentalWindowsClient() {
 		return resourcesData.resources.map((r) => ({
 			id: r.resourceId,
 			title: r.title,
-			color: r.color ?? DEFAULT_COLOR,
-			backgroundColor: r.backgroundColor ?? DEFAULT_BG_COLOR,
+			// Pass-through DB color/bg only when set; otherwise undefined so
+			// ilamy renders with no inline style and the cell inherits the
+			// calendar's neutral cascade. Matches CalendarClient and
+			// PublicCalendarClient behaviour for consistency.
+			color: r.color ?? undefined,
+			backgroundColor: r.backgroundColor ?? undefined,
 			position: r.position,
 			businessHours:
 				r.businessHours.length > 0
@@ -142,7 +146,11 @@ export default function RentalWindowsClient() {
 		setShowModal(true);
 	};
 
-	const handleDelete = (eventId: string, title: string, e: React.MouseEvent) => {
+	const handleDelete = (
+		eventId: string,
+		title: string,
+		e: React.MouseEvent,
+	) => {
 		e.stopPropagation();
 		setDeleteTarget({ eventId, title });
 	};
@@ -204,7 +212,6 @@ export default function RentalWindowsClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -285,8 +292,15 @@ export default function RentalWindowsClient() {
 										{new Date(w.start).toLocaleDateString()}
 									</td>
 									<td className="px-4 py-3 text-[var(--foreground)] text-sm">
-										{new Date(w.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} -{" "}
-										{new Date(w.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+										{new Date(w.start).toLocaleTimeString([], {
+											hour: "2-digit",
+											minute: "2-digit",
+										})}{" "}
+										-{" "}
+										{new Date(w.end).toLocaleTimeString([], {
+											hour: "2-digit",
+											minute: "2-digit",
+										})}
 									</td>
 									<td className="px-4 py-3 text-[var(--foreground)] text-sm">
 										{w.courts.map((c) => c.title).join(", ")}

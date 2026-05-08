@@ -221,8 +221,7 @@ export default function EventFormModal({
 	const { data: productsData } = api.products.getProducts.useQuery(
 		{},
 		{
-			enabled:
-				!!open && eventType !== "BLOCK" && eventType !== "RENTAL_WINDOW",
+			enabled: !!open && eventType !== "BLOCK" && eventType !== "RENTAL_WINDOW",
 		},
 	);
 
@@ -732,10 +731,7 @@ export default function EventFormModal({
 							<label className="font-medium text-[var(--foreground)] text-sm">
 								Courts <span className="text-red-500">*</span>
 							</label>
-							<Popover
-								open={courtPickerOpen}
-								onOpenChange={setCourtPickerOpen}
-							>
+							<Popover open={courtPickerOpen} onOpenChange={setCourtPickerOpen}>
 								<PopoverTrigger asChild>
 									<button
 										type="button"
@@ -750,9 +746,7 @@ export default function EventFormModal({
 										>
 											{resourceIds.length ? (
 												resourceIds.map((rid) => {
-													const r = resources.find(
-														(res) => res.id === rid,
-													);
+													const r = resources.find((res) => res.id === rid);
 													return (
 														<span
 															key={rid}
@@ -872,9 +866,7 @@ export default function EventFormModal({
 							<RecurrenceEditor
 								value={rruleOpts}
 								onChange={setRruleOpts}
-								disabled={
-									isEdit && eventType === "BLOCK" && scope !== "ALL"
-								}
+								disabled={isEdit && eventType === "BLOCK" && scope !== "ALL"}
 								disabledReason="Pattern can only be changed when scope is 'All events in series'."
 							/>
 						</div>
@@ -882,30 +874,26 @@ export default function EventFormModal({
 
 					{/* Recurrence scope selector — shown when editing a recurring event.
 					    Hidden for RENTAL_WINDOW: backend is series-level only (no per-instance scope). */}
-					{isEdit &&
-						fetchedEvent?.rrule &&
-						eventType !== "RENTAL_WINDOW" && (
-							<div className="space-y-1">
-								<label className="font-medium text-[var(--foreground)] text-sm">
-									Edit scope
-								</label>
-								<Select
-									value={scope}
-									onChange={(e) =>
-										setScope(
-											e.target.value as "THIS" | "THIS_AND_FUTURE" | "ALL",
-										)
-									}
-									className="h-9"
-								>
-									<option value="ALL">All events in series</option>
-									<option value="THIS">This event only</option>
-									<option value="THIS_AND_FUTURE">
-										This and following events
-									</option>
-								</Select>
-							</div>
-						)}
+					{isEdit && fetchedEvent?.rrule && eventType !== "RENTAL_WINDOW" && (
+						<div className="space-y-1">
+							<label className="font-medium text-[var(--foreground)] text-sm">
+								Edit scope
+							</label>
+							<Select
+								value={scope}
+								onChange={(e) =>
+									setScope(e.target.value as "THIS" | "THIS_AND_FUTURE" | "ALL")
+								}
+								className="h-9"
+							>
+								<option value="ALL">All events in series</option>
+								<option value="THIS">This event only</option>
+								<option value="THIS_AND_FUTURE">
+									This and following events
+								</option>
+							</Select>
+						</div>
+					)}
 
 					{/* Color picker */}
 					<div className="space-y-2">
@@ -992,19 +980,34 @@ export default function EventFormModal({
 							<label className="font-medium text-[var(--foreground)] text-sm">
 								Linked Product
 							</label>
-							<Popover open={productPickerOpen} onOpenChange={setProductPickerOpen}>
+							<Popover
+								open={productPickerOpen}
+								onOpenChange={setProductPickerOpen}
+							>
 								<PopoverTrigger asChild>
 									<button
 										type="button"
 										className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 text-sm shadow-sm transition-colors hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring"
 									>
-										<span className={productId ? "text-[var(--foreground)]" : "text-[var(--muted-foreground)]"}>
+										<span
+											className={
+												productId
+													? "text-[var(--foreground)]"
+													: "text-[var(--muted-foreground)]"
+											}
+										>
 											{selectedProductLabel}
 										</span>
-										<ChevronsUpDown size={14} className="ml-2 shrink-0 opacity-50" />
+										<ChevronsUpDown
+											size={14}
+											className="ml-2 shrink-0 opacity-50"
+										/>
 									</button>
 								</PopoverTrigger>
-								<PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+								<PopoverContent
+									className="w-[--radix-popover-trigger-width] p-0"
+									align="start"
+								>
 									<Command>
 										<CommandInput placeholder="Search products..." />
 										<CommandList>
@@ -1021,18 +1024,18 @@ export default function EventFormModal({
 												{productsData?.products
 													.filter((p) => p.isActive)
 													.map((p) => (
-													<CommandItem
-														key={p.productId}
-														value={p.name}
-														onSelect={() => {
-															setProductId(p.productId);
-															setProductPickerOpen(false);
-														}}
-													>
-														{p.name} ($
-														{(p.priceInCents / 100).toFixed(2)})
-													</CommandItem>
-												))}
+														<CommandItem
+															key={p.productId}
+															value={p.name}
+															onSelect={() => {
+																setProductId(p.productId);
+																setProductPickerOpen(false);
+															}}
+														>
+															{p.name} ($
+															{(p.priceInCents / 100).toFixed(2)})
+														</CommandItem>
+													))}
 											</CommandGroup>
 										</CommandList>
 									</Command>

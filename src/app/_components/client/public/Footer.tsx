@@ -69,7 +69,7 @@ function Col({
 	);
 }
 
-export function Footer() {
+export function Footer({ deployStamp }: { deployStamp?: React.ReactNode }) {
 	return (
 		<footer className="bg-[var(--ink)] text-white/70" id="resources">
 			<div className="container mx-auto px-4 py-16 md:py-20">
@@ -185,6 +185,7 @@ export function Footer() {
 						</a>
 					</div>
 				</div>
+				{deployStamp}
 			</div>
 		</footer>
 	);

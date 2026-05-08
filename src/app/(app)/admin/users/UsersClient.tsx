@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUrlPagination } from "~/app/_components/hooks/use-url-pagination";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { PaginationControls } from "~/app/_components/shared/ui/pagination-controls";
 import {
 	Command,
@@ -612,7 +612,7 @@ export default function UsersClient({
 	clubShortName: string;
 }) {
 	const utils = api.useUtils();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const {
 		page,
 		limit,
@@ -803,7 +803,6 @@ export default function UsersClient({
 
 	return (
 		<div className="p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Header */}
 			<div className="mb-6 flex items-center justify-between">

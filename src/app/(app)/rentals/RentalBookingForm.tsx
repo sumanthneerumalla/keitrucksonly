@@ -5,7 +5,7 @@ import { useSearchParams, usePathname } from "next/navigation";
 import { useState, useMemo } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
+import { useToast } from "~/app/_components/shared/Toast";
 import { formatTime } from "~/app/(app)/rentals/utils";
 import { api } from "~/trpc/react";
 
@@ -29,7 +29,7 @@ export default function RentalBookingForm({
 	const { isSignedIn } = useAuth();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
-	const { toasts, toast, dismiss } = useToast();
+	const { toast } = useToast();
 	const utils = api.useUtils();
 
 	const [selectedCourtId, setSelectedCourtId] = useState(
@@ -161,7 +161,6 @@ export default function RentalBookingForm({
 
 	return (
 		<div className="space-y-4">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
 
 			{/* Court selector */}
 			{courts.length > 1 && (

@@ -12,12 +12,23 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 // ---------------------------------------------------------------------------
-// Default calendar resource colors (hex — used in inline styles and DB values).
-// Import these instead of hardcoding "#4F46E5" / "#EFF6FF" in calendar files.
+// Color-picker defaults for the Manage Resources form (Resource Type and
+// per-Resource forms). Used as the starting hex shown when an operator
+// opts into "Customize colors" without picking anything.
+//
+// - Text default = brand indigo: a recognizable starting point that
+//   operators are likely to override anyway.
+// - Bg default = warm paper: matches the calendar's neutral cell
+//   background, so opting into custom text-color but leaving the bg as-is
+//   stays visually consistent with the rest of the calendar.
+//
+// These are NOT applied as a fallback at render time — resources without
+// stored colors render via the [data-calendar-root] cascade (paper bg,
+// ink text). They're purely UI placeholders for the form's color pickers.
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_COLOR = "#4F46E5"; // matches --primary
-export const DEFAULT_BG_COLOR = "#EFF6FF"; // matches --accent
+export const DEFAULT_COLOR = "#4F46E5"; // matches --primary / --brand
+export const DEFAULT_BG_COLOR = "#FAF8F3"; // matches --paper
 
 // ---------------------------------------------------------------------------
 // Role helpers — pure functions, safe for both server and client components.

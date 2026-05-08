@@ -83,13 +83,16 @@
 }
 
 /* ---------------------------------------------------------------------------
- * --background is white globally so ilamy sticky cells, Sheet drawers, and
- * all shadcn components get solid white backgrounds (including ilamy's
+ * --background stays white globally so ilamy sticky cells, Sheet drawers, and
+ * all shadcn components keep solid white backgrounds (including ilamy's
  * portalled view-switcher modal which escapes any scoped override).
- * The page shell blue-grey tint is applied directly on body below.
+ * The page shell warm-paper tint is applied directly on body below — the
+ * authed app inherits the marketing palette while individual cards and
+ * sheets keep their own opaque backgrounds.
  * ---------------------------------------------------------------------------*/
 body {
-	background-color: rgb(246 249 252);
+	background-color: var(--paper);
+	color: var(--ink);
 }
 
 /* ilamy resource calendar: each resource row renders border-b on its cells.
@@ -101,6 +104,188 @@ body {
 [data-calendar-root] [data-testid="resource-week"] > div + div,
 [data-calendar-root] [data-testid="resource-month-vertical-grid"] > div + div {
 	margin-top: -1px;
+}
+
+/* ─── Calendar warm-paper theming (scoped to the calendar canvas) ────────
+ * The calendar adopts the marketing aesthetic: warm paper background,
+ * line-color borders, brand-indigo accents. Authed app shell stays white.
+ *
+ * ilamy's grid cells use `bg-background` / `bg-secondary` Tailwind
+ * utilities and consume `--border` for grid lines. Overriding those CSS
+ * vars inside the calendar root makes cells, header bands, and
+ * view-headers pick up paper without forking ilamy or passing
+ * classNames per-element.
+ */
+[data-calendar-root] {
+	--background: var(--paper);
+	--secondary: var(--paper-2);
+	--border: var(--line);
+	--accent: var(--brand-50);
+	--accent-foreground: var(--brand-ink);
+	/* Tailwind v4 utilities like `bg-background` compile to
+	 *   background-color: var(--color-background)
+	 * — that's a SEPARATE var from --background (the `--color-` prefix is
+	 * Tailwind's @theme convention). We set `--color-background: white`
+	 * globally in @theme, so without overriding it inside the calendar
+	 * root, ilamy's `bg-background` cells (notably the Resources column
+	 * header) stay white while the rest of the canvas is warm paper. */
+	--color-background: var(--paper);
+	--color-secondary: var(--paper-2);
+	/* Tailwind v4's preflight emits:
+	 *   *, ::before, ::after { border-color: var(--default-border-color, currentColor); }
+	 * Defining the var here makes ilamy's bare `border-b` / `border-r`
+	 * classes (which don't carry a color utility) pick up our soft line
+	 * color via the cascade — no per-element targeting needed. */
+	--default-border-color: var(--line);
+}
+
+/* Belt-and-braces fallback in case the preflight doesn't read
+ * --default-border-color (older Tailwind, transpiled output, etc.). High
+ * enough specificity to beat Tailwind's preflight `*` rule (0,0,0) and
+ * placed before utility layer so utilities like `border-white/30` on
+ * event badges still win — events keep their own borders. */
+@layer base {
+	[data-calendar-root] *,
+	[data-calendar-root] *::before,
+	[data-calendar-root] *::after {
+		border-color: var(--line);
+	}
+}
+
+/* Pill-shaped buttons inside ilamy's internal calendar header. The default
+ * shadcn buttons render as `rounded-md` (6px) outlined rectangles which
+ * clash with the pill aesthetic of our outer toolbar. !important is used
+ * because shadcn's `rounded-md` utility lives in the utilities layer,
+ * which cascades after our base/component rules — without !important the
+ * utility wins despite our higher-specificity selector. */
+[data-calendar-root] [data-testid="calendar-header"] button {
+	border-radius: 9999px !important;
+	font-weight: 500;
+}
+
+/* Active view button — full brand-indigo fill instead of the washed-out
+ * `bg-primary/80` ilamy applies. The `\/` in the selector escapes the
+ * forward slash that Tailwind uses in opacity-modifier class names. */
+[data-calendar-root] [data-testid="calendar-header"] button.bg-primary\/80 {
+	background-color: var(--brand) !important;
+	color: white !important;
+	border-color: var(--brand) !important;
+}
+
+/* Resource label cell title — bump from default text-sm/normal to
+ * font-medium so it reads as a proper column header rather than body
+ * copy. Targets the inner div ilamy renders inside ResourceCell when
+ * no custom renderResource is provided. */
+[data-calendar-root] [data-testid^="horizontal-row-label-"] > div {
+	font-weight: 500;
+}
+
+/* Re-skin ilamy's hardcoded blue current-hour highlight to use brand
+ * indigo on warm-paper, matching the calendar palette. ilamy applies
+ * `bg-blue-50 text-blue-600 font-medium` to the time-column header cell
+ * for whichever hour is "now" in horizontal resource views (day + week).
+ * Targeting the compiled utility class directly because the className is
+ * baked into ilamy's source via cn() and there's no prop hook for it. */
+[data-calendar-root] [data-testid^="resource-day-time-label-"].bg-blue-50,
+[data-calendar-root] [data-testid^="resource-week-time-label-"].bg-blue-50 {
+	background-color: var(--brand-50) !important;
+	color: var(--brand-ink) !important;
+}
+
+/* Time-of-day labels — adopt the marketing CalendarMock's mono + ink-3
+ * aesthetic so the live calendar reads like the home-page product preview.
+ *
+ * Targets:
+ *  - Vertical day/week time gutter via the column container's
+ *    `vertical-col-time-col` test ID — font-family inherits to the
+ *    renderCell text inside (the column has `gridType: "hour"` with
+ *    `noEvents: true`, so the only text inside is hour labels).
+ *  - Horizontal resource day/week hour labels via the templated
+ *    `resource-{day|week}-time-label-${HH}` test IDs.
+ *
+ * The week-resource view reuses the same `resource-week-time-label-`
+ * testid prefix for the day-of-week column header (Mon / Tue /…) which
+ * nests two <div>s; `:not(:has(div))` skips those so the mono treatment
+ * lands only on actual hour cells.
+ *
+ * No !important — the current-hour brand-ink override above keeps its
+ * color. */
+[data-calendar-root] [data-testid="vertical-col-time-col"],
+[data-calendar-root] [data-testid^="resource-day-time-label-"],
+[data-calendar-root]
+	[data-testid^="resource-week-time-label-"]:not(:has(div)) {
+	font-family: var(--font-mono);
+	color: var(--ink);
+	/* Bumping past ilamy's `text-[10px] sm:text-xs` (10-12px) so JetBrains
+	 * Mono lands above its hinting-rough small-size zone. Weight 500 gives
+	 * the glyphs enough body to stay legible against warm paper without
+	 * looking bold. !important is required to beat the Tailwind text-size
+	 * utilities ilamy bakes into the cell className. */
+	font-size: 13px !important;
+	font-weight: 500;
+}
+
+/* Widen hour columns in horizontal resource views so event titles aren't
+ * clipped. ilamy hardcodes `min-w-20 flex-1` (80px floor) on every header
+ * hour label AND every body event cell — both share the class so the
+ * header and body grid stay aligned when we lift the floor. Bumping to
+ * 128px gives short 1-hour bookings ~16 characters of room (fits labels
+ * like "League Night", "Round Robin", "Adv. Clinic"); longer events scale
+ * linearly. The horizontal-grid-scroll wrapper handles the extra width
+ * via overflow-x. !important is required because utility classes win the
+ * cascade against attribute selectors. Tweak the value to widen further
+ * (introduces more horizontal scrolling on desktop). */
+[data-calendar-root] .min-w-20 {
+	min-width: 128px !important;
+}
+
+/* Event bars fill the resource row vertically with a small bottom margin,
+ * so adjacent resources still have visible separation. ilamy hardcodes
+ * `height: 24px` (its internal G0 constant) as an inline style on every
+ * `[data-testid^="horizontal-event-"]` div, and the child renderer inside
+ * uses `h-full` so it stretches with the parent. !important is required
+ * to beat the inline style.
+ *
+ * `calc(100% - 4px)` picks up whatever row height ilamy ultimately gives
+ * (currently min-h-[60px]) and trims 4px off the bottom. Combined with
+ * ilamy's natural `top: 1px`, that leaves ~1px above the event and ~3px
+ * below — plus the row's border-b gives an extra pixel of separator
+ * between resources. Asymmetric on purpose: overriding `top` would also
+ * break ilamy's stacking math (events of different stackIndex all
+ * collapse to the same top), so we leave `top` alone.
+ *
+ * Caveat: ilamy's stacking math (`top = baseOffset + stackIndex * (G0 + gap)`)
+ * still uses 24px as the unit, so when two events overlap in time on the
+ * SAME resource row, the second event's `top` lands 24px below the first
+ * — taller bars then visually collide. Court calendars rarely double-book
+ * a single court, so this is a no-op for the common case; revisit if
+ * stacked-overlap layouts become real. */
+[data-calendar-root] [data-testid^="horizontal-event-"] {
+	height: calc(100% - 4px) !important;
+}
+
+/* Horizontal row separators in the resources column. ilamy applies
+ * border-b only to the time-grid cells on the right, not to the
+ * sticky resource label cells on the left — so resource rows visually
+ * merge together while the time grid has clean separators. Adding
+ * border-b here gives the resources column the same row-divider rhythm
+ * as the time grid. */
+[data-calendar-root] [data-testid^="horizontal-row-label-"] {
+	border-bottom: 1px solid var(--line);
+}
+
+/* Direct override of Tailwind's bg-background / bg-secondary inside the
+ * calendar root. The earlier --color-background runtime override didn't
+ * take effect — likely because Tailwind v4's @theme directive compiled
+ * bg-background to the literal `white` value rather than var(). This
+ * targets the utility class itself with high specificity + !important so
+ * ilamy's sticky resource header cell ("Resources" label) and any other
+ * bg-background descendants pick up warm paper. */
+[data-calendar-root] .bg-background {
+	background-color: var(--paper) !important;
+}
+[data-calendar-root] .bg-secondary {
+	background-color: var(--paper-2) !important;
 }
 
 /* Animation keyframes */
@@ -137,25 +322,37 @@ body {
 }
 
 @layer components {
-	/* Glass components */
+	/* Card primitives — paper-aware refresh of the legacy authed-app shell.
+	 * Mirrors the marketing .mk-card aesthetic (warm paper, soft line border,
+	 * 18px radius, hover lift). Padding is intentionally NOT set so existing
+	 * callers keep control of their own internal spacing. */
 	.glass-card {
-		background-color: white;
-		border: 1px solid var(--border);
-		box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+		background-color: var(--paper);
+		border: 1px solid var(--line);
+		border-radius: 18px;
+		transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s
+			ease;
+	}
+	.glass-card:hover {
+		border-color: var(--line-2);
+		transform: translateY(-2px);
+		box-shadow: 0 1px 0 rgba(20, 19, 14, 0.04), 0 6px 24px -8px
+			rgba(20, 19, 14, 0.1);
 	}
 
 	.glass-panel {
-		background-color: white;
-		border: 1px solid var(--border);
-		box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -2px
-			rgb(0 0 0 / 0.05);
+		background-color: var(--paper);
+		border: 1px solid var(--line);
+		border-radius: 18px;
+		box-shadow: 0 1px 0 rgba(20, 19, 14, 0.04), 0 6px 24px -8px
+			rgba(20, 19, 14, 0.08);
 	}
 
 	/* Inset container — subdued background for form areas, editors, nested panels */
 	.glass-inset {
-		background-color: rgb(249 250 251); /* gray-50 */
-		border: 1px solid rgb(243 244 246); /* gray-100 */
-		border-radius: 0.5rem; /* rounded-lg */
+		background-color: var(--paper-2);
+		border: 1px solid var(--line);
+		border-radius: 0.5rem;
 	}
 
 	/* Badge components */
@@ -251,29 +448,21 @@ body {
 		background-color: var(--accent);
 	}
 
-	/* Section styles */
+	/* Section styles — matched to marketing h2 visual rhythm
+	 * (display font, ink color, tighter kerning, smoother responsive scale). */
 	.section-heading {
-		font-size: 1.5rem;
-		font-weight: 700;
-		letter-spacing: -0.025em;
+		font-family: var(--font-display);
+		font-size: clamp(1.5rem, 3vw, 2.25rem);
+		line-height: 1.1;
+		font-weight: 600;
+		letter-spacing: -0.028em;
+		color: var(--ink);
 		margin-bottom: 1rem;
-	}
-
-	@media (min-width: 640px) {
-		.section-heading {
-			font-size: 1.875rem;
-		}
-	}
-
-	@media (min-width: 768px) {
-		.section-heading {
-			font-size: 2.25rem;
-		}
 	}
 
 	.section-subheading {
 		font-size: 1rem;
-		color: rgb(107 114 128);
+		color: var(--ink-3);
 		max-width: 48rem;
 		margin-left: auto;
 		margin-right: auto;
@@ -455,6 +644,14 @@ body {
 	.btn-sm {
 		padding: 8px 14px;
 		font-size: 14px;
+	}
+
+	/* Shared shadow used by the brand-fill pill button (shadcn Button default
+	 * variant). Lifted into its own utility so the multi-stop box-shadow stays
+	 * readable instead of getting crammed into a Tailwind arbitrary value. */
+	.shadow-brand-pill {
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 6px 18px -6px
+			var(--brand);
 	}
 
 	.kbd {

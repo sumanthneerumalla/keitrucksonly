@@ -4,11 +4,10 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import MemberPackagesCard from "~/app/(app)/admin/checkin/MemberPackagesCard";
 import { Button } from "~/app/_components/shared/Button";
-import { ToastContainer, useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 import AttendanceHistoryCard from "./AttendanceHistoryCard";
-import FamilyCard from "./FamilyCard";
 import BillingPanel from "./BillingPanel";
+import FamilyCard from "./FamilyCard";
 import ProfileFieldsCard from "./ProfileFieldsCard";
 import StudentSignupsCard from "./StudentSignupsCard";
 
@@ -19,8 +18,6 @@ interface StudentDetailClientProps {
 export default function StudentDetailClient({
 	userId,
 }: StudentDetailClientProps) {
-	const { toasts, dismiss } = useToast();
-
 	const { data, isLoading, error } = api.user.getStudentDetail.useQuery(
 		{ userId },
 		{ enabled: !!userId },
@@ -66,8 +63,6 @@ export default function StudentDetailClient({
 
 	return (
 		<div className="mx-auto max-w-4xl space-y-6 p-6">
-			<ToastContainer toasts={toasts} onDismiss={dismiss} />
-
 			{/* Back link */}
 			<div>
 				<Link href="/admin/users">
