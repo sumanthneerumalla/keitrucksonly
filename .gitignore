@@ -47,3 +47,5 @@ yarn-error.log*
 
 # roadmap research (not for git)
 designFiles/roadmap/*
+# host-side container log snapshots (see scripts/snapshot-logs.sh)
+logs/
