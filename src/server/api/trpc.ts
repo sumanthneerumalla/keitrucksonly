@@ -83,7 +83,7 @@ const isAuthed = t.middleware(({ next, ctx }) => {
  * You can remove this if you don't like it, but it can help catch unwanted waterfalls by simulating
  * network latency that would occur in production but not in local development.
  */
-const timingMiddleware = t.middleware(async ({ next, path }) => {
+const timingMiddleware = t.middleware(async ({ next, path, ctx, input }) => {
 	const start = Date.now();
 
 	if (t._config.isDev) {
@@ -96,6 +96,40 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
 
 	const end = Date.now();
 	console.log(`[TRPC] ${path} took ${end - start}ms to execute`);
+
+	// Surface unexpected server-side failures so we have a post-mortem trail
+	// when a redeploy wipes the container's logs (default json-file driver).
+	// Skip user-facing TRPCError codes — those are valid client conditions
+	// (validation, auth, missing rows), not bugs to debug.
+	if (!result.ok) {
+		const error = result.error;
+		const isUserFacingError =
+			error instanceof TRPCError &&
+			[
+				"BAD_REQUEST",
+				"UNAUTHORIZED",
+				"FORBIDDEN",
+				"NOT_FOUND",
+				"CONFLICT",
+				"UNPROCESSABLE_CONTENT",
+			].includes(error.code);
+		if (!isUserFacingError) {
+			const ctxAny = ctx as {
+				user?: { userId?: string };
+				auth?: { userId?: string | null };
+			};
+			const userId = ctxAny.user?.userId ?? ctxAny.auth?.userId ?? null;
+			console.error(`[TRPC error] ${path}`, {
+				userId,
+				code: error instanceof TRPCError ? error.code : "UNKNOWN",
+				message: error.message,
+				cause:
+					error.cause instanceof Error ? error.cause.message : undefined,
+				input,
+				stack: error.stack,
+			});
+		}
+	}
 
 	return result;
 });
