@@ -112,8 +112,19 @@ export default function CalendarClient() {
 	const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(
 		initialFacilityId,
 	);
+	// Only fall back to user.activeFacilityId when it's a facility we currently
+	// have access to. Defends against stale/cross-club activeFacilityId values that
+	// would otherwise silently filter the resources query to zero rows (e.g. legacy
+	// data, or a facility deactivated without reassigning its referencing users).
+	// When invalid, fall through to null so we show the broader "All Facilities"
+	// view instead of an empty calendar.
+	const validActiveFacilityId = facilityMemberships?.some(
+		(m) => m.facilityId === user?.activeFacilityId,
+	)
+		? (user?.activeFacilityId ?? null)
+		: null;
 	const effectiveFacilityId =
-		selectedFacilityId ?? user?.activeFacilityId ?? null;
+		selectedFacilityId ?? validActiveFacilityId ?? null;
 	const selectedFacilityMembership = facilityMemberships?.find(
 		(m) => m.facilityId === effectiveFacilityId,
 	);
