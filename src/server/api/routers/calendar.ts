@@ -1128,27 +1128,6 @@ export const calendarRouter = createTRPCRouter({
 				});
 			}
 
-			// Verify the resolved facility belongs to the user's club and is active.
-			// Without this guard a stale activeFacilityId pointing to a different club
-			// (legacy data, deactivated facility, manual DB edit) would silently create
-			// orphan rows where CalendarEvent.clubShortName != ClubFacility.clubShortName.
-			const facility = await ctx.db.clubFacility.findUnique({
-				where: { facilityId: effectiveFacilityId },
-				select: { clubShortName: true, isActive: true },
-			});
-			if (!facility || facility.clubShortName !== user.clubShortName) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Selected facility does not belong to your club.",
-				});
-			}
-			if (!facility.isActive) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Selected facility is inactive.",
-				});
-			}
-
 			const event = await ctx.db.calendarEvent.create({
 				data: {
 					eventId,
