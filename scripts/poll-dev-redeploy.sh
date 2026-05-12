@@ -60,29 +60,63 @@ git reset --hard "$REMOTE" >> "$LOG_FILE" 2>&1
 export BUILD_SHA="$REMOTE"
 export BUILD_TIMESTAMP="$(date -Iseconds)"
 
-# Detached sibling of `docker:dev:redeploy` (see package.json). Pipeline:
-#   build → snapshot-logs → stop → up -d → image/container/builder/volume prune
-# with `-d` so cron doesn't hang on foreground logs.
+# Phased redeploy. Health probe runs between `up` and `cleanup` so prune
+# time doesn't inflate the "site live" measurement. Phases:
+#   - docker:dev:build           — compose build
+#   - docker:dev:redeploy:up     — snapshot-logs → stop → up -d
+#   - (curl loop)                — wait for /api/health 200 via Caddy
+#   - docker:dev:redeploy:cleanup — image/container/builder/volume prunes
 #
-# Disk hygiene cadence (each step runs every redeploy):
+# Disk hygiene cadence (same intent, now distributed across the sub-scripts):
 #   - snapshot-logs:dev: gzip current container logs to <repo>/logs/ before
 #       `compose down` destroys them. Best-effort; never fails the deploy.
 #   - image prune     --filter until=168h: keep one week of old images.
-#   - container prune --filter until=168h: plain stopped-container hygiene
-#       (logs are already preserved by the snapshot step above).
-#   - builder prune   --keep-storage 12G: bound BuildKit cache. Sized from
-#       a clean-build measurement: dev image = 2.5GB, dev+prod = ~5GB
-#       successfully built; 12G gives ~2x headroom so a redeploy never has
-#       to rebuild from scratch. Plain `--force` (no size cap) wipes cache
-#       layers immediately after build completes — avoid that in automation.
-#   - volumes:prune:dev: cleans the orphan /app/node_modules anonymous volume
-#       that the app service creates per redeploy (see docker-compose.yml).
-#       Wrapped in `|| true` — its safety guard can race with `up -d`, and a
-#       prune-only failure shouldn't cause cron to retry the whole rebuild.
-if npm run docker:dev:redeploy:detached >> "$LOG_FILE" 2>&1; then
-  echo "$REMOTE" > "$DEPLOYED_FILE"
-  log "redeploy ok @ $(git rev-parse --short HEAD)"
-else
-  log "redeploy FAILED @ ${REMOTE:0:7}; will retry next tick"
-  exit 1
-fi
+#   - container prune --filter until=168h: plain stopped-container hygiene.
+#   - builder prune   --keep-storage 12G: bound BuildKit cache (sized from
+#       a 2.5GB dev / ~5GB dev+prod clean-build measurement; ~2x headroom).
+#   - volumes:prune:dev: cleans orphan /app/node_modules anonymous volume;
+#       wrapped in `|| true` — its safety guard can race with `up -d`.
+T_TOTAL_START=$SECONDS
+
+T0=$SECONDS
+npm run docker:dev:build >> "$LOG_FILE" 2>&1 \
+  || { log "build failed @ ${REMOTE:0:7}; will retry next tick"; exit 1; }
+T_BUILD=$((SECONDS - T0))
+
+T0=$SECONDS
+npm run docker:dev:redeploy:up >> "$LOG_FILE" 2>&1 \
+  || { log "up failed @ ${REMOTE:0:7}; will retry next tick"; exit 1; }
+T_DEPLOY=$((SECONDS - T0))
+
+# Probe via Caddy + DNS — exercises the full user-visible request path,
+# not just `localhost:3000`. Times "container started" → "site live".
+T0=$SECONDS
+while ! curl -fs https://www.dev.facilitypresence.com/api/health >/dev/null 2>&1; do
+  sleep 2
+  if [ $((SECONDS - T0)) -gt 180 ]; then
+    log "health timeout after 180s @ ${REMOTE:0:7}; will retry next tick"
+    exit 1
+  fi
+done
+T_HEALTH=$((SECONDS - T0))
+
+# Cleanup runs untimed — doesn't affect user-visible deploy duration.
+npm run docker:dev:redeploy:cleanup >> "$LOG_FILE" 2>&1 || true
+
+T_TOTAL=$((SECONDS - T_TOTAL_START))
+
+# Write per-phase timing JSON into the running container via `docker exec` —
+# no bind mount. Atomic temp+mv inside the container so /api/health never
+# reads a partial file. Best-effort: write failure logs a warning but
+# doesn't fail the deploy.
+JSON=$(printf '{"deployedAt":"%s","deployedSha":"%s","buildSeconds":%d,"deploySeconds":%d,"healthSeconds":%d,"totalSeconds":%d}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  "$(git rev-parse --short HEAD)" \
+  "$T_BUILD" "$T_DEPLOY" "$T_HEALTH" "$T_TOTAL")
+echo "$JSON" | docker exec -i shuttlementor-app-dev sh -c \
+  'cat > /app/.deploy-info.json.tmp && mv /app/.deploy-info.json.tmp /app/.deploy-info.json' \
+  >> "$LOG_FILE" 2>&1 \
+  || log "warning: failed to write deploy info into container @ ${REMOTE:0:7}"
+
+echo "$REMOTE" > "$DEPLOYED_FILE"
+log "redeploy ok @ $(git rev-parse --short HEAD) (build:${T_BUILD}s deploy:${T_DEPLOY}s health:${T_HEALTH}s total:${T_TOTAL}s)"
