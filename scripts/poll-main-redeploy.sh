@@ -106,7 +106,7 @@ JSON=$(printf '{"deployedAt":"%s","deployedSha":"%s","buildSeconds":%d,"deploySe
   "$(git rev-parse --short HEAD)" \
   "$T_BUILD" "$T_DEPLOY" "$T_HEALTH" "$T_TOTAL")
 echo "$JSON" | docker exec -i shuttlementor-app-prod sh -c \
-  'cat > /app/.deploy-info.json.tmp && mv /app/.deploy-info.json.tmp /app/.deploy-info.json' \
+  'cat > /tmp/.deploy-info.json.tmp && mv /tmp/.deploy-info.json.tmp /tmp/.deploy-info.json' \
   >> "$LOG_FILE" 2>&1 \
   || log "warning: failed to write deploy info into container @ ${REMOTE:0:7}"
 

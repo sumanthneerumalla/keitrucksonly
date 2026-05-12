@@ -15,10 +15,12 @@ function deployedAgo(iso: string | undefined): string | undefined {
 }
 
 // Per-phase deploy timing is written by the cron poll scripts into
-// /app/.deploy-info.json via `docker exec` after a successful redeploy
+// /tmp/.deploy-info.json via `docker exec` after a successful redeploy
 // (see scripts/poll-*-redeploy.sh). The file lives in the container's
 // writable layer — survives `docker restart`, but is wiped when a new
-// container is created on the next redeploy.
+// container is created on the next redeploy. /tmp is used (not /app)
+// because `docker exec` runs as the image's USER `nextjs`, which lacks
+// write permission to /app/ but can write to /tmp (mode 1777).
 //
 // 1-second in-memory cache avoids hitting the FS on every health probe
 // (docker healthcheck fires every 30s, plus visitor footer fetches).
@@ -29,7 +31,7 @@ async function readDeployInfo(): Promise<unknown> {
 	if (Date.now() - cachedAt < 1000) return cachedDeploy;
 	try {
 		cachedDeploy = JSON.parse(
-			await readFile("/app/.deploy-info.json", "utf8"),
+			await readFile("/tmp/.deploy-info.json", "utf8"),
 		);
 	} catch {
 		// File missing — pick the most informative status.
