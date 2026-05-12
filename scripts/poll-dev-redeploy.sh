@@ -9,6 +9,8 @@
 # pruned below on every tick (independent of redeploys, so retention
 # kicks in even during long quiet periods).
 
+# Bash buffers the entire {...} body before executing — safe against `git reset --hard` rewriting this file mid-deploy.
+{
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$HOME/Desktop/projects/shuttleMentor}"
@@ -120,3 +122,4 @@ echo "$JSON" | docker exec -i shuttlementor-app-dev sh -c \
 
 echo "$REMOTE" > "$DEPLOYED_FILE"
 log "redeploy ok @ $(git rev-parse --short HEAD) (build:${T_BUILD}s deploy:${T_DEPLOY}s health:${T_HEALTH}s total:${T_TOTAL}s)"
+}
