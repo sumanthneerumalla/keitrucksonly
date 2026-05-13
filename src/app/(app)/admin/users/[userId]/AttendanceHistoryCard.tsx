@@ -24,6 +24,7 @@ export default function AttendanceHistoryCard({
 }: AttendanceHistoryCardProps) {
 	const [cursor, setCursor] = useState<string | undefined>(undefined);
 	const [accumulated, setAccumulated] = useState<Attendance[]>([]);
+	const [seenIds, setSeenIds] = useState<Set<string>>(new Set());
 
 	const { data, isLoading, isFetching } =
 		api.checkin.getMemberAttendanceHistory.useQuery(
@@ -34,16 +35,18 @@ export default function AttendanceHistoryCard({
 	useEffect(() => {
 		if (!data) return;
 		setAccumulated((prev) => {
-			const existingIds = new Set(prev.map((a) => a.attendanceId));
 			const next = [...prev];
+			const nextSeen = new Set(seenIds);
 			for (const a of data.attendances) {
-				if (!existingIds.has(a.attendanceId)) {
+				if (!nextSeen.has(a.attendanceId)) {
 					next.push(a);
-					existingIds.add(a.attendanceId);
+					nextSeen.add(a.attendanceId);
 				}
 			}
+			setSeenIds(nextSeen);
 			return next;
 		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [data]);
 
 	const nextCursor = data?.nextCursor ?? null;
