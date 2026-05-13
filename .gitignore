@@ -48,4 +48,6 @@ yarn-error.log*
 # roadmap research (not for git)
 designFiles/roadmap/*
 # host-side container log snapshots (see scripts/snapshot-logs.sh)
-logs/
+# Ignore only the gzipped snapshots themselves, not the dir — keeps the
+# pattern from accidentally matching src/app/api/logs/route.ts.
+/logs/*.log.gz
