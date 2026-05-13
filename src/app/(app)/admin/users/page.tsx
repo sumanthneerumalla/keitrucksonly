@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getOnboardedUserOrRedirect } from "~/app/_components/server/OnboardedGuard";
 import { isFacilityOrAbove } from "~/server/utils/utils";
@@ -11,6 +12,8 @@ export default async function UsersPage() {
 	}
 
 	return (
-		<UsersClient userType={user.userType} clubShortName={user.clubShortName} />
+		<Suspense fallback={null}>
+			<UsersClient userType={user.userType} clubShortName={user.clubShortName} />
+		</Suspense>
 	);
 }
