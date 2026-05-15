@@ -2,13 +2,15 @@
 
 import { Receipt } from "lucide-react";
 import { useState } from "react";
+import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
+import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 import RecordPaymentModal from "./RecordPaymentModal";
 
 /**
  * Phase 9-EOD billing panel (2026-05-02), extended for Phase 9a (C11 + signed
- * credit display).
+ * credit display) and Phase 9a Round 4 (manual close-tab action).
  *
  * Shows three rollup numbers + invoice list. Existing pre-2026-05-02
  * MemberPackage rows have no invoice (line-in-the-sand) and contribute $0;
@@ -23,6 +25,13 @@ import RecordPaymentModal from "./RecordPaymentModal";
  *    The backend un-floor lives in `billing.ts` (backlog B8) — this UI is
  *    forward-compatible: while the floor remains, balances simply never go
  *    negative; once removed, credit surfaces here without further UI changes.
+ *
+ * Phase 9a Round 4 additions:
+ *  - "Close Tab" action on each open/partially_paid/overdue invoice that
+ *    isn't already closed. Fires a balance-aware AlertDialog before calling
+ *    `billing.closeInvoice`. Paid invoices auto-close server-side on full
+ *    payment, so the button is omitted for them.
+ *  - "Closed [date]" badge under the StatusPill when `inv.closedAt !== null`.
  */
 
 interface BillingPanelProps {
@@ -83,12 +92,38 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export default function BillingPanel({ userId }: BillingPanelProps) {
+	const { toast } = useToast();
+	const utils = api.useUtils();
+
 	const { data, isLoading, error } = api.billing.getMemberBilling.useQuery(
 		{ userId },
 		{ enabled: !!userId },
 	);
 
 	const [paymentInvoice, setPaymentInvoice] = useState<InvoiceRow | null>(null);
+	// Close-tab confirmation target — when non-null, the AlertDialog is open
+	// for this invoice. Stored as a snapshot so the dialog copy stays stable
+	// while the mutation runs (the underlying row may flip to closed mid-flight).
+	const [closeTarget, setCloseTarget] = useState<{
+		invoice: InvoiceRow;
+	} | null>(null);
+
+	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
+		onSuccess: async (result) => {
+			const invoiceNumber =
+				closeTarget?.invoice.invoiceNumber ?? result.invoice.invoiceId;
+			toast(`Invoice ${invoiceNumber} closed`, "success");
+			await utils.billing.getMemberBilling.invalidate({ userId });
+			setCloseTarget(null);
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+	});
+
+	// Matches RecordPaymentModal's pattern: tRPC's `isPending` is the single
+	// source of truth for the in-flight flag — no separate useState to drift.
+	const closing = closeInvoiceMutation.isPending;
 
 	// Derive the outstanding-tile presentation from the (potentially signed)
 	// `outstandingInCents`. When `< 0`, the club holds member credit — neutral
@@ -177,6 +212,15 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 										const canRecordPayment = PAYMENT_ELIGIBLE_STATUSES.has(
 											inv.status,
 										);
+										// Round 4 close-tab gating mirrors the backend contract:
+										// not void / paid / draft, and not already closed. Paid
+										// invoices auto-close server-side on full payment, so the
+										// button never needs to appear on them.
+										const canCloseTab =
+											inv.status !== "void" &&
+											inv.status !== "paid" &&
+											inv.status !== "draft" &&
+											inv.closedAt === null;
 										return (
 											<tr
 												key={inv.invoiceId}
@@ -189,7 +233,14 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 													{formatDate(inv.issueDate)}
 												</td>
 												<td className="px-3 py-2">
-													<StatusPill status={inv.status} />
+													<div className="flex flex-col gap-1">
+														<StatusPill status={inv.status} />
+														{inv.closedAt !== null && (
+															<span className="text-[var(--muted-foreground)] text-xs">
+																Closed {formatDate(inv.closedAt)}
+															</span>
+														)}
+													</div>
 												</td>
 												<td className="px-3 py-2 text-right font-mono text-[var(--foreground)] text-xs">
 													{formatCents(inv.totalInCents)}
@@ -216,23 +267,44 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 													)}
 												</td>
 												<td className="px-3 py-2 text-right">
-													{canRecordPayment ? (
-														<Button
-															variant="outline"
-															size="sm"
-															onClick={() =>
-																setPaymentInvoice({
-																	invoiceId: inv.invoiceId,
-																	invoiceNumber: inv.invoiceNumber,
-																	totalInCents: inv.totalInCents,
-																	amountPaidInCents: inv.amountPaidInCents,
-																	balanceInCents: inv.balanceInCents,
-																})
-															}
-														>
-															Record Payment
-														</Button>
-													) : null}
+													<div className="flex flex-col items-end gap-1">
+														{canRecordPayment ? (
+															<Button
+																variant="outline"
+																size="sm"
+																onClick={() =>
+																	setPaymentInvoice({
+																		invoiceId: inv.invoiceId,
+																		invoiceNumber: inv.invoiceNumber,
+																		totalInCents: inv.totalInCents,
+																		amountPaidInCents: inv.amountPaidInCents,
+																		balanceInCents: inv.balanceInCents,
+																	})
+																}
+															>
+																Record Payment
+															</Button>
+														) : null}
+														{canCloseTab ? (
+															<Button
+																variant="outline"
+																size="sm"
+																onClick={() =>
+																	setCloseTarget({
+																		invoice: {
+																			invoiceId: inv.invoiceId,
+																			invoiceNumber: inv.invoiceNumber,
+																			totalInCents: inv.totalInCents,
+																			amountPaidInCents: inv.amountPaidInCents,
+																			balanceInCents: inv.balanceInCents,
+																		},
+																	})
+																}
+															>
+																Close Tab
+															</Button>
+														) : null}
+													</div>
 												</td>
 											</tr>
 										);
@@ -251,6 +323,34 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 				}}
 				userId={userId}
 				invoice={paymentInvoice}
+			/>
+
+			<AlertDialog
+				open={closeTarget !== null}
+				title={
+					closeTarget
+						? `Close Tab — Invoice ${closeTarget.invoice.invoiceNumber}`
+						: ""
+				}
+				description={
+					closeTarget
+						? closeTarget.invoice.balanceInCents > 0
+							? `Member still owes ${formatCents(closeTarget.invoice.balanceInCents)}. Close anyway? They can still pay this balance later, but new charges will start a fresh invoice.`
+							: "Close this tab? No new charges will be added."
+						: ""
+				}
+				confirmLabel={closing ? "Closing…" : "Close Tab"}
+				cancelLabel="Cancel"
+				onConfirm={() => {
+					if (!closeTarget || closing) return;
+					closeInvoiceMutation.mutate({
+						invoiceId: closeTarget.invoice.invoiceId,
+					});
+				}}
+				onCancel={() => {
+					if (closing) return;
+					setCloseTarget(null);
+				}}
 			/>
 		</div>
 	);

@@ -83,9 +83,10 @@ model User {
   memberPackages        MemberPackage[]         @relation("MemberPackageOwner")
   soldPackages          MemberPackage[]         @relation("MemberPackageSeller")
 
-  // Phase 9-EOD invoicing relations
+  // Phase 9-EOD invoicing relations (Round 4: closedInvoices added)
   invoices         Invoice[]        @relation("InvoiceMember")
   createdInvoices  Invoice[]        @relation("InvoiceCreatedBy")
+  closedInvoices   Invoice[]        @relation("InvoiceClosedBy")
   receivedPayments InvoicePayment[] @relation("PaymentReceivedBy")
   issuedRefunds    InvoiceRefund[]  @relation("RefundIssuedBy")
 
@@ -875,10 +876,27 @@ model Invoice {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  lineItems      InvoiceLineItem[]
-  payments       InvoicePayment[]
-  refunds        InvoiceRefund[]
-  memberPackages MemberPackage[]
+  // Phase 9a Round 4 — close-tab + credit carry-forward.
+  // closedAt is set when either (a) `closeInvoice` mutation runs manually on a
+  // non-paid invoice, or (b) `recordPayment` flips status to "paid" (auto-close
+  // in the same transaction). Once closedAt is non-null, `sellPackage` does NOT
+  // append new line items to this invoice — a fresh invoice opens for the next
+  // charge. See designFiles/roadmap/phase9-invoicing.md.
+  closedAt          DateTime?
+  closedBy          String?
+  closedByUser      User?         @relation("InvoiceClosedBy", fields: [closedBy], references: [userId])
+  // creditConsumedAt is stamped when this (auto-closed + overpaid) invoice's
+  // negative balance was pulled forward as a "Credit from INV-XXX" line item on
+  // a new invoice. Once stamped, the credit cannot be re-applied elsewhere.
+  // NULL = either no credit to consume, or credit is still available.
+  creditConsumedAt  DateTime?
+
+  lineItems                InvoiceLineItem[]
+  payments                 InvoicePayment[]
+  refunds                  InvoiceRefund[]
+  memberPackages           MemberPackage[]
+  // Back-relation: line items on OTHER invoices that pulled credit from this one.
+  creditAppliedToLineItems InvoiceLineItem[] @relation("CreditSource")
 
   @@unique([clubShortName, invoiceNumber])
   @@index([clubShortName])
@@ -887,6 +905,8 @@ model Invoice {
   @@index([status])
   @@index([facilityId])
   @@index([createdBy])
+  @@index([closedAt])
+  @@index([creditConsumedAt])
 }
 
 // InvoiceLineItem — a single charge on an invoice. unitPriceInCents is a SNAPSHOT
@@ -912,10 +932,19 @@ model InvoiceLineItem {
   sortOrder        Int            @default(0)
   createdAt        DateTime       @default(now())
 
+  // Phase 9a Round 4 — credit carry-forward.
+  // When this line item represents credit pulled forward from an earlier
+  // auto-closed invoice (negative `unitPriceInCents`/`totalInCents`),
+  // `creditFromInvoiceId` points back at the source invoice (which has its
+  // `creditConsumedAt` stamped). Bidirectional audit trail.
+  creditFromInvoiceId String?
+  creditFromInvoice   Invoice? @relation("CreditSource", fields: [creditFromInvoiceId], references: [invoiceId])
+
   @@index([invoiceId])
   @@index([productId])
   @@index([packagePlanId])
   @@index([memberPackageId])
+  @@index([creditFromInvoiceId])
 }
 
 // InvoicePayment — a payment received against an invoice. Multi-processor by design:

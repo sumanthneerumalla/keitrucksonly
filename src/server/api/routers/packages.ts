@@ -463,16 +463,49 @@ export const packagesRouter = createTRPCRouter({
 			const lineTotalInCents = unitPriceInCents; // qty 1, no discount, no tax in 9-EOD
 
 			const result = await ctx.db.$transaction(async (tx) => {
+				// Phase 9a Round 4 — advisory lock first, BEFORE any reads or
+				// writes. Two staff selling packages to the same member at the
+				// same instant would otherwise (a) both fail to find an open
+				// running tab and each create a fresh invoice (the original
+				// backlog A7 race), and (b) both load the same unconsumed credit
+				// sources and stamp them consumed twice — credit double-counted
+				// across two new invoices, a real money bug.
+				//
+				// `pg_advisory_xact_lock` serializes sellPackage calls for this
+				// (userId, clubShortName); other members' sales proceed in
+				// parallel. The lock is released when the transaction commits or
+				// rolls back. The md5 → bit(64) → bigint conversion mirrors
+				// `rentals.ts:37`. Coverage gaps still present after this lock:
+				// sellPackage vs `closeInvoice` / `recordPayment` (those don't
+				// take this lock) — those races are much rarer in practice and
+				// can be revisited if they ever surface.
+				const lockKey = `sellPackage-${input.userId}-${ctx.user.clubShortName}`;
+				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+
 				// Find member's running tab. Excludes void/paid/overdue —
 				// only `draft`, `open`, `partially_paid` absorb new charges.
+				//
+				// Phase 9a Round 4 (HANDOFF #103): also exclude closed invoices.
+				// `closedAt: null` filters out both manually-closed tabs and the
+				// (rare) edge case of an `open`/`partially_paid` invoice that was
+				// stamped closed by hand (auto-close only happens on `paid`, so
+				// this only matters if `closeInvoice` ran on a non-paid tab).
 				let invoice = await tx.invoice.findFirst({
 					where: {
 						userId: input.userId,
 						clubShortName: ctx.user.clubShortName,
 						status: { in: ["draft", "open", "partially_paid"] },
+						closedAt: null,
 					},
 					orderBy: { issueDate: "asc" }, // oldest first if ever multiple
 				});
+
+				// Track the credit lines we add when opening a NEW invoice. These
+				// only apply on the `!invoice` branch — appending to an existing
+				// running tab never pulls credit (credit lives on closed invoices
+				// and is consumed exactly once at new-invoice creation time).
+				let totalCreditPulledCents = 0;
+				let creditLineCount = 0;
 
 				if (!invoice) {
 					// No open tab — open a new invoice with the next sequential number.
@@ -500,6 +533,68 @@ export const packagesRouter = createTRPCRouter({
 							createdBy: ctx.user.userId,
 						},
 					});
+
+					// Phase 9a Round 4 — credit carry-forward.
+					// Find any auto-closed (paid + closedAt set) invoices for this
+					// member that have unconsumed overpayment credit. Prisma can't
+					// express the cross-column predicate `amountPaidInCents >
+					// totalInCents` directly, so we fetch closed+paid+unconsumed
+					// invoices and filter for actual credit (positive net) in JS.
+					// `orderBy closedAt asc` = oldest credit first (FIFO).
+					const creditSources = await tx.invoice.findMany({
+						where: {
+							userId: input.userId,
+							clubShortName: ctx.user.clubShortName,
+							status: "paid",
+							closedAt: { not: null },
+							creditConsumedAt: null,
+						},
+						orderBy: { closedAt: "asc" },
+						select: {
+							invoiceId: true,
+							invoiceNumber: true,
+							totalInCents: true,
+							amountPaidInCents: true,
+						},
+					});
+
+					const sourcesWithCredit = creditSources.filter(
+						(s) => s.amountPaidInCents > s.totalInCents,
+					);
+
+					// Add a negative line item per credit source + stamp each source's
+					// `creditConsumedAt`. Empty `sourcesWithCredit` case: this loop
+					// is a no-op (totals stay 0, no DB writes), so the rest of the
+					// transaction behaves exactly like pre-Round-4 new-invoice flow.
+					let sortIndex = 0;
+					for (const s of sourcesWithCredit) {
+						const creditCents = s.amountPaidInCents - s.totalInCents;
+
+						await tx.invoiceLineItem.create({
+							data: {
+								invoiceId: invoice.invoiceId,
+								description: `Credit from ${s.invoiceNumber}`,
+								quantity: 1,
+								unitPriceInCents: -creditCents,
+								discountInCents: 0,
+								taxRateBps: 0,
+								taxAmountInCents: 0,
+								totalInCents: -creditCents,
+								sortOrder: sortIndex, // credits sort before package line
+								creditFromInvoiceId: s.invoiceId,
+							},
+						});
+
+						await tx.invoice.update({
+							where: { invoiceId: s.invoiceId },
+							data: { creditConsumedAt: new Date() },
+						});
+
+						totalCreditPulledCents += creditCents;
+						sortIndex += 1;
+					}
+
+					creditLineCount = sourcesWithCredit.length;
 				}
 
 				const memberPackage = await tx.memberPackage.create({
@@ -518,7 +613,9 @@ export const packagesRouter = createTRPCRouter({
 					},
 				});
 
-				// Append the line item to the running tab.
+				// Append the line item to the running tab. On a new invoice with
+				// credit lines, this sorts AFTER the credit lines so the timeline
+				// reads: credits applied → new charge.
 				await tx.invoiceLineItem.create({
 					data: {
 						invoiceId: invoice.invoiceId,
@@ -532,16 +629,57 @@ export const packagesRouter = createTRPCRouter({
 						taxRateBps: 0,
 						taxAmountInCents: 0,
 						totalInCents: lineTotalInCents,
-						sortOrder: 0,
+						sortOrder: creditLineCount,
 					},
 				});
 
-				// Bump invoice rollups by this line's contribution.
+				// Phase 9a Round 4 — status recompute + auto-close on full payment.
+				// We now compute the FINAL subtotal/total from scratch (instead of
+				// `increment`) because:
+				//   1) Credit lines can drive the new invoice's total negative.
+				//   2) Even on the append path, adding a positive line can flip
+				//      status (open → partially_paid if amountPaid > 0, or
+				//      partially_paid → paid if amountPaid now ≥ new total).
+				//      Round 4 fixes this latent bug.
+				// Inline recompute (not a shared helper) — the inputs differ enough
+				// from `recordPayment`'s path (delta-style here, aggregate-style
+				// there) that a shared helper would be more abstraction than reuse.
+				const subtotalDelta = unitPriceInCents - totalCreditPulledCents;
+				const totalDelta = lineTotalInCents - totalCreditPulledCents;
+				const newSubtotal = invoice.subtotalInCents + subtotalDelta;
+				const newTotal = invoice.totalInCents + totalDelta;
+				const amountPaid = invoice.amountPaidInCents;
+
+				// Phase 9a Round 4 fix — check `amountPaid >= newTotal` FIRST so
+				// the credit-overrun case correctly lands at "paid" + auto-close.
+				// Example: $30 credit pulled - $25 package → newTotal -$5, with
+				// amountPaid $0. The previous ordering short-circuited on
+				// `amountPaid <= 0` and left the invoice "open" with a negative
+				// balance, breaking the credit-chain design (the credit would
+				// never become an eligible source for a later invoice).
+				// `recordPayment`'s mirror block isn't affected in practice
+				// because its `totalInCents` is frozen positive from the start
+				// of the transaction.
+				let newStatus: string;
+				if (amountPaid >= newTotal) {
+					newStatus = "paid";
+				} else if (amountPaid <= 0) {
+					newStatus = "open";
+				} else {
+					newStatus = "partially_paid";
+				}
+
+				const shouldAutoClose = newStatus === "paid";
+
 				const updatedInvoice = await tx.invoice.update({
 					where: { invoiceId: invoice.invoiceId },
 					data: {
-						subtotalInCents: { increment: unitPriceInCents },
-						totalInCents: { increment: lineTotalInCents },
+						subtotalInCents: newSubtotal,
+						totalInCents: newTotal,
+						status: newStatus,
+						...(shouldAutoClose
+							? { closedAt: new Date(), closedBy: ctx.user.userId }
+							: {}),
 					},
 				});
 

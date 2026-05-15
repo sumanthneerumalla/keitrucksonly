@@ -86,6 +86,11 @@ export const billingRouter = createTRPCRouter({
 					totalInCents: inv.totalInCents,
 					amountPaidInCents: inv.amountPaidInCents,
 					balanceInCents: inv.totalInCents - inv.amountPaidInCents,
+					// Phase 9a Round 4: surface close-tab state so the UI can render
+					// the "closed" badge + gate the Close Tab button. `creditConsumedAt`
+					// is intentionally NOT exposed (internal accounting only).
+					closedAt: inv.closedAt,
+					closedBy: inv.closedBy,
 					lineItems: inv.lineItems.map((li) => ({
 						lineItemId: li.lineItemId,
 						description: li.description,
@@ -276,6 +281,12 @@ export const billingRouter = createTRPCRouter({
 				// `overdue` is auto-derived from dueDate by a future scheduled job;
 				// we don't preserve it across a payment because there's no automation
 				// yet to re-derive it after the payment lands.
+				//
+				// Phase 9a Round 4 (HANDOFF #103): when status flips to "paid", we
+				// ALSO stamp `closedAt`/`closedBy` in the SAME update. This is the
+				// auto-close half of the close-tab feature — full payment terminates
+				// the running tab so the next `sellPackage` opens a fresh invoice.
+				// See designFiles/roadmap/phase9-invoicing.md.
 				let newStatus: string;
 				if (newAmountPaid <= 0) {
 					newStatus = "open";
@@ -290,6 +301,9 @@ export const billingRouter = createTRPCRouter({
 					data: {
 						amountPaidInCents: newAmountPaid,
 						status: newStatus,
+						...(newStatus === "paid"
+							? { closedAt: new Date(), closedBy: ctx.user.userId }
+							: {}),
 					},
 				});
 
@@ -302,6 +316,110 @@ export const billingRouter = createTRPCRouter({
 						status: newStatus,
 					},
 				};
+			});
+		}),
+
+	/**
+	 * Phase 9a Round 4 — manual close-tab.
+	 *
+	 * Staff click "Close Tab" on an `open` or `partially_paid` running tab to
+	 * terminate it without requiring a final payment (e.g., they want to
+	 * generate a separate invoice for the next charge, or settle a stalled tab
+	 * out-of-band). Closing stamps `closedAt`/`closedBy`; `sellPackage` will
+	 * skip closed invoices when looking for a running tab to append to, so the
+	 * next charge opens a fresh invoice.
+	 *
+	 * Distinct from auto-close (in `recordPayment`): manual close handles the
+	 * non-paid cases. Paid invoices already auto-closed on the payment that
+	 * took them to `paid` status — they don't accept (and don't need) a
+	 * manual close.
+	 *
+	 * See designFiles/roadmap/phase9-invoicing.md "Partial Payment & Overpayment
+	 * Policy" / close-tab discussion, and HANDOFF.md decision #103.
+	 */
+	closeInvoice: facilityProcedure
+		.input(z.object({ invoiceId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			// Cross-tenant guard (matches recordPayment pattern). Read outside
+			// the transaction so the common 404/conflict cases short-circuit
+			// without the locking-roundtrip overhead.
+			const invoice = await ctx.db.invoice.findFirst({
+				where: {
+					invoiceId: input.invoiceId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { invoiceId: true, status: true, closedAt: true },
+			});
+
+			if (!invoice) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found in this club",
+				});
+			}
+
+			// Already closed (either manual close or auto-close on full payment).
+			// Idempotent reject — the UI shouldn't surface the button, but defend
+			// against stale optimistic state / double-clicks.
+			if (invoice.closedAt !== null) {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "Invoice is already closed",
+				});
+			}
+
+			// `void` is terminal — closing a voided invoice is nonsensical.
+			if (invoice.status === "void") {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "Cannot close a void invoice",
+				});
+			}
+
+			// Paid invoices auto-close in `recordPayment`'s transaction. Reaching
+			// here with status="paid" + closedAt=null shouldn't happen post-Round-4,
+			// but reject explicitly to surface any drift rather than silently
+			// re-stamping `closedAt`.
+			if (invoice.status === "paid") {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message:
+						"Paid invoices auto-close on full payment; no manual close needed",
+				});
+			}
+
+			// Forward guard (mirrors recordPayment's draft reject — no UI flow
+			// produces draft invoices today, so reject defensively until a
+			// finalize flow exists).
+			if (invoice.status === "draft") {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "Cannot close a draft invoice (no finalize flow exists yet)",
+				});
+			}
+
+			return await ctx.db.$transaction(async (tx) => {
+				// Row lock for consistency with `recordPayment` — without it a
+				// concurrent payment could race the close and we'd land in an
+				// "closed + status not paid" state that contradicts an in-flight
+				// payment that should have closed it via the paid path.
+				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+
+				const updated = await tx.invoice.update({
+					where: { invoiceId: input.invoiceId },
+					data: {
+						closedAt: new Date(),
+						closedBy: ctx.user.userId,
+					},
+					select: {
+						invoiceId: true,
+						status: true,
+						closedAt: true,
+						closedBy: true,
+					},
+				});
+
+				return { invoice: updated };
 			});
 		}),
 });
