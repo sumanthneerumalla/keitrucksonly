@@ -1,19 +1,50 @@
 "use client";
 
 import { Receipt } from "lucide-react";
+import { useState } from "react";
+import { AlertDialog } from "~/app/_components/shared/AlertDialog";
+import { Button } from "~/app/_components/shared/Button";
+import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
+import RecordPaymentModal from "./RecordPaymentModal";
 
 /**
- * Phase 9-EOD billing panel (2026-05-02).
+ * Phase 9-EOD billing panel (2026-05-02), extended for Phase 9a (C11 + signed
+ * credit display) and Phase 9a Round 4 (manual close-tab action).
  *
- * Read-only view: three rollup numbers + invoice list. Existing pre-2026-05-02
+ * Shows three rollup numbers + invoice list. Existing pre-2026-05-02
  * MemberPackage rows have no invoice (line-in-the-sand) and contribute $0;
  * new package sales append a line item to the member's running-tab invoice.
+ *
+ * Phase 9a additions:
+ *  - "Record Payment" action on each open/partially_paid/paid/overdue invoice
+ *    row, opening a slide-out RecordPaymentModal.
+ *  - Signed-credit display (decision 104, Version A overpayment): when the
+ *    invoice balance or overall outstanding goes negative, render it as
+ *    "Account credit" / "(credit)" in a neutral tone rather than a red number.
+ *    The backend un-floor lives in `billing.ts` (backlog B8) — this UI is
+ *    forward-compatible: while the floor remains, balances simply never go
+ *    negative; once removed, credit surfaces here without further UI changes.
+ *
+ * Phase 9a Round 4 additions:
+ *  - "Close Tab" action on each open/partially_paid/overdue invoice that
+ *    isn't already closed. Fires a balance-aware AlertDialog before calling
+ *    `billing.closeInvoice`. Paid invoices auto-close server-side on full
+ *    payment, so the button is omitted for them.
+ *  - "Closed [date]" badge under the StatusPill when `inv.closedAt !== null`.
  */
 
 interface BillingPanelProps {
 	userId: string;
 }
+
+type InvoiceRow = {
+	invoiceId: string;
+	invoiceNumber: string;
+	totalInCents: number;
+	amountPaidInCents: number;
+	balanceInCents: number;
+};
 
 function formatCents(cents: number): string {
 	return (cents / 100).toLocaleString("en-US", {
@@ -40,6 +71,13 @@ const STATUS_PILL_STYLES: Record<string, string> = {
 	draft: "bg-[var(--muted)] text-[var(--muted-foreground)]",
 };
 
+const PAYMENT_ELIGIBLE_STATUSES = new Set([
+	"open",
+	"partially_paid",
+	"paid",
+	"overdue",
+]);
+
 function StatusPill({ status }: { status: string }) {
 	const cls =
 		STATUS_PILL_STYLES[status] ??
@@ -54,10 +92,60 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export default function BillingPanel({ userId }: BillingPanelProps) {
+	const { toast } = useToast();
+	const utils = api.useUtils();
+
 	const { data, isLoading, error } = api.billing.getMemberBilling.useQuery(
 		{ userId },
 		{ enabled: !!userId },
 	);
+
+	const [paymentInvoice, setPaymentInvoice] = useState<InvoiceRow | null>(null);
+	// Close-tab confirmation target — when non-null, the AlertDialog is open
+	// for this invoice. Stored as a snapshot so the dialog copy stays stable
+	// while the mutation runs (the underlying row may flip to closed mid-flight).
+	const [closeTarget, setCloseTarget] = useState<{
+		invoice: InvoiceRow;
+	} | null>(null);
+
+	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
+		onSuccess: async (result) => {
+			const invoiceNumber =
+				closeTarget?.invoice.invoiceNumber ?? result.invoice.invoiceId;
+			toast(`Invoice ${invoiceNumber} closed`, "success");
+			await utils.billing.getMemberBilling.invalidate({ userId });
+			setCloseTarget(null);
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+	});
+
+	// Matches RecordPaymentModal's pattern: tRPC's `isPending` is the single
+	// source of truth for the in-flight flag — no separate useState to drift.
+	const closing = closeInvoiceMutation.isPending;
+
+	// Derive the outstanding-tile presentation from the (potentially signed)
+	// `outstandingInCents`. When `< 0`, the club holds member credit — neutral
+	// tone, "Account credit" label. When `> 0`, money owed — red emphasis.
+	// When `= 0`, neutral.
+	const outstandingDisplay = (() => {
+		if (!data)
+			return { label: "Outstanding", value: formatCents(0), emphasize: false };
+		const cents = data.outstandingInCents;
+		if (cents < 0) {
+			return {
+				label: "Account credit",
+				value: formatCents(Math.abs(cents)),
+				emphasize: false,
+			};
+		}
+		return {
+			label: "Outstanding",
+			value: formatCents(cents),
+			emphasize: cents > 0,
+		};
+	})();
 
 	return (
 		<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
@@ -91,9 +179,9 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 							value={formatCents(data.totalPaidInCents)}
 						/>
 						<RollupTile
-							label="Outstanding"
-							value={formatCents(data.outstandingInCents)}
-							emphasize={data.outstandingInCents > 0}
+							label={outstandingDisplay.label}
+							value={outstandingDisplay.value}
+							emphasize={outstandingDisplay.emphasize}
 						/>
 					</div>
 
@@ -114,46 +202,156 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 										<th className="px-3 py-2 text-right font-medium">
 											Balance
 										</th>
+										<th className="px-3 py-2 text-right font-medium">
+											Actions
+										</th>
 									</tr>
 								</thead>
 								<tbody>
-									{data.invoices.map((inv) => (
-										<tr
-											key={inv.invoiceId}
-											className="border-[var(--border)] border-t"
-										>
-											<td className="px-3 py-2 font-mono text-[var(--foreground)] text-xs">
-												{inv.invoiceNumber}
-											</td>
-											<td className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												{formatDate(inv.issueDate)}
-											</td>
-											<td className="px-3 py-2">
-												<StatusPill status={inv.status} />
-											</td>
-											<td className="px-3 py-2 text-right font-mono text-[var(--foreground)] text-xs">
-												{formatCents(inv.totalInCents)}
-											</td>
-											<td className="px-3 py-2 text-right font-mono text-[var(--muted-foreground)] text-xs">
-												{formatCents(inv.amountPaidInCents)}
-											</td>
-											<td
-												className={`px-3 py-2 text-right font-mono text-xs ${
-													inv.balanceInCents > 0
-														? "font-semibold text-[var(--foreground)]"
-														: "text-[var(--muted-foreground)]"
-												}`}
+									{data.invoices.map((inv) => {
+										const canRecordPayment = PAYMENT_ELIGIBLE_STATUSES.has(
+											inv.status,
+										);
+										// Round 4 close-tab gating mirrors the backend contract:
+										// not void / paid / draft, and not already closed. Paid
+										// invoices auto-close server-side on full payment, so the
+										// button never needs to appear on them.
+										const canCloseTab =
+											inv.status !== "void" &&
+											inv.status !== "paid" &&
+											inv.status !== "draft" &&
+											inv.closedAt === null;
+										return (
+											<tr
+												key={inv.invoiceId}
+												className="border-[var(--border)] border-t"
 											>
-												{formatCents(inv.balanceInCents)}
-											</td>
-										</tr>
-									))}
+												<td className="px-3 py-2 font-mono text-[var(--foreground)] text-xs">
+													{inv.invoiceNumber}
+												</td>
+												<td className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
+													{formatDate(inv.issueDate)}
+												</td>
+												<td className="px-3 py-2">
+													<div className="flex flex-col gap-1">
+														<StatusPill status={inv.status} />
+														{inv.closedAt !== null && (
+															<span className="text-[var(--muted-foreground)] text-xs">
+																Closed {formatDate(inv.closedAt)}
+															</span>
+														)}
+													</div>
+												</td>
+												<td className="px-3 py-2 text-right font-mono text-[var(--foreground)] text-xs">
+													{formatCents(inv.totalInCents)}
+												</td>
+												<td className="px-3 py-2 text-right font-mono text-[var(--muted-foreground)] text-xs">
+													{formatCents(inv.amountPaidInCents)}
+												</td>
+												<td
+													className={`px-3 py-2 text-right font-mono text-xs ${
+														inv.balanceInCents > 0
+															? "font-semibold text-[var(--foreground)]"
+															: "text-[var(--muted-foreground)]"
+													}`}
+												>
+													{inv.balanceInCents < 0 ? (
+														<>
+															{formatCents(Math.abs(inv.balanceInCents))}{" "}
+															<span className="text-[var(--muted-foreground)]">
+																(credit)
+															</span>
+														</>
+													) : (
+														formatCents(inv.balanceInCents)
+													)}
+												</td>
+												<td className="px-3 py-2 text-right">
+													<div className="flex flex-col items-end gap-1">
+														{canRecordPayment ? (
+															<Button
+																variant="outline"
+																size="sm"
+																onClick={() =>
+																	setPaymentInvoice({
+																		invoiceId: inv.invoiceId,
+																		invoiceNumber: inv.invoiceNumber,
+																		totalInCents: inv.totalInCents,
+																		amountPaidInCents: inv.amountPaidInCents,
+																		balanceInCents: inv.balanceInCents,
+																	})
+																}
+															>
+																Record Payment
+															</Button>
+														) : null}
+														{canCloseTab ? (
+															<Button
+																variant="outline"
+																size="sm"
+																onClick={() =>
+																	setCloseTarget({
+																		invoice: {
+																			invoiceId: inv.invoiceId,
+																			invoiceNumber: inv.invoiceNumber,
+																			totalInCents: inv.totalInCents,
+																			amountPaidInCents: inv.amountPaidInCents,
+																			balanceInCents: inv.balanceInCents,
+																		},
+																	})
+																}
+															>
+																Close Tab
+															</Button>
+														) : null}
+													</div>
+												</td>
+											</tr>
+										);
+									})}
 								</tbody>
 							</table>
 						</div>
 					)}
 				</>
 			)}
+
+			<RecordPaymentModal
+				open={paymentInvoice !== null}
+				onOpenChange={(o) => {
+					if (!o) setPaymentInvoice(null);
+				}}
+				userId={userId}
+				invoice={paymentInvoice}
+			/>
+
+			<AlertDialog
+				open={closeTarget !== null}
+				title={
+					closeTarget
+						? `Close Tab — Invoice ${closeTarget.invoice.invoiceNumber}`
+						: ""
+				}
+				description={
+					closeTarget
+						? closeTarget.invoice.balanceInCents > 0
+							? `Member still owes ${formatCents(closeTarget.invoice.balanceInCents)}. Close anyway? They can still pay this balance later, but new charges will start a fresh invoice.`
+							: "Close this tab? No new charges will be added."
+						: ""
+				}
+				confirmLabel={closing ? "Closing…" : "Close Tab"}
+				cancelLabel="Cancel"
+				onConfirm={() => {
+					if (!closeTarget || closing) return;
+					closeInvoiceMutation.mutate({
+						invoiceId: closeTarget.invoice.invoiceId,
+					});
+				}}
+				onCancel={() => {
+					if (closing) return;
+					setCloseTarget(null);
+				}}
+			/>
 		</div>
 	);
 }

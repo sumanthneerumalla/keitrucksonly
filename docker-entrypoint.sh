@@ -40,4 +40,18 @@ SQL
 fi
 
 echo "==> Starting application..."
+
+# Tee shell stdout/stderr to /tmp/runtime.log so /api/logs can serve recent
+# output to platform admins. Uses a FIFO + backgrounded tee so we keep
+# `exec "$@"` semantics: the app runs as PID 1 (after exec), signals flow
+# correctly on shutdown, and tee just sits in the background duplicating
+# the stream. Alpine's `sh` is `ash` — process substitution isn't available,
+# hence the FIFO pattern instead of `exec > >(tee ...)`.
+LOG_FILE=/tmp/runtime.log
+LOG_FIFO=/tmp/.runtime.fifo
+rm -f "$LOG_FIFO"
+mkfifo "$LOG_FIFO"
+tee "$LOG_FILE" < "$LOG_FIFO" &
+exec > "$LOG_FIFO" 2>&1
+
 exec "$@"
