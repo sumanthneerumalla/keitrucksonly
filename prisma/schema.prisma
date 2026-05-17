@@ -45,6 +45,7 @@ model Club {
   rentalBookings    RentalBooking[]
   familyGroups      FamilyGroup[]
   invoices          Invoice[]
+  emailGroups       EmailGroup[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -103,6 +104,16 @@ model User {
   // Cross-club: a user in two clubs can be in two independent FamilyGroups (one per club).
   familyGroupId String?
   familyGroup   FamilyGroup? @relation(fields: [familyGroupId], references: [familyGroupId], onDelete: SetNull)
+
+  // Date of birth — promoted from StudentProfile.profileData JSON blob for indexed age-range queries
+  dateOfBirth DateTime?
+
+  // Email groups
+  emailGroupsCreated   EmailGroup[]          @relation("EmailGroupCreator")
+  emailGroupMembers    EmailGroupMember[]    @relation("EmailGroupMemberships")
+  emailGroupExclusions EmailGroupExclusion[] @relation("EmailGroupExclusions")
+  emailsSent           EmailSendLog[]        @relation("EmailSender")
+  emailsReceived       EmailSendRecipient[]  @relation("EmailRecipient")
 
   @@index([clerkUserId])
   @@index([clubShortName])
@@ -423,6 +434,7 @@ model ClubFacility {
   attendances    Attendance[]
   rentalBookings RentalBooking[]
   invoices       Invoice[]
+  emailGroups    EmailGroup[]
 
   @@unique([clubShortName, name])
   @@index([clubShortName])
@@ -1008,4 +1020,97 @@ model InvoiceRefund {
   @@index([paymentId])
   @@index([invoiceId])
   @@index([refundedBy])
+}
+
+// ============================================================
+// EMAIL GROUPS (see designFiles/email-groups.md)
+// ============================================================
+
+// EmailGroup — a named, reusable group scoped to a facility for bulk email sends.
+// Membership is dynamic (filter-based) with manual overrides.
+model EmailGroup {
+  emailGroupId    String       @id @default(cuid())
+  clubShortName   String
+  club            Club         @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  facilityId      String
+  facility        ClubFacility @relation(fields: [facilityId], references: [facilityId], onDelete: Cascade)
+  name            String       @db.VarChar(200)
+  createdByUserId String
+  createdByUser   User         @relation("EmailGroupCreator", fields: [createdByUserId], references: [userId])
+  // Stored filter config: { tagIds: string[], ageMin?: number, ageMax?: number }
+  filterConfig    Json?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  members    EmailGroupMember[]
+  exclusions EmailGroupExclusion[]
+  sendLogs   EmailSendLog[]
+
+  @@index([clubShortName])
+  @@index([facilityId])
+  @@index([createdByUserId])
+}
+
+// EmailGroupMember — explicit membership in an email group (from filter sync or manual add)
+model EmailGroupMember {
+  id           String     @id @default(cuid())
+  emailGroupId String
+  emailGroup   EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  userId       String
+  user         User       @relation("EmailGroupMemberships", fields: [userId], references: [userId], onDelete: Cascade)
+  source       String     @db.VarChar(20) // "filter" | "manual"
+  joinedAt     DateTime   @default(now())
+
+  @@unique([emailGroupId, userId])
+  @@index([emailGroupId])
+  @@index([userId])
+}
+
+// EmailGroupExclusion — users who left or were manually removed from a group
+model EmailGroupExclusion {
+  id           String     @id @default(cuid())
+  emailGroupId String
+  emailGroup   EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  userId       String
+  user         User       @relation("EmailGroupExclusions", fields: [userId], references: [userId], onDelete: Cascade)
+  reason       String     @db.VarChar(20) // "left" | "removed"
+  excludedAt   DateTime   @default(now())
+
+  @@unique([emailGroupId, userId])
+  @@index([emailGroupId])
+  @@index([userId])
+}
+
+// EmailSendLog — audit log of every email sent to a group
+model EmailSendLog {
+  sendLogId      String     @id @default(cuid())
+  emailGroupId   String
+  emailGroup     EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  senderUserId   String
+  sender         User       @relation("EmailSender", fields: [senderUserId], references: [userId])
+  subject        String     @db.VarChar(500)
+  bodyHtml       String     @db.Text
+  attachmentUrls String[]
+  recipientCount Int
+  sentAt         DateTime   @default(now())
+
+  recipients EmailSendRecipient[]
+
+  @@index([emailGroupId])
+  @@index([senderUserId])
+  @@index([sentAt])
+}
+
+// EmailSendRecipient — per-recipient delivery record for a sent email
+model EmailSendRecipient {
+  id        String       @id @default(cuid())
+  sendLogId String
+  sendLog   EmailSendLog @relation(fields: [sendLogId], references: [sendLogId], onDelete: Cascade)
+  userId    String
+  user      User         @relation("EmailRecipient", fields: [userId], references: [userId])
+  email     String       @db.VarChar(255) // snapshot at send time
+  status    String       @db.VarChar(20) // "sent" | "failed"
+
+  @@index([sendLogId])
+  @@index([userId])
 }

@@ -12,6 +12,7 @@ import {
 	CalendarClock,
 	ChevronDown,
 	LayoutDashboard,
+	Mail,
 	Settings,
 	ShoppingCart,
 	User,
@@ -127,6 +128,17 @@ export const navItems: NavItem[] = [
 		href: "/coaches",
 		icon: <Users size={20} />,
 		userTypes: ALL_TYPES,
+	},
+	{
+		label: "Email Groups",
+		href: "/email-groups",
+		icon: <Mail size={20} />,
+		userTypes: [
+			UserType.FACILITY,
+			UserType.COACH,
+			UserType.CLUB_ADMIN,
+			UserType.PLATFORM_ADMIN,
+		],
 	},
 	{
 		label: "Profile",
