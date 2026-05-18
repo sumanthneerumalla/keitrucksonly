@@ -91,6 +91,16 @@ export const navItems: NavItem[] = [
 		],
 	},
 	{
+		label: "Clients",
+		href: "/clients",
+		icon: <Users size={20} />,
+		userTypes: [
+			UserType.FACILITY,
+			UserType.CLUB_ADMIN,
+			UserType.PLATFORM_ADMIN,
+		],
+	},
+	{
 		label: "Video Collections",
 		href: "/video-collections",
 		icon: <Video size={20} />,
@@ -163,15 +173,6 @@ export const navItems: NavItem[] = [
 			{
 				label: "All Collections",
 				href: "/admin/collections",
-				userTypes: [
-					UserType.PLATFORM_ADMIN,
-					UserType.CLUB_ADMIN,
-					UserType.FACILITY,
-				],
-			},
-			{
-				label: "Users",
-				href: "/admin/users",
 				userTypes: [
 					UserType.PLATFORM_ADMIN,
 					UserType.CLUB_ADMIN,

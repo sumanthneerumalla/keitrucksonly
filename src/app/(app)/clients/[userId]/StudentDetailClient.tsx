@@ -41,10 +41,10 @@ export default function StudentDetailClient({
 				<p className="text-[var(--foreground)] text-sm">
 					{error?.message ?? "Student not found."}
 				</p>
-				<Link href="/admin/users">
+				<Link href="/clients">
 					<Button variant="outline" size="sm">
 						<ArrowLeft size={14} />
-						Back to users
+						Back to clients
 					</Button>
 				</Link>
 			</div>
@@ -65,10 +65,10 @@ export default function StudentDetailClient({
 		<div className="mx-auto max-w-4xl space-y-6 p-6">
 			{/* Back link */}
 			<div>
-				<Link href="/admin/users">
-					<Button variant="ghost" size="sm">
-						<ArrowLeft size={14} />
-						Back to users
+				<Link href="/clients">
+					<Button variant="default" size="lg" className="[&_svg]:size-5">
+						<ArrowLeft />
+						Back to clients
 					</Button>
 				</Link>
 			</div>

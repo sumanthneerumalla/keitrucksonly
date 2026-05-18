@@ -1,8 +1,6 @@
 "use client";
 
 import {
-	ArrowLeft,
-	ArrowRight,
 	Check,
 	ChevronsUpDown,
 	Download,
@@ -149,14 +147,14 @@ function CreateUserModal({
 			void utils.user.listClubUsers.invalidate();
 		},
 		onError: (err) => {
-			toast(`User created but failed to set tags: ${err.message}`, "error");
+			toast(`Client created but failed to set tags: ${err.message}`, "error");
 		},
 	});
 
 	const createMutation = api.user.createUser.useMutation({
 		onSuccess: (newUser) => {
 			void utils.user.listClubUsers.invalidate();
-			toast("User created", "success");
+			toast("Client created", "success");
 			if (selectedTagIds.length > 0) {
 				setUserTagsMutation.mutate({
 					userId: newUser.userId,
@@ -186,7 +184,7 @@ function CreateUserModal({
 		<Dialog open={open} onOpenChange={(v) => !v && resetAndClose()}>
 			<DialogContent className="max-w-md">
 				<DialogHeader>
-					<DialogTitle>Create User</DialogTitle>
+					<DialogTitle>Create Client</DialogTitle>
 					<DialogDescription>
 						Add a new member to your club. They will receive an email to set
 						their password.
@@ -341,7 +339,7 @@ function CreateUserModal({
 								(!newClubName.trim() || !newClubShortName.trim()))
 						}
 					>
-						{createMutation.isPending ? "Creating..." : "Create User"}
+						{createMutation.isPending ? "Creating..." : "Create Client"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -444,7 +442,7 @@ function EditUserModal({
 		<Dialog open={!!user} onOpenChange={(v) => !v && onClose()}>
 			<DialogContent className="max-w-md">
 				<DialogHeader>
-					<DialogTitle>Edit User</DialogTitle>
+					<DialogTitle>Edit Client</DialogTitle>
 					<DialogDescription>
 						{user.firstName} {user.lastName} &bull; {user.email}
 					</DialogDescription>
@@ -599,12 +597,12 @@ function EditUserModal({
 }
 
 // ---------------------------------------------------------------------------
-// Main UsersClient
+// Main ClientsList
 // ---------------------------------------------------------------------------
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
-export default function UsersClient({
+export default function ClientsList({
 	userType,
 	clubShortName,
 }: {
@@ -730,11 +728,11 @@ export default function UsersClient({
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement("a");
 			a.href = url;
-			a.download = `users_export_${new Date().toISOString().slice(0, 10)}.csv`;
+			a.download = `clients_export_${new Date().toISOString().slice(0, 10)}.csv`;
 			a.click();
 			URL.revokeObjectURL(url);
 		} catch {
-			toast("Failed to export users", "error");
+			toast("Failed to export clients", "error");
 		} finally {
 			setIsExporting(false);
 		}
@@ -789,7 +787,7 @@ export default function UsersClient({
 		onSuccess: (result) => {
 			void utils.user.listClubUsers.invalidate();
 			const parts: string[] = [];
-			if (result.added > 0) parts.push(`Added to ${result.added} user${result.added === 1 ? "" : "s"}`);
+			if (result.added > 0) parts.push(`Added to ${result.added} client${result.added === 1 ? "" : "s"}`);
 			if (result.skipped > 0) parts.push(`${result.skipped} already at tag limit`);
 			toast(parts.join(", ") || "No changes made", "success");
 			setSelectedUserIds(new Set());
@@ -806,19 +804,12 @@ export default function UsersClient({
 
 			{/* Header */}
 			<div className="mb-6 flex items-center justify-between">
-				<div className="flex items-center gap-3">
-					<Link href="/admin">
-						<Button variant="ghost" size="icon">
-							<ArrowLeft size={18} />
-						</Button>
-					</Link>
-					<h1 className="font-semibold text-2xl text-[var(--foreground)]">
-						Users
-					</h1>
-				</div>
+				<h1 className="font-semibold text-2xl text-[var(--foreground)]">
+					Clients
+				</h1>
 				<Button onClick={() => setIsCreateOpen(true)}>
 					<UserPlus size={16} className="mr-2" />
-					Create User
+					Create Client
 				</Button>
 			</div>
 
@@ -982,7 +973,7 @@ export default function UsersClient({
 			{selectedUserIds.size > 0 && (
 				<div className="mb-4 flex items-center gap-3 rounded-lg bg-blue-50 px-4 py-2.5">
 					<span className="font-medium text-blue-900 text-sm">
-						{selectedUserIds.size} user{selectedUserIds.size === 1 ? "" : "s"} selected
+						{selectedUserIds.size} client{selectedUserIds.size === 1 ? "" : "s"} selected
 					</span>
 
 					<Popover open={bulkTagPopoverOpen} onOpenChange={setBulkTagPopoverOpen}>
@@ -1102,7 +1093,7 @@ export default function UsersClient({
 				</div>
 			) : users.length === 0 ? (
 				<div className="rounded-lg border border-gray-200 bg-white p-8 text-center text-[var(--muted-foreground)] text-sm">
-					No users found.
+					No clients found.
 				</div>
 			) : (
 				<div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
@@ -1117,7 +1108,7 @@ export default function UsersClient({
 											if (el) el.indeterminate = someSelected;
 										}}
 										onChange={toggleSelectAll}
-										aria-label="Select all users on this page"
+										aria-label="Select all clients on this page"
 										className="h-4 w-4 rounded border-gray-300 accent-[var(--primary)]"
 									/>
 								</th>
@@ -1154,7 +1145,12 @@ export default function UsersClient({
 										/>
 									</td>
 									<td className="px-4 py-3 font-medium text-[var(--foreground)]">
-										{u.firstName} {u.lastName}
+										<Link
+											href={`/clients/${u.userId}`}
+											className="hover:text-[var(--primary)] hover:underline"
+										>
+											{u.firstName} {u.lastName}
+										</Link>
 									</td>
 									<td className="px-4 py-3 text-[var(--muted-foreground)]">
 										{u.email}
@@ -1248,25 +1244,14 @@ export default function UsersClient({
 									</td>
 									<td className="px-4 py-3">
 										<div className="flex items-center gap-1">
-											<Link
-												href={`/admin/users/${u.userId}`}
-												aria-label={`View detail for ${u.firstName ?? ""} ${u.lastName ?? ""}`}
-												title="View detail"
-											>
-												<Button
-													variant="ghost"
-													size="icon"
-													className="text-[var(--muted-foreground)] hover:bg-[var(--primary)] hover:text-white"
-												>
-													<ArrowRight size={14} />
-												</Button>
-											</Link>
 											<Button
 												variant="ghost"
 												size="icon"
 												onClick={() =>
 													setEditingUserId(u.userId)
 												}
+												aria-label={`Edit ${u.firstName ?? ""} ${u.lastName ?? ""}`}
+												title="Edit"
 											>
 												<Pencil size={14} />
 											</Button>
