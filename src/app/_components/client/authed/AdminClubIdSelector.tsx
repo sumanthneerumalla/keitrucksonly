@@ -84,9 +84,13 @@ export default function AdminClubIdSelector(props: AdminClubIdSelectorProps) {
 	const onSelect = mode !== "switch" ? props.onSelect : undefined;
 	const switchClub = api.user.switchClub.useMutation({
 		onSuccess: () => {
-			// Invalidate both queries so the label and membership list reflect the new club
-			void utils.user.getClubMemberships.invalidate();
-			void utils.user.getOrCreateProfile.invalidate();
+			// A club switch changes User.clubShortName, userType, AND activeFacilityId
+			// server-side — which makes virtually every per-club tRPC query stale
+			// (facility memberships, calendar events, clients list, etc.).
+			// Nuclear invalidate-all is correct here: club switches are rare admin
+			// actions, and this future-proofs against any new club-scoped queries
+			// without having to remember to enumerate them here.
+			void utils.invalidate();
 			setIsOpen(false);
 			setQuery("");
 			onSwitch?.();
