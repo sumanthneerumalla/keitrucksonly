@@ -180,7 +180,7 @@ export const navItems: NavItem[] = [
 				],
 			},
 			{
-				label: "Products",
+				label: "Product Categories",
 				href: "/admin/products/categories",
 				userTypes: [
 					UserType.PLATFORM_ADMIN,
