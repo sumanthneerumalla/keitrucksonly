@@ -10,44 +10,51 @@
 
 # This file is expeced to be in /etc/caddy/Caddyfile
 # After any modifications, run 'sudo systemctl reload caddy' to apply changes
-
 {
- email admin@facilitypresence.com
+	email admin@facilitypresence.com
 
- # To experiment without hitting Let's Encrypt production rate limits, you can use staging.
- # Browsers will show a certificate warning when this is enabled.
- # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+	# To experiment without hitting Let's Encrypt production rate limits, you can use staging.
+	# Browsers will show a certificate warning when this is enabled.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
 www.facilitypresence.com {
- reverse_proxy 127.0.0.1:3001
+	reverse_proxy 127.0.0.1:3001
 }
 
 www.dev.facilitypresence.com {
- reverse_proxy 127.0.0.1:3000
+	reverse_proxy 127.0.0.1:3000
 }
 
 dev.facilitypresence.com {
- redir https://www.dev.facilitypresence.com{uri} permanent
+	redir https://www.dev.facilitypresence.com{uri} permanent
 }
 
 facilitypresence.com {
- redir https://www.facilitypresence.com{uri} permanent
+	redir https://www.facilitypresence.com{uri} permanent
 }
 
 # Old domain redirects
 www.shuttlementor.com {
- redir https://www.facilitypresence.com{uri} permanent
+	redir https://www.facilitypresence.com{uri} permanent
 }
 
 shuttlementor.com {
- redir https://www.facilitypresence.com{uri} permanent
+	redir https://www.facilitypresence.com{uri} permanent
 }
 
 www.dev.shuttlementor.com {
- redir https://www.dev.facilitypresence.com{uri} permanent
+	redir https://www.dev.facilitypresence.com{uri} permanent
 }
 
 dev.shuttlementor.com {
- redir https://www.dev.facilitypresence.com{uri} permanent
+	redir https://www.dev.facilitypresence.com{uri} permanent
+}
+
+cal.facilitypresence.com {
+	reverse_proxy 127.0.0.1:3030
+}
+
+www.cal.facilitypresence.com {
+	redir https://cal.facilitypresence.com{uri} permanent
 }
