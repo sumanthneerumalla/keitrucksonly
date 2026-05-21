@@ -85,15 +85,18 @@ model User {
   soldPackages          MemberPackage[]         @relation("MemberPackageSeller")
 
   // Phase 9-EOD invoicing relations (Round 4: closedInvoices added; Round 5: billedInvoices added)
-  invoices         Invoice[]        @relation("InvoiceMember")
-  createdInvoices  Invoice[]        @relation("InvoiceCreatedBy")
-  closedInvoices   Invoice[]        @relation("InvoiceClosedBy")
+  invoices              Invoice[]         @relation("InvoiceMember")
+  createdInvoices       Invoice[]         @relation("InvoiceCreatedBy")
+  closedInvoices        Invoice[]         @relation("InvoiceClosedBy")
   // Phase 9a Round 5 — invoices where this user is the "Bill to" target
   // (the payer), regardless of who consumed the charges (the `userId` /
   // "member"). When billedToUserId is null, the consumer is also the payer.
-  billedInvoices   Invoice[]        @relation("InvoiceBilledTo")
-  receivedPayments InvoicePayment[] @relation("PaymentReceivedBy")
-  issuedRefunds    InvoiceRefund[]  @relation("RefundIssuedBy")
+  billedInvoices        Invoice[]         @relation("InvoiceBilledTo")
+  receivedPayments      InvoicePayment[]  @relation("PaymentReceivedBy")
+  issuedRefunds         InvoiceRefund[]   @relation("RefundIssuedBy")
+  // Phase 9a line-item hardening — CREDIT lines that snapshot this user as the
+  // source payer (whose carried-forward overpayment credit they represent).
+  creditSourceLineItems InvoiceLineItem[] @relation("LineItemCreditFromUser")
 
   // Multi-club membership registry
   clubMemberships UserClub[]
@@ -367,6 +370,7 @@ model RevenueCategory {
 
   productCategories ProductCategory[]
   products          Product[]
+  invoiceLineItems  InvoiceLineItem[]
 
   @@unique([clubShortName, code])
   @@index([clubShortName])
@@ -920,14 +924,14 @@ model Invoice {
   // in the same transaction). Once closedAt is non-null, `sellPackage` does NOT
   // append new line items to this invoice — a fresh invoice opens for the next
   // charge. See designFiles/roadmap/phase9-invoicing.md.
-  closedAt          DateTime?
-  closedBy          String?
-  closedByUser      User?         @relation("InvoiceClosedBy", fields: [closedBy], references: [userId])
+  closedAt         DateTime?
+  closedBy         String?
+  closedByUser     User?     @relation("InvoiceClosedBy", fields: [closedBy], references: [userId])
   // creditConsumedAt is stamped when this (auto-closed + overpaid) invoice's
   // negative balance was pulled forward as a "Credit from INV-XXX" line item on
   // a new invoice. Once stamped, the credit cannot be re-applied elsewhere.
   // NULL = either no credit to consume, or credit is still available.
-  creditConsumedAt  DateTime?
+  creditConsumedAt DateTime?
 
   lineItems                InvoiceLineItem[]
   payments                 InvoicePayment[]
@@ -953,26 +957,60 @@ model Invoice {
 
 // InvoiceLineItem — a single charge on an invoice. unitPriceInCents is a SNAPSHOT
 // at invoice creation time so historical totals are immune to later plan-price edits.
+// Phase 9a line-item hardening — closed, code-controlled discriminator for what
+// a line represents. Enum (not String) because the value set is small + fixed by
+// us and feeds reporting GROUP BY + exhaustive switch rendering. (Contrast
+// Invoice.status / InvoicePayment.processor — String because they're
+// configurable / open-ended.) Adding a value = a one-line enum migration.
+enum InvoiceLineItemKind {
+  PACKAGE_SALE // sold PackagePlan (productId + packagePlanId + memberPackageId set)
+  CREDIT // overpayment credit carried forward (creditFromInvoiceId set; negative amount)
+  PRODUCT_SALE // a Product sold directly (productId only) — future (E19 / POS)
+  FEE // ad-hoc charge, no provenance FK — future
+  EVENT_REGISTRATION // billable event check-in w/o a covering package — future (E18)
+  RENTAL // court-rental charge — future
+  MEMBERSHIP_FEE // recurring membership charge — future (Phase 10; adds memberMembershipId)
+}
+
 model InvoiceLineItem {
-  lineItemId       String         @id @default(cuid())
-  invoiceId        String
-  invoice          Invoice        @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
-  productId        String?
-  product          Product?       @relation(fields: [productId], references: [productId])
-  packagePlanId    String?
-  packagePlan      PackagePlan?   @relation(fields: [packagePlanId], references: [packagePlanId])
-  memberPackageId  String?
-  memberPackage    MemberPackage? @relation(fields: [memberPackageId], references: [memberPackageId])
-  description      String         @db.VarChar(500)
-  quantity         Int            @default(1)
-  unitPriceInCents Int
-  discountInCents  Int            @default(0)
+  lineItemId        String              @id @default(cuid())
+  invoiceId         String
+  invoice           Invoice             @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  // Phase 9a line-item hardening — explicit discriminator. Producers set this
+  // alongside the matching provenance FK(s); do NOT infer the type from which FK
+  // is non-null (productId is set on BOTH PACKAGE_SALE and PRODUCT_SALE lines, so
+  // the FK pattern is ambiguous). The DB can't enforce "kind matches the FK set"
+  // (cross-column rule) — sellPackage + future producers assert it in app code.
+  kind              InvoiceLineItemKind
+  productId         String?
+  product           Product?            @relation(fields: [productId], references: [productId])
+  packagePlanId     String?
+  packagePlan       PackagePlan?        @relation(fields: [packagePlanId], references: [packagePlanId])
+  memberPackageId   String?
+  memberPackage     MemberPackage?      @relation(fields: [memberPackageId], references: [memberPackageId])
+  description       String              @db.VarChar(500)
+  // quantity = how many of THIS line unit (e.g. 2 drinks). For a package sale it
+  // is always 1 — the session COUNT lives on PackagePlan.sessionCount /
+  // MemberPackage.creditsTotal, NOT here.
+  quantity          Int                 @default(1)
+  // unitPriceInCents = SNAPSHOT of what was charged per unit at creation;
+  // authoritative. NOT the same as the linked Product/PackagePlan price (those
+  // can drift later; this can't). Negative on CREDIT lines.
+  unitPriceInCents  Int
+  discountInCents   Int                 @default(0)
   // Tax stored as basis points (1bp = 0.01%); 0 = no tax. Snapshot at creation.
-  taxRateBps       Int            @default(0)
-  taxAmountInCents Int            @default(0)
-  totalInCents     Int // (unitPrice * quantity - discount) + taxAmount
-  sortOrder        Int            @default(0)
-  createdAt        DateTime       @default(now())
+  taxRateBps        Int                 @default(0)
+  taxAmountInCents  Int                 @default(0)
+  // Phase 9a line-item hardening — SNAPSHOT the revenue category at creation
+  // (decision #5/Q3). Was derived live via productId -> Product.revenueCategoryId
+  // (drifts on recategorization). Tax was already snapshotted; this makes revenue
+  // classification consistent. Null when no category (credit lines, ad-hoc fees,
+  // isGeneralDropIn packages with no product).
+  revenueCategoryId String?
+  revenueCategory   RevenueCategory?    @relation(fields: [revenueCategoryId], references: [revenueCategoryId])
+  totalInCents      Int // (unitPrice * quantity - discount) + taxAmount
+  sortOrder         Int                 @default(0)
+  createdAt         DateTime            @default(now())
 
   // Phase 9a Round 4 — credit carry-forward.
   // When this line item represents credit pulled forward from an earlier
@@ -981,12 +1019,20 @@ model InvoiceLineItem {
   // `creditConsumedAt` stamped). Bidirectional audit trail.
   creditFromInvoiceId String?
   creditFromInvoice   Invoice? @relation("CreditSource", fields: [creditFromInvoiceId], references: [invoiceId])
+  // Phase 9a line-item hardening — SNAPSHOT of the credit source's payer (whose
+  // overpayment credit this is) so a CREDIT line can name its source person,
+  // robust against a future edit-bill-to mutation changing the source's payer.
+  creditFromUserId    String?
+  creditFromUser      User?    @relation("LineItemCreditFromUser", fields: [creditFromUserId], references: [userId], onDelete: SetNull)
 
   @@index([invoiceId])
+  @@index([kind])
   @@index([productId])
   @@index([packagePlanId])
   @@index([memberPackageId])
   @@index([creditFromInvoiceId])
+  @@index([revenueCategoryId])
+  @@index([creditFromUserId])
 }
 
 // InvoicePayment — a payment received against an invoice. Multi-processor by design:

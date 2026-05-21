@@ -196,6 +196,26 @@ async function getFacilityTimezoneForUser(
 	);
 }
 
+/**
+ * Phase 9a line-item hardening — the DB can't enforce that `kind` matches the
+ * provenance FKs set (a cross-column rule a Postgres enum can't express), so
+ * producers assert it here. Keeps the discriminator honest as more charge
+ * sources are added. Throws on mismatch (a programmer error — the values are
+ * constants in the producer, so it should never fire; it guards future edits).
+ */
+function assertLineItemKindConsistency(d: {
+	kind: string;
+	packagePlanId?: string | null;
+	creditFromInvoiceId?: string | null;
+}): void {
+	if (d.kind === "PACKAGE_SALE" && !d.packagePlanId) {
+		throw new Error("InvoiceLineItem kind=PACKAGE_SALE requires packagePlanId");
+	}
+	if (d.kind === "CREDIT" && !d.creditFromInvoiceId) {
+		throw new Error("InvoiceLineItem kind=CREDIT requires creditFromInvoiceId");
+	}
+}
+
 // ============================================================
 // ROUTER
 // ============================================================
@@ -480,6 +500,10 @@ export const packagesRouter = createTRPCRouter({
 					clubShortName: ctx.user.clubShortName,
 					isActive: true,
 				},
+				// Phase 9a line-item hardening — pull the product's revenue category
+				// so we can SNAPSHOT it onto the package line. `product` is null for
+				// isGeneralDropIn plans (no productId) → revenueCategoryId stays null.
+				include: { product: { select: { revenueCategoryId: true } } },
 			});
 
 			if (!plan) {
@@ -638,6 +662,10 @@ export const packagesRouter = createTRPCRouter({
 							invoiceNumber: true,
 							totalInCents: true,
 							amountPaidInCents: true,
+							// Phase 9a line-item hardening — need the source payer to
+							// snapshot `creditFromUserId` on the credit line below.
+							userId: true,
+							billedToUserId: true,
 						},
 					});
 
@@ -653,9 +681,14 @@ export const packagesRouter = createTRPCRouter({
 					for (const s of sourcesWithCredit) {
 						const creditCents = s.amountPaidInCents - s.totalInCents;
 
+						assertLineItemKindConsistency({
+							kind: "CREDIT",
+							creditFromInvoiceId: s.invoiceId,
+						});
 						await tx.invoiceLineItem.create({
 							data: {
 								invoiceId: invoice.invoiceId,
+								kind: "CREDIT",
 								description: `Credit from ${s.invoiceNumber}`,
 								quantity: 1,
 								unitPriceInCents: -creditCents,
@@ -665,6 +698,8 @@ export const packagesRouter = createTRPCRouter({
 								totalInCents: -creditCents,
 								sortOrder: sortIndex, // credits sort before package line
 								creditFromInvoiceId: s.invoiceId,
+								// Snapshot the source's payer (whose credit this is).
+								creditFromUserId: s.billedToUserId ?? s.userId,
 							},
 						});
 
@@ -699,12 +734,20 @@ export const packagesRouter = createTRPCRouter({
 				// Append the line item to the running tab. On a new invoice with
 				// credit lines, this sorts AFTER the credit lines so the timeline
 				// reads: credits applied → new charge.
+				assertLineItemKindConsistency({
+					kind: "PACKAGE_SALE",
+					packagePlanId: plan.packagePlanId,
+				});
 				await tx.invoiceLineItem.create({
 					data: {
 						invoiceId: invoice.invoiceId,
+						kind: "PACKAGE_SALE",
 						productId: plan.productId,
 						packagePlanId: plan.packagePlanId,
 						memberPackageId: memberPackage.memberPackageId,
+						// Snapshot the revenue category at sale time (null when the
+						// plan has no product, e.g. isGeneralDropIn).
+						revenueCategoryId: plan.product?.revenueCategoryId ?? null,
 						description: plan.name,
 						quantity: 1,
 						unitPriceInCents,
