@@ -1,7 +1,17 @@
 import { Prisma } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { createTRPCRouter, facilityProcedure } from "~/server/api/trpc";
+import {
+	createTRPCRouter,
+	facilityProcedure,
+	protectedProcedure,
+} from "~/server/api/trpc";
+import {
+	getCurrentUser,
+	isFacilityOrAbove,
+	isPlatformAdmin,
+	isSameClub,
+} from "~/server/utils/utils";
 
 /**
  * Phase 9 billing router.
@@ -155,6 +165,238 @@ export const billingRouter = createTRPCRouter({
 							0,
 						),
 					})),
+				})),
+			};
+		}),
+
+	/**
+	 * Phase 9a (B10) — full single-invoice detail. Powers the invoice detail
+	 * pages: today the staff-facing `/clients/[userId]/invoices/[invoiceId]`
+	 * and `/admin/invoices/[invoiceId]` views (which share one component), and
+	 * a future member-facing view — all off this one query.
+	 *
+	 * Auth is `protectedProcedure` + an in-handler check rather than
+	 * `facilityProcedure` so the SAME query serves members viewing their own
+	 * invoice. A viewer may read an invoice when they are the consumer
+	 * (`userId`), the payer (`billedToUserId`), or same-club staff
+	 * (FACILITY/CLUB_ADMIN, or any PLATFORM_ADMIN across clubs). Everyone else —
+	 * including a member probing another member's invoice id, or cross-club
+	 * staff — gets NOT_FOUND, identical to a genuinely missing id, so the
+	 * endpoint never confirms an invoice's existence to someone who can't see it.
+	 *
+	 * Returns the header, signed money (balance < 0 = account credit), the
+	 * invoice-level staff `notes` comment, line items (with `kind`, the
+	 * snapshot revenue category, and the resolved "Credit from <person>" source
+	 * for CREDIT lines), payments (each with its refunded + net total), and the
+	 * invoice's refunds. See designFiles/roadmap/phase9-invoicing.md (#10/#14).
+	 */
+	getInvoice: protectedProcedure
+		.input(z.object({ invoiceId: z.string() }))
+		.query(async ({ ctx, input }) => {
+			// `protectedProcedure` only authenticates (ctx.auth = Clerk id); unlike
+			// `facilityProcedure` it does NOT attach the DB user. `getCurrentUser`
+			// (shared helper) resolves it from the Clerk id — throwing NOT_FOUND if
+			// the account has no profile yet — so the consumer-OR-payer-OR-staff
+			// authorization can live here and be reused by the future member view.
+			const viewer = await getCurrentUser(ctx);
+
+			const invoice = await ctx.db.invoice.findUnique({
+				where: { invoiceId: input.invoiceId },
+				include: {
+					user: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+							email: true,
+						},
+					},
+					billedToUser: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+							email: true,
+						},
+					},
+					closedByUser: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
+					createdByUser: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
+					lineItems: {
+						orderBy: { sortOrder: "asc" },
+						include: {
+							revenueCategory: {
+								select: { revenueCategoryId: true, label: true },
+							},
+							creditFromUser: {
+								select: { userId: true, firstName: true, lastName: true },
+							},
+							creditFromInvoice: {
+								select: { invoiceId: true, invoiceNumber: true },
+							},
+						},
+					},
+					payments: {
+						// Newest first; paymentId tiebreaker stabilizes equal-millisecond
+						// rows (matches getMemberBilling).
+						orderBy: [{ receivedAt: "desc" }, { paymentId: "asc" }],
+						include: {
+							receivedByUser: {
+								select: { userId: true, firstName: true, lastName: true },
+							},
+							refunds: true,
+						},
+					},
+					refunds: {
+						orderBy: [{ refundedAt: "desc" }, { refundId: "asc" }],
+						include: {
+							refundedByUser: {
+								select: { userId: true, firstName: true, lastName: true },
+							},
+						},
+					},
+				},
+			});
+
+			// A missing invoice and an invoice the viewer may not see BOTH return
+			// NOT_FOUND, so an unauthorized viewer can't probe for invoice ids.
+			if (!invoice) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found",
+				});
+			}
+
+			// Reuse the shared role/club helpers rather than re-deriving userType
+			// comparisons. `isFacilityOrAbove` already includes PLATFORM_ADMIN; the
+			// explicit `isPlatformAdmin` disjunct is what lets a platform admin read
+			// ACROSS clubs, while facility/club admins are scoped to the invoice's
+			// club via `isSameClub`.
+			const isConsumer = invoice.userId === viewer.userId;
+			const isPayer = invoice.billedToUserId === viewer.userId;
+			const isStaffViewer =
+				isPlatformAdmin(viewer) ||
+				(isFacilityOrAbove(viewer) && isSameClub(viewer, invoice));
+			if (!(isConsumer || isPayer || isStaffViewer)) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found",
+				});
+			}
+
+			const balanceInCents = invoice.totalInCents - invoice.amountPaidInCents;
+
+			return {
+				invoiceId: invoice.invoiceId,
+				invoiceNumber: invoice.invoiceNumber,
+				status: invoice.status,
+				issueDate: invoice.issueDate,
+				dueDate: invoice.dueDate,
+				closedAt: invoice.closedAt,
+				createdAt: invoice.createdAt,
+				subtotalInCents: invoice.subtotalInCents,
+				taxTotalInCents: invoice.taxTotalInCents,
+				totalInCents: invoice.totalInCents,
+				amountPaidInCents: invoice.amountPaidInCents,
+				// Signed: negative = account credit (Version A overpayment, #104).
+				balanceInCents,
+				// Invoice-level staff comment; renders on the PDF later (Phase 13).
+				notes: invoice.notes,
+				consumer: {
+					userId: invoice.user.userId,
+					firstName: invoice.user.firstName,
+					lastName: invoice.user.lastName,
+					email: invoice.user.email,
+				},
+				billedTo: invoice.billedToUser
+					? {
+							userId: invoice.billedToUser.userId,
+							firstName: invoice.billedToUser.firstName,
+							lastName: invoice.billedToUser.lastName,
+							email: invoice.billedToUser.email,
+						}
+					: null,
+				closedBy: invoice.closedByUser
+					? {
+							userId: invoice.closedByUser.userId,
+							firstName: invoice.closedByUser.firstName,
+							lastName: invoice.closedByUser.lastName,
+						}
+					: null,
+				createdBy: {
+					userId: invoice.createdByUser.userId,
+					firstName: invoice.createdByUser.firstName,
+					lastName: invoice.createdByUser.lastName,
+				},
+				lineItems: invoice.lineItems.map((li) => ({
+					lineItemId: li.lineItemId,
+					kind: li.kind,
+					description: li.description,
+					quantity: li.quantity,
+					unitPriceInCents: li.unitPriceInCents,
+					discountInCents: li.discountInCents,
+					taxAmountInCents: li.taxAmountInCents,
+					// Signed: negative on CREDIT lines.
+					totalInCents: li.totalInCents,
+					revenueCategory: li.revenueCategory
+						? {
+								revenueCategoryId: li.revenueCategory.revenueCategoryId,
+								label: li.revenueCategory.label,
+							}
+						: null,
+					// CREDIT lines name their source person + invoice (hardening #115).
+					creditFrom: li.creditFromUser
+						? {
+								userId: li.creditFromUser.userId,
+								firstName: li.creditFromUser.firstName,
+								lastName: li.creditFromUser.lastName,
+							}
+						: null,
+					creditFromInvoice: li.creditFromInvoice
+						? {
+								invoiceId: li.creditFromInvoice.invoiceId,
+								invoiceNumber: li.creditFromInvoice.invoiceNumber,
+							}
+						: null,
+				})),
+				payments: invoice.payments.map((p) => {
+					const refundedTotalInCents = p.refunds.reduce(
+						(sum, r) => sum + r.amountInCents,
+						0,
+					);
+					return {
+						paymentId: p.paymentId,
+						amountInCents: p.amountInCents,
+						paymentMethod: p.paymentMethod,
+						status: p.status,
+						processor: p.processor,
+						processorTransactionId: p.processorTransactionId,
+						reference: p.reference,
+						receivedAt: p.receivedAt,
+						receivedBy: {
+							userId: p.receivedByUser.userId,
+							firstName: p.receivedByUser.firstName,
+							lastName: p.receivedByUser.lastName,
+						},
+						refundedTotalInCents,
+						netInCents: p.amountInCents - refundedTotalInCents,
+					};
+				}),
+				refunds: invoice.refunds.map((r) => ({
+					refundId: r.refundId,
+					paymentId: r.paymentId,
+					amountInCents: r.amountInCents,
+					reason: r.reason,
+					processor: r.processor,
+					refundedAt: r.refundedAt,
+					refundedBy: {
+						userId: r.refundedByUser.userId,
+						firstName: r.refundedByUser.firstName,
+						lastName: r.refundedByUser.lastName,
+					},
 				})),
 			};
 		}),
@@ -503,17 +745,25 @@ export const billingRouter = createTRPCRouter({
 				// payment that should have closed it via the paid path.
 				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
 
+				// Phase 9a "Mark as due" — manually closing a tab IS the staff
+				// "mark as due" action, so set `dueDate` to now alongside the close
+				// stamps. No payment terms / penalties yet, so dueDate = the moment
+				// marked due; the derived "Due"/"Overdue" label only diverges once
+				// future terms make this a future date (see src/lib/invoiceStatus.ts).
+				const now = new Date();
 				const updated = await tx.invoice.update({
 					where: { invoiceId: input.invoiceId },
 					data: {
-						closedAt: new Date(),
+						closedAt: now,
 						closedBy: ctx.user.userId,
+						dueDate: now,
 					},
 					select: {
 						invoiceId: true,
 						status: true,
 						closedAt: true,
 						closedBy: true,
+						dueDate: true,
 					},
 				});
 

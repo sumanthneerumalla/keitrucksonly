@@ -157,7 +157,12 @@ export default function RecordPaymentModal({
 				message = `Payment recorded — Invoice ${invoice.invoiceNumber} paid`;
 			}
 			toast(message, "success");
-			await utils.billing.getMemberBilling.invalidate({ userId });
+			// Refresh the member's BillingPanel rollups AND any open invoice
+			// detail page for this invoice (the detail view reads `getInvoice`).
+			await Promise.all([
+				utils.billing.getMemberBilling.invalidate({ userId }),
+				utils.billing.getInvoice.invalidate({ invoiceId: invoice.invoiceId }),
+			]);
 			onOpenChange(false);
 		},
 		onError: (err) => {

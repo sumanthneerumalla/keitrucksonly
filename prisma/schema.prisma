@@ -902,7 +902,7 @@ model Invoice {
   billedToUser      User?         @relation("InvoiceBilledTo", fields: [billedToUserId], references: [userId], onDelete: SetNull)
   facilityId        String?
   facility          ClubFacility? @relation(fields: [facilityId], references: [facilityId])
-  status            String        @db.VarChar(20) // "draft" | "open" | "partially_paid" | "paid" | "void" | "overdue"
+  status            String        @db.VarChar(20) // STORED: "draft" | "open" | "partially_paid" | "paid" | "void". "due"/"overdue" are DERIVED at display from closedAt + dueDate + balance (src/lib/invoiceStatus.ts) — never stored.
   issueDate         DateTime      @default(now())
   dueDate           DateTime?
   // Money in cents (matches existing priceInCents pattern). No Decimal.

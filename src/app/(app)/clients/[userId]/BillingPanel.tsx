@@ -1,10 +1,16 @@
 "use client";
 
 import { Receipt } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
+import {
+	type InvoiceStatusTone,
+	invoiceStatusDisplay,
+} from "~/lib/invoiceStatus";
+import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
 import RecordPaymentModal from "./RecordPaymentModal";
 
@@ -26,12 +32,15 @@ import RecordPaymentModal from "./RecordPaymentModal";
  *    forward-compatible: while the floor remains, balances simply never go
  *    negative; once removed, credit surfaces here without further UI changes.
  *
- * Phase 9a Round 4 additions:
- *  - "Close Tab" action on each open/partially_paid/overdue invoice that
- *    isn't already closed. Fires a balance-aware AlertDialog before calling
- *    `billing.closeInvoice`. Paid invoices auto-close server-side on full
- *    payment, so the button is omitted for them.
- *  - "Closed [date]" badge under the StatusPill when `inv.closedAt !== null`.
+ * Phase 9a Round 4 additions (status relabel):
+ *  - "Mark as due" action on each open/partially_paid invoice that isn't
+ *    already marked due. Fires a balance-aware AlertDialog before calling
+ *    `billing.closeInvoice` (which internally stamps closedAt/closedBy +
+ *    dueDate = now). Paid invoices auto-settle server-side on full payment,
+ *    so the button is omitted for them. The word "closed" never reaches the
+ *    UI — staff see "Mark as due" and a "Due" pill (src/lib/invoiceStatus.ts).
+ *  - "due [date]" subtext under the status pill when an invoice has been
+ *    marked due and still carries a positive balance.
  *
  * Phase 9a Round 5 additions:
  *  - Invoice list is now widened server-side to include rows where the viewed
@@ -54,13 +63,6 @@ type InvoiceRow = {
 	amountPaidInCents: number;
 	balanceInCents: number;
 };
-
-function formatCents(cents: number): string {
-	return (cents / 100).toLocaleString("en-US", {
-		style: "currency",
-		currency: "USD",
-	});
-}
 
 function formatDate(date: Date | string): string {
 	return new Date(date).toLocaleDateString([], {
@@ -127,32 +129,31 @@ function annotationFor(
 	return null;
 }
 
-const STATUS_PILL_STYLES: Record<string, string> = {
-	open: "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-300",
-	partially_paid:
-		"bg-blue-100 text-blue-900 dark:bg-blue-900/30 dark:text-blue-300",
-	paid: "bg-emerald-100 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-300",
-	overdue: "bg-red-100 text-red-900 dark:bg-red-900/30 dark:text-red-300",
-	void: "bg-[var(--muted)] text-[var(--muted-foreground)]",
-	draft: "bg-[var(--muted)] text-[var(--muted-foreground)]",
+// Pill colors keyed by the DERIVED tone (src/lib/invoiceStatus.ts), not the
+// stored status — so "Paid" and "Credit" share the success green, "Due" warns
+// amber, open/partially-paid tabs read neutral blue, and void/draft sit muted.
+const TONE_PILL_STYLES: Record<InvoiceStatusTone, string> = {
+	success:
+		"bg-emerald-100 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-300",
+	warn: "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-300",
+	neutral: "bg-blue-100 text-blue-900 dark:bg-blue-900/30 dark:text-blue-300",
+	muted: "bg-[var(--muted)] text-[var(--muted-foreground)]",
 };
 
-const PAYMENT_ELIGIBLE_STATUSES = new Set([
-	"open",
-	"partially_paid",
-	"paid",
-	"overdue",
-]);
+const PAYMENT_ELIGIBLE_STATUSES = new Set(["open", "partially_paid", "paid"]);
 
-function StatusPill({ status }: { status: string }) {
-	const cls =
-		STATUS_PILL_STYLES[status] ??
-		"bg-[var(--muted)] text-[var(--muted-foreground)]";
+function StatusPill({
+	label,
+	tone,
+}: {
+	label: string;
+	tone: InvoiceStatusTone;
+}) {
 	return (
 		<span
-			className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs capitalize ${cls}`}
+			className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs ${TONE_PILL_STYLES[tone]}`}
 		>
-			{status.replace(/_/g, " ")}
+			{label}
 		</span>
 	);
 }
@@ -178,7 +179,7 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 		onSuccess: async (result) => {
 			const invoiceNumber =
 				closeTarget?.invoice.invoiceNumber ?? result.invoice.invoiceId;
-			toast(`Invoice ${invoiceNumber} closed`, "success");
+			toast(`Invoice ${invoiceNumber} marked as due`, "success");
 			await utils.billing.getMemberBilling.invalidate({ userId });
 			setCloseTarget(null);
 		},
@@ -278,15 +279,33 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 										const canRecordPayment = PAYMENT_ELIGIBLE_STATUSES.has(
 											inv.status,
 										);
-										// Round 4 close-tab gating mirrors the backend contract:
-										// not void / paid / draft, and not already closed. Paid
-										// invoices auto-close server-side on full payment, so the
-										// button never needs to appear on them.
-										const canCloseTab =
+										// Single source of truth for the status label + tone
+										// (src/lib/invoiceStatus.ts). Staff audience, so a voided
+										// invoice reads "Voided" rather than being hidden.
+										const statusDisplay = invoiceStatusDisplay(
+											{
+												status: inv.status,
+												closedAt: inv.closedAt,
+												dueDate: inv.dueDate,
+												balanceInCents: inv.balanceInCents,
+											},
+											"staff",
+										);
+										// Round 4 "mark as due" gating mirrors the backend
+										// contract: not void / paid / draft, and not already
+										// marked due. Paid invoices auto-settle server-side on
+										// full payment, so the button never appears on them.
+										const canMarkDue =
 											inv.status !== "void" &&
 											inv.status !== "paid" &&
 											inv.status !== "draft" &&
 											inv.closedAt === null;
+										// Surface the marked-due date only while a balance is
+										// still owed (i.e. the pill reads "Due").
+										const showDueDate =
+											inv.closedAt !== null &&
+											inv.balanceInCents > 0 &&
+											inv.status !== "void";
 										const annotation = annotationFor(userId, inv);
 										return (
 											<tr
@@ -294,7 +313,12 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 												className="border-[var(--border)] border-t"
 											>
 												<td className="px-3 py-2 font-mono text-[var(--foreground)] text-xs">
-													<div>{inv.invoiceNumber}</div>
+													<Link
+														href={`/clients/${userId}/invoices/${inv.invoiceId}`}
+														className="text-[var(--primary)] underline-offset-2 hover:underline"
+													>
+														{inv.invoiceNumber}
+													</Link>
 													{annotation && (
 														<div className="mt-0.5 font-sans text-[var(--muted-foreground)] text-xs italic">
 															{annotation}
@@ -306,10 +330,13 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 												</td>
 												<td className="px-3 py-2">
 													<div className="flex flex-col gap-1">
-														<StatusPill status={inv.status} />
-														{inv.closedAt !== null && (
+														<StatusPill
+															label={statusDisplay.label}
+															tone={statusDisplay.tone}
+														/>
+														{showDueDate && inv.dueDate !== null && (
 															<span className="text-[var(--muted-foreground)] text-xs">
-																Closed {formatDate(inv.closedAt)}
+																due {formatDate(inv.dueDate)}
 															</span>
 														)}
 													</div>
@@ -357,7 +384,7 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 																Record Payment
 															</Button>
 														) : null}
-														{canCloseTab ? (
+														{canMarkDue ? (
 															<Button
 																variant="outline"
 																size="sm"
@@ -373,7 +400,7 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 																	})
 																}
 															>
-																Close Tab
+																Mark as due
 															</Button>
 														) : null}
 													</div>
@@ -401,17 +428,17 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 				open={closeTarget !== null}
 				title={
 					closeTarget
-						? `Close Tab — Invoice ${closeTarget.invoice.invoiceNumber}`
+						? `Mark as due — Invoice ${closeTarget.invoice.invoiceNumber}`
 						: ""
 				}
 				description={
 					closeTarget
 						? closeTarget.invoice.balanceInCents > 0
-							? `Member still owes ${formatCents(closeTarget.invoice.balanceInCents)}. Close anyway? They can still pay this balance later, but new charges will start a fresh invoice.`
-							: "Close this tab? No new charges will be added."
+							? `Member still owes ${formatCents(closeTarget.invoice.balanceInCents)}. Mark this invoice as due? They can still pay the balance later, but new charges will start a fresh invoice.`
+							: "Mark this invoice as due? No new charges will be added, and any account credit carries forward to the next invoice."
 						: ""
 				}
-				confirmLabel={closing ? "Closing…" : "Close Tab"}
+				confirmLabel={closing ? "Marking…" : "Mark as due"}
 				cancelLabel="Cancel"
 				onConfirm={() => {
 					if (!closeTarget || closing) return;
