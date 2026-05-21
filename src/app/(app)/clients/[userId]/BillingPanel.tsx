@@ -10,7 +10,7 @@ import RecordPaymentModal from "./RecordPaymentModal";
 
 /**
  * Phase 9-EOD billing panel (2026-05-02), extended for Phase 9a (C11 + signed
- * credit display) and Phase 9a Round 4 (manual close-tab action).
+ * credit display), Round 4 (manual close-tab), and Round 5 (bill-to context).
  *
  * Shows three rollup numbers + invoice list. Existing pre-2026-05-02
  * MemberPackage rows have no invoice (line-in-the-sand) and contribute $0;
@@ -32,6 +32,15 @@ import RecordPaymentModal from "./RecordPaymentModal";
  *    `billing.closeInvoice`. Paid invoices auto-close server-side on full
  *    payment, so the button is omitted for them.
  *  - "Closed [date]" badge under the StatusPill when `inv.closedAt !== null`.
+ *
+ * Phase 9a Round 5 additions:
+ *  - Invoice list is now widened server-side to include rows where the viewed
+ *    user is EITHER the consumer OR the billed-to party. We annotate each row
+ *    under the invoice number so staff can see at a glance whether the row is
+ *    a self-pay invoice ("billed to <other>" when this user is the consumer
+ *    but someone else pays) or a third-party payment ("for <consumer>" when
+ *    this user is the payer for someone else's package). Self-pay rows
+ *    (consumer === viewed user, no separate billed-to) get no annotation.
  */
 
 interface BillingPanelProps {
@@ -59,6 +68,63 @@ function formatDate(date: Date | string): string {
 		month: "short",
 		day: "numeric",
 	});
+}
+
+function formatPersonName(p: {
+	firstName: string | null;
+	lastName: string | null;
+}): string {
+	const name = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
+	return name || "(no name)";
+}
+
+/**
+ * Decide what (if anything) to show under the invoice number, based on how
+ * the viewed user relates to this invoice's consumer + billed-to fields. The
+ * server widens results to rows where the viewed user is EITHER side, so
+ * there are three observable cases:
+ *
+ *   - viewed user is the consumer and no separate billed-to: self-pay, no annotation
+ *   - viewed user is the consumer but someone else pays: "billed to <payer>"
+ *   - viewed user is the payer for someone else's consumer: "for <consumer>"
+ */
+function annotationFor(
+	viewedUserId: string,
+	inv: {
+		billedToUserId: string | null;
+		consumer: {
+			userId: string;
+			firstName: string | null;
+			lastName: string | null;
+		};
+		billedTo: {
+			userId: string;
+			firstName: string | null;
+			lastName: string | null;
+		} | null;
+	},
+): string | null {
+	if (inv.consumer.userId === viewedUserId) {
+		// Viewed user is the consumer. Only annotate when a different user
+		// pays. Self-pay (billedToUserId null or equal to consumer) is the
+		// default — no annotation needed.
+		if (
+			inv.billedToUserId !== null &&
+			inv.billedToUserId !== viewedUserId &&
+			inv.billedTo
+		) {
+			return `billed to ${formatPersonName(inv.billedTo)}`;
+		}
+		return null;
+	}
+	// Viewed user is NOT the consumer — they must be the bill-to party for the
+	// row to surface in this query. Annotate with the consumer's name.
+	if (inv.billedToUserId === viewedUserId) {
+		return `for ${formatPersonName(inv.consumer)}`;
+	}
+	// Defensive: shouldn't reach here given the server-side OR clause, but
+	// returning null is safe — we just skip the annotation.
+	return null;
 }
 
 const STATUS_PILL_STYLES: Record<string, string> = {
@@ -221,13 +287,19 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 											inv.status !== "paid" &&
 											inv.status !== "draft" &&
 											inv.closedAt === null;
+										const annotation = annotationFor(userId, inv);
 										return (
 											<tr
 												key={inv.invoiceId}
 												className="border-[var(--border)] border-t"
 											>
 												<td className="px-3 py-2 font-mono text-[var(--foreground)] text-xs">
-													{inv.invoiceNumber}
+													<div>{inv.invoiceNumber}</div>
+													{annotation && (
+														<div className="mt-0.5 font-sans text-[var(--muted-foreground)] text-xs italic">
+															{annotation}
+														</div>
+													)}
 												</td>
 												<td className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
 													{formatDate(inv.issueDate)}

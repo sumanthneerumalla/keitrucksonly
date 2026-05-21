@@ -1293,8 +1293,18 @@ export const userRouter = createTRPCRouter({
 							baseWhere,
 							{
 								OR: [
-									{ firstName: { contains: search, mode: "insensitive" as const } },
-									{ lastName: { contains: search, mode: "insensitive" as const } },
+									{
+										firstName: {
+											contains: search,
+											mode: "insensitive" as const,
+										},
+									},
+									{
+										lastName: {
+											contains: search,
+											mode: "insensitive" as const,
+										},
+									},
 									{ email: { contains: search, mode: "insensitive" as const } },
 								],
 							},
@@ -1759,8 +1769,14 @@ export const userRouter = createTRPCRouter({
 			z.object({
 				tagId: z.string(),
 				name: z.string().min(1).max(50).optional(),
-				bgColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-				textColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+				bgColor: z
+					.string()
+					.regex(/^#[0-9a-fA-F]{6}$/)
+					.optional(),
+				textColor: z
+					.string()
+					.regex(/^#[0-9a-fA-F]{6}$/)
+					.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -1848,8 +1864,7 @@ export const userRouter = createTRPCRouter({
 			if (!canManageUser(ctx.user.userType, highestRole)) {
 				throw new TRPCError({
 					code: "FORBIDDEN",
-					message:
-						"You do not have permission to manage this user's tags.",
+					message: "You do not have permission to manage this user's tags.",
 				});
 			}
 
@@ -1924,7 +1939,8 @@ export const userRouter = createTRPCRouter({
 				if (target.clubMemberships.length === 0) {
 					throw new TRPCError({
 						code: "BAD_REQUEST",
-						message: `User ${target.firstName ?? ""} ${target.lastName ?? ""} is not in your club.`.trim(),
+						message:
+							`User ${target.firstName ?? ""} ${target.lastName ?? ""} is not in your club.`.trim(),
 					});
 				}
 				const highestRole = target.clubMemberships.reduce(
@@ -1938,7 +1954,8 @@ export const userRouter = createTRPCRouter({
 				if (!canManageUser(ctx.user.userType, highestRole)) {
 					throw new TRPCError({
 						code: "FORBIDDEN",
-						message: `Cannot manage user ${target.firstName ?? ""} ${target.lastName ?? ""}`.trim(),
+						message:
+							`Cannot manage user ${target.firstName ?? ""} ${target.lastName ?? ""}`.trim(),
 					});
 				}
 			}
@@ -1959,9 +1976,7 @@ export const userRouter = createTRPCRouter({
 					},
 					select: { userId: true },
 				});
-				const alreadyHasTag = new Set(
-					existingAssignments.map((a) => a.userId),
-				);
+				const alreadyHasTag = new Set(existingAssignments.map((a) => a.userId));
 
 				const tagCounts = await tx.userTag.groupBy({
 					by: ["userId"],
@@ -2025,7 +2040,8 @@ export const userRouter = createTRPCRouter({
 				facilityId: m.facility.facilityId,
 				facilityName: m.facility.name,
 				location:
-					[m.facility.city, m.facility.state].filter(Boolean).join(", ") || null,
+					[m.facility.city, m.facility.state].filter(Boolean).join(", ") ||
+					null,
 				role: m.role,
 				isActive: m.facilityId === user.activeFacilityId,
 			}));
@@ -2038,7 +2054,13 @@ export const userRouter = createTRPCRouter({
 		const facilities = await ctx.db.clubFacility.findMany({
 			where: { clubShortName: user.clubShortName, isActive: true },
 			orderBy: { position: "asc" },
-			select: { facilityId: true, name: true, city: true, state: true, position: true },
+			select: {
+				facilityId: true,
+				name: true,
+				city: true,
+				state: true,
+				position: true,
+			},
 		});
 
 		return facilities.map((f) => ({
@@ -2566,5 +2588,70 @@ export const userRouter = createTRPCRouter({
 			});
 
 			return { familyGroupId: updated.familyGroupId, name: updated.name };
+		}),
+
+	/**
+	 * Club-wide member typeahead — search by name or email, or exact-match by
+	 * userId (for barcode scans). Returns up to 10 results, alphabetically
+	 * sorted (lastName asc, firstName asc). Scoped to the caller's club.
+	 *
+	 * Moved from `checkin.searchMembers` in Phase 9a Round 5 since the endpoint
+	 * is reused by multiple unrelated flows: staff check-in (AdminCheckinClient),
+	 * sellPackage Bill-to typeahead, family-group management, and the event
+	 * add-student popover. The optional `facilityId` input is legacy
+	 * backward-compat and ignored by the query — kept so existing callers
+	 * don't break.
+	 */
+	searchMembers: facilityProcedure
+		.input(
+			z.object({
+				query: z.string().min(1).max(100),
+				facilityId: z.string().optional(),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const { query } = input;
+
+			// If query looks like a cuid (barcode scan), try exact userId match first
+			const exactMatch = await ctx.db.user.findFirst({
+				where: {
+					clubShortName: ctx.user.clubShortName,
+					userId: query,
+				},
+				select: {
+					userId: true,
+					firstName: true,
+					lastName: true,
+					email: true,
+					profileImage: true,
+				},
+			});
+
+			if (exactMatch) {
+				return { members: [exactMatch] };
+			}
+
+			// Name/email search
+			const members = await ctx.db.user.findMany({
+				where: {
+					clubShortName: ctx.user.clubShortName,
+					OR: [
+						{ firstName: { contains: query, mode: "insensitive" } },
+						{ lastName: { contains: query, mode: "insensitive" } },
+						{ email: { contains: query, mode: "insensitive" } },
+					],
+				},
+				select: {
+					userId: true,
+					firstName: true,
+					lastName: true,
+					email: true,
+					profileImage: true,
+				},
+				take: 10,
+				orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+			});
+
+			return { members };
 		}),
 });

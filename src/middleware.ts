@@ -1,10 +1,21 @@
-import { clerkMiddleware } from "@clerk/nextjs/server";
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { getClubShortnameFromShortUrlPathname } from "~/lib/clubLanding";
 
-export default clerkMiddleware((auth, req) => {
+const isAdminRoute = createRouteMatcher(["/admin(.*)"]);
+
+export default clerkMiddleware(async (auth, req) => {
 	// Raw path of the incoming request, e.g. "/cba" or "/cba/" or "/dashboard".
 	const { pathname } = req.nextUrl;
+
+	// Protect admin routes at the middleware level so unauthenticated visitors
+	// receive a 302 redirect to the Clerk sign-in page *before* any RSC
+	// rendering happens.  This avoids a React hooks-ordering error in the
+	// Next.js Router that occurs when the server component calls redirect()
+	// inside the RSC stream for unauthenticated users.
+	if (isAdminRoute(req)) {
+		await auth.protect();
+	}
 
 	// Convert "/cba" (or "/cba/") to a club shortname ("cba") if it matches a known club short URL.
 	const clubShortname = getClubShortnameFromShortUrlPathname(pathname);

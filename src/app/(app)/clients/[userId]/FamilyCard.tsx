@@ -61,7 +61,7 @@ function MemberTypeahead({
 	}, [open]);
 
 	const { data: searchData, isFetching: isSearching } =
-		api.checkin.searchMembers.useQuery(
+		api.user.searchMembers.useQuery(
 			{ query: debouncedQuery },
 			{ enabled: !!debouncedQuery && open },
 		);
@@ -369,7 +369,7 @@ export default function FamilyCard({ userId, memberName }: FamilyCardProps) {
 									>
 										<div className="min-w-0 flex-1">
 											<Link
-												href={`/admin/users/${m.userId}`}
+												href={`/clients/${m.userId}`}
 												className="block truncate font-medium text-[var(--foreground)] text-sm hover:underline"
 											>
 												{displayName}

@@ -120,6 +120,12 @@ const sellPackageSchema = z.object({
 	packagePlanId: z.string(),
 	startDate: z.date().optional(), // defaults to now
 	notes: z.string().max(2000).optional(),
+	// Phase 9a Round 5 — optional "Bill to" override. When set + different from
+	// `userId`, the resulting invoice is OWED by `billToUserId` (the payer) but
+	// the MemberPackage + line-item consumer remains `userId`. When null,
+	// undefined, or equal to `userId`, behavior is unchanged from Round 4
+	// (consumer == payer, self-pay). See HANDOFF #106 and phase9-invoicing.md.
+	billToUserId: z.string().min(1).optional(),
 });
 
 const getMemberPackagesSchema = z.object({
@@ -188,6 +194,26 @@ async function getFacilityTimezoneForUser(
 		user?.clubMemberships[0]?.facility.timezone ??
 		null
 	);
+}
+
+/**
+ * Phase 9a line-item hardening — the DB can't enforce that `kind` matches the
+ * provenance FKs set (a cross-column rule a Postgres enum can't express), so
+ * producers assert it here. Keeps the discriminator honest as more charge
+ * sources are added. Throws on mismatch (a programmer error — the values are
+ * constants in the producer, so it should never fire; it guards future edits).
+ */
+function assertLineItemKindConsistency(d: {
+	kind: string;
+	packagePlanId?: string | null;
+	creditFromInvoiceId?: string | null;
+}): void {
+	if (d.kind === "PACKAGE_SALE" && !d.packagePlanId) {
+		throw new Error("InvoiceLineItem kind=PACKAGE_SALE requires packagePlanId");
+	}
+	if (d.kind === "CREDIT" && !d.creditFromInvoiceId) {
+		throw new Error("InvoiceLineItem kind=CREDIT requires creditFromInvoiceId");
+	}
 }
 
 // ============================================================
@@ -408,10 +434,15 @@ export const packagesRouter = createTRPCRouter({
 	 * `priceInCents` at sale time so historical totals are immune to later
 	 * plan-price edits.
 	 *
-	 * Concurrency note: two staff selling to the same member in the same
-	 * millisecond could each create a fresh invoice (the find doesn't lock).
-	 * Acceptable for EOD; revisit with a Postgres advisory lock on
-	 * (userId, clubShortName) when the running-tab UI ships.
+	 * Phase 9a Round 5 — optional `billToUserId`. The CONSUMER (input.userId)
+	 * still owns the MemberPackage and accrues line-item charges; the PAYER
+	 * (the "effective payer") is `billToUserId ?? userId`. The running-tab
+	 * find, credit-source pull, and advisory lock are all keyed off the
+	 * effective payer so the parent's tab/credit travels with the parent
+	 * across charges for any of their kids. When billToUserId is null /
+	 * undefined / equals userId, the effective payer collapses to userId and
+	 * behavior matches Round 4 (self-pay). See HANDOFF #106 and
+	 * designFiles/roadmap/phase9-invoicing.md.
 	 */
 	sellPackage: facilityProcedure
 		.input(sellPackageSchema)
@@ -432,6 +463,36 @@ export const packagesRouter = createTRPCRouter({
 				});
 			}
 
+			// Phase 9a Round 5 — validate bill-to user (when provided and not the
+			// same as the consumer). Must exist in the SAME club; no
+			// family-group restriction (any club member can be the payer). The
+			// `billToUserId === userId` case is accepted (treated as self-pay) for
+			// UX simplicity — the frontend can leave the field populated without
+			// having to scrub it back to undefined.
+			if (input.billToUserId && input.billToUserId !== input.userId) {
+				const billTo = await ctx.db.user.findFirst({
+					where: {
+						userId: input.billToUserId,
+						clubShortName: ctx.user.clubShortName,
+					},
+					select: { userId: true },
+				});
+				if (!billTo) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Bill-to user not found in this club",
+					});
+				}
+			}
+
+			// Effective payer for running-tab routing, credit pulls, and the
+			// advisory lock. Collapses to `userId` when billToUserId is absent
+			// or equals userId (preserves Round-4 self-pay behavior unchanged).
+			const effectivePayerUserId =
+				input.billToUserId && input.billToUserId !== input.userId
+					? input.billToUserId
+					: input.userId;
+
 			// Verify plan is active + in this club
 			const plan = await ctx.db.packagePlan.findFirst({
 				where: {
@@ -439,6 +500,10 @@ export const packagesRouter = createTRPCRouter({
 					clubShortName: ctx.user.clubShortName,
 					isActive: true,
 				},
+				// Phase 9a line-item hardening — pull the product's revenue category
+				// so we can SNAPSHOT it onto the package line. `product` is null for
+				// isGeneralDropIn plans (no productId) → revenueCategoryId stays null.
+				include: { product: { select: { revenueCategoryId: true } } },
 			});
 
 			if (!plan) {
@@ -472,28 +537,51 @@ export const packagesRouter = createTRPCRouter({
 				// across two new invoices, a real money bug.
 				//
 				// `pg_advisory_xact_lock` serializes sellPackage calls for this
-				// (userId, clubShortName); other members' sales proceed in
+				// (effectivePayer, clubShortName); other payers' sales proceed in
 				// parallel. The lock is released when the transaction commits or
 				// rolls back. The md5 → bit(64) → bigint conversion mirrors
-				// `rentals.ts:37`. Coverage gaps still present after this lock:
-				// sellPackage vs `closeInvoice` / `recordPayment` (those don't
-				// take this lock) — those races are much rarer in practice and
-				// can be revisited if they ever surface.
-				const lockKey = `sellPackage-${input.userId}-${ctx.user.clubShortName}`;
+				// `rentals.ts:37`. Phase 9a Round 5 follow-up — the
+				// `invoice-payer-` lock-key prefix is now SHARED with
+				// `recordPayment` and `closeInvoice`, so all three invoice
+				// mutations serialize per `(payer, club)`. This closes the
+				// cross-class race where a concurrent payment/close could
+				// stomp on a sale's status update (and vice versa).
+				//
+				// Phase 9a Round 5 — lock keyed off the EFFECTIVE PAYER, not the
+				// consumer. The race that matters here is "two staff sales
+				// racing on the same payer's running tab" (e.g., two staff
+				// selling packages for two different kids of the same parent
+				// — both should land on the parent's one tab, not duplicate
+				// fresh invoices). Locking on the consumer would let those
+				// two sales proceed in parallel and clobber each other.
+				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
 				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
 
-				// Find member's running tab. Excludes void/paid/overdue —
-				// only `draft`, `open`, `partially_paid` absorb new charges.
+				// Find the running tab for THIS (consumer, payer) pair — Option 3
+				// (HANDOFF #112 + #116). Each (consumer, payer) pair gets its OWN
+				// running tab, so ONE invoice = exactly ONE consumer. The consumer
+				// is always `input.userId`; the payer is the effective payer (the
+				// bill-to user, or the consumer themselves for self-pay).
 				//
-				// Phase 9a Round 4 (HANDOFF #103): also exclude closed invoices.
-				// `closedAt: null` filters out both manually-closed tabs and the
-				// (rare) edge case of an `open`/`partially_paid` invoice that was
-				// stamped closed by hand (auto-close only happens on `paid`, so
-				// this only matters if `closeInvoice` ran on a non-paid tab).
+				// Excludes void/paid/overdue — only `draft`/`open`/`partially_paid`
+				// absorb new charges. `closedAt: null` excludes closed tabs (manual
+				// close, or auto-close on full payment — Round 4 / HANDOFF #103/#108).
+				//
+				// We match `billedToUserId` PRECISELY (this is the Option-3 change
+				// from Round 5's payer-keyed OR clause):
+				//   - self-pay (effective payer === consumer) → billedToUserId: null
+				//   - bill-to  (effective payer !== consumer) → billedToUserId: payer
+				// So charges for Mary-billed-to-John land on the (Mary, John) tab and
+				// never co-mingle with John's own self-pay tab or a (Tim, John) tab.
+				// The credit-source query below stays PAYER-scoped (A1, HANDOFF #111)
+				// — credit still follows the payer across consumers.
+				const runningTabBilledToUserId =
+					effectivePayerUserId === input.userId ? null : effectivePayerUserId;
 				let invoice = await tx.invoice.findFirst({
 					where: {
-						userId: input.userId,
 						clubShortName: ctx.user.clubShortName,
+						userId: input.userId, // consumer
+						billedToUserId: runningTabBilledToUserId, // payer (null = self-pay)
 						status: { in: ["draft", "open", "partially_paid"] },
 						closedAt: null,
 					},
@@ -524,6 +612,14 @@ export const packagesRouter = createTRPCRouter({
 							clubShortName: ctx.user.clubShortName,
 							invoiceNumber,
 							userId: input.userId,
+							// Phase 9a Round 5 — only set `billedToUserId` when it
+							// genuinely differs from the consumer. Equal / null /
+							// undefined all collapse to NULL = "self-pay" semantics,
+							// matching the pre-Round-5 schema default.
+							billedToUserId:
+								input.billToUserId && input.billToUserId !== input.userId
+									? input.billToUserId
+									: null,
 							facilityId: member.activeFacilityId,
 							status: "open",
 							subtotalInCents: 0,
@@ -541,13 +637,24 @@ export const packagesRouter = createTRPCRouter({
 					// totalInCents` directly, so we fetch closed+paid+unconsumed
 					// invoices and filter for actual credit (positive net) in JS.
 					// `orderBy closedAt asc` = oldest credit first (FIFO).
+					//
+					// Phase 9a Round 5 — credit follows the PAYER, not the
+					// consumer. A parent who overpays gets credit on their own
+					// future invoices regardless of which kid the next charge
+					// is for. Same OR-clause shape as the running-tab find:
+					// match invoices where `effectivePayerUserId` is the payer
+					// (either implicitly as the consumer-with-no-override, or
+					// explicitly via the billedToUserId column).
 					const creditSources = await tx.invoice.findMany({
 						where: {
-							userId: input.userId,
 							clubShortName: ctx.user.clubShortName,
 							status: "paid",
 							closedAt: { not: null },
 							creditConsumedAt: null,
+							OR: [
+								{ userId: effectivePayerUserId, billedToUserId: null },
+								{ billedToUserId: effectivePayerUserId },
+							],
 						},
 						orderBy: { closedAt: "asc" },
 						select: {
@@ -555,6 +662,10 @@ export const packagesRouter = createTRPCRouter({
 							invoiceNumber: true,
 							totalInCents: true,
 							amountPaidInCents: true,
+							// Phase 9a line-item hardening — need the source payer to
+							// snapshot `creditFromUserId` on the credit line below.
+							userId: true,
+							billedToUserId: true,
 						},
 					});
 
@@ -570,9 +681,14 @@ export const packagesRouter = createTRPCRouter({
 					for (const s of sourcesWithCredit) {
 						const creditCents = s.amountPaidInCents - s.totalInCents;
 
+						assertLineItemKindConsistency({
+							kind: "CREDIT",
+							creditFromInvoiceId: s.invoiceId,
+						});
 						await tx.invoiceLineItem.create({
 							data: {
 								invoiceId: invoice.invoiceId,
+								kind: "CREDIT",
 								description: `Credit from ${s.invoiceNumber}`,
 								quantity: 1,
 								unitPriceInCents: -creditCents,
@@ -582,6 +698,8 @@ export const packagesRouter = createTRPCRouter({
 								totalInCents: -creditCents,
 								sortOrder: sortIndex, // credits sort before package line
 								creditFromInvoiceId: s.invoiceId,
+								// Snapshot the source's payer (whose credit this is).
+								creditFromUserId: s.billedToUserId ?? s.userId,
 							},
 						});
 
@@ -616,12 +734,20 @@ export const packagesRouter = createTRPCRouter({
 				// Append the line item to the running tab. On a new invoice with
 				// credit lines, this sorts AFTER the credit lines so the timeline
 				// reads: credits applied → new charge.
+				assertLineItemKindConsistency({
+					kind: "PACKAGE_SALE",
+					packagePlanId: plan.packagePlanId,
+				});
 				await tx.invoiceLineItem.create({
 					data: {
 						invoiceId: invoice.invoiceId,
+						kind: "PACKAGE_SALE",
 						productId: plan.productId,
 						packagePlanId: plan.packagePlanId,
 						memberPackageId: memberPackage.memberPackageId,
+						// Snapshot the revenue category at sale time (null when the
+						// plan has no product, e.g. isGeneralDropIn).
+						revenueCategoryId: plan.product?.revenueCategoryId ?? null,
 						description: plan.name,
 						quantity: 1,
 						unitPriceInCents,

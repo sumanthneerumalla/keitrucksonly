@@ -14,7 +14,7 @@ const PAGE_TITLES: Record<string, string> = {
 	"/video-collections": "My Collections",
 	"/video-collections/create": "Create New",
 	"/admin/collections": "All Collections",
-	"/admin/users": "Users",
+	"/clients": "Clients",
 	"/admin/facilities": "Facilities",
 	"/database": "Database",
 };
@@ -23,6 +23,7 @@ function resolvePageTitle(pathname: string): string {
 	if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname]!;
 	if (pathname.startsWith("/video-collections/")) return "Video Collection";
 	if (pathname.startsWith("/coaches/")) return "Coach Profile";
+	if (pathname.startsWith("/clients/")) return "Client";
 	if (pathname.startsWith("/admin/")) return "Admin";
 	return "Facility Presence";
 }

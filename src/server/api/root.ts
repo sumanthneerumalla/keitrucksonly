@@ -1,4 +1,6 @@
 import { billingRouter } from "~/server/api/routers/billing";
+import { emailGroupsRouter } from "~/server/api/routers/emailGroups";
+import { emailSendRouter } from "~/server/api/routers/emailSend";
 import { calendarRouter } from "~/server/api/routers/calendar";
 import { categoriesRouter } from "~/server/api/routers/categories";
 import { checkinRouter } from "~/server/api/routers/checkin";
@@ -32,6 +34,8 @@ export const appRouter = createTRPCRouter({
 	rentals: rentalsRouter,
 	shop: shopRouter,
 	billing: billingRouter,
+	emailGroups: emailGroupsRouter,
+	emailSend: emailSendRouter,
 });
 
 // export type definition of API

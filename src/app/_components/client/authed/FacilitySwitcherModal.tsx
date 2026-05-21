@@ -21,7 +21,15 @@ export default function FacilitySwitcherModal({
 	onOpenChange,
 }: FacilitySwitcherModalProps) {
 	const utils = api.useUtils();
-	const { data: memberships, isLoading } =
+
+	// Use the global 30s staleTime — if nothing has changed since the last open
+	// (no invalidation), the cache is reused and the modal opens instantly with
+	// no server hit. When a club switch elsewhere calls utils.invalidate(),
+	// TanStack marks this query stale, and the next time the modal opens the
+	// observer transitions from disabled → enabled with stale data → refetch.
+	// The `!isFetching && ...` guard below ensures we never render the briefly-
+	// stale cached data during that refetch — the skeleton shows instead.
+	const { data: memberships, isFetching } =
 		api.user.getFacilityMemberships.useQuery(undefined, { enabled: open });
 
 	const switchFacility = api.user.switchFacility.useMutation({
@@ -44,14 +52,14 @@ export default function FacilitySwitcherModal({
 				</DialogHeader>
 
 				<DialogBody className="space-y-1">
-					{isLoading && (
+					{isFetching && (
 						<div className="animate-pulse space-y-2">
 							<div className="h-10 rounded bg-gray-100" />
 							<div className="h-10 rounded bg-gray-100" />
 						</div>
 					)}
 
-					{memberships?.map((m) => (
+					{!isFetching && memberships?.map((m) => (
 						<button
 							key={m.facilityId}
 							onClick={() => {
@@ -87,7 +95,7 @@ export default function FacilitySwitcherModal({
 						</button>
 					))}
 
-					{!isLoading && memberships?.length === 0 && (
+					{!isFetching && memberships?.length === 0 && (
 						<p className="py-4 text-center text-[var(--muted-foreground)] text-sm">
 							No facilities available.
 						</p>

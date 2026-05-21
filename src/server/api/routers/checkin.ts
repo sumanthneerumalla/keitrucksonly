@@ -23,16 +23,6 @@ const selfCheckinSchema = z.object({
 	facilityId: z.string(),
 });
 
-const searchMembersSchema = z.object({
-	query: z.string().min(1),
-	// Optional — the query body filters by ctx.user.clubShortName only and
-	// ignores facilityId, so this is effectively a club-wide typeahead.
-	// Kept in the schema for backward compatibility with existing callers.
-	// Made optional so the public-shop v1 Family card can reuse this procedure
-	// without supplying a facility (public-shop.md §"New tRPC Endpoints").
-	facilityId: z.string().optional(),
-});
-
 const getMemberCheckinCardSchema = z.object({
 	userId: z.string(),
 	facilityId: z.string(),
@@ -123,7 +113,9 @@ export const checkinRouter = createTRPCRouter({
 			const registrations = await ctx.db.eventRegistration.findMany({
 				where: {
 					userId: user.userId,
-					status: { in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN] },
+					status: {
+						in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN],
+					},
 					event: {
 						isDeleted: false,
 						start: { gte: startOfDay },
@@ -223,7 +215,10 @@ export const checkinRouter = createTRPCRouter({
 			}
 
 			// Verify facilityId matches the event's resource facility
-			if (registration.event.resource?.facilityId && registration.event.resource.facilityId !== facilityId) {
+			if (
+				registration.event.resource?.facilityId &&
+				registration.event.resource.facilityId !== facilityId
+			) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
 					message: "Facility does not match the event's location",
@@ -271,54 +266,9 @@ export const checkinRouter = createTRPCRouter({
 	// STAFF-FACING (Phase 7a)
 	// ------------------------------------------------------------------
 
-	/** Search members by name or userId (barcode scan) */
-	searchMembers: facilityProcedure
-		.input(searchMembersSchema)
-		.query(async ({ ctx, input }) => {
-			const { query } = input;
-
-			// If query looks like a cuid (barcode scan), try exact userId match first
-			const exactMatch = await ctx.db.user.findFirst({
-				where: {
-					clubShortName: ctx.user.clubShortName,
-					userId: query,
-				},
-				select: {
-					userId: true,
-					firstName: true,
-					lastName: true,
-					email: true,
-					profileImage: true,
-				},
-			});
-
-			if (exactMatch) {
-				return { members: [exactMatch] };
-			}
-
-			// Name/email search
-			const members = await ctx.db.user.findMany({
-				where: {
-					clubShortName: ctx.user.clubShortName,
-					OR: [
-						{ firstName: { contains: query, mode: "insensitive" } },
-						{ lastName: { contains: query, mode: "insensitive" } },
-						{ email: { contains: query, mode: "insensitive" } },
-					],
-				},
-				select: {
-					userId: true,
-					firstName: true,
-					lastName: true,
-					email: true,
-					profileImage: true,
-				},
-				take: 10,
-				orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-			});
-
-			return { members };
-		}),
+	// `searchMembers` moved to `user.searchMembers` in Phase 9a Round 5 — it's a
+	// general-purpose club-wide member typeahead reused by check-in, family
+	// management, event registration, and sellPackage Bill-to. See user.ts.
 
 	/** Full member detail card data for the admin check-in page */
 	getMemberCheckinCard: facilityProcedure
@@ -357,7 +307,9 @@ export const checkinRouter = createTRPCRouter({
 			const todayRegistrations = await ctx.db.eventRegistration.findMany({
 				where: {
 					userId,
-					status: { in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN] },
+					status: {
+						in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN],
+					},
 					event: {
 						isDeleted: false,
 						start: { gte: startOfDay },
@@ -380,7 +332,12 @@ export const checkinRouter = createTRPCRouter({
 								select: {
 									registrations: {
 										where: {
-											status: { in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN] },
+											status: {
+												in: [
+													RegistrationStatus.REGISTERED,
+													RegistrationStatus.CHECKED_IN,
+												],
+											},
 										},
 									},
 								},
@@ -422,7 +379,12 @@ export const checkinRouter = createTRPCRouter({
 						select: {
 							registrations: {
 								where: {
-									status: { in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN] },
+									status: {
+										in: [
+											RegistrationStatus.REGISTERED,
+											RegistrationStatus.CHECKED_IN,
+										],
+									},
 								},
 							},
 						},
@@ -521,7 +483,11 @@ export const checkinRouter = createTRPCRouter({
 					return att;
 				});
 
-				return { success: true, attendanceId: attendance.attendanceId, flow: "general" as const };
+				return {
+					success: true,
+					attendanceId: attendance.attendanceId,
+					flow: "general" as const,
+				};
 			}
 
 			// Verify event exists
@@ -537,7 +503,12 @@ export const checkinRouter = createTRPCRouter({
 						select: {
 							registrations: {
 								where: {
-									status: { in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN] },
+									status: {
+										in: [
+											RegistrationStatus.REGISTERED,
+											RegistrationStatus.CHECKED_IN,
+										],
+									},
 								},
 							},
 						},
@@ -557,14 +528,20 @@ export const checkinRouter = createTRPCRouter({
 				where: {
 					eventId,
 					userId,
-					status: { in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN] },
+					status: {
+						in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN],
+					},
 				},
 			});
 
 			if (existingReg) {
 				// Flow 1: Registered event check-in
 				if (existingReg.status === RegistrationStatus.CHECKED_IN) {
-					return { success: true, alreadyCheckedIn: true, flow: "registered" as const };
+					return {
+						success: true,
+						alreadyCheckedIn: true,
+						flow: "registered" as const,
+					};
 				}
 
 				await ctx.db.$transaction(async (tx) => {

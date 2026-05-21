@@ -467,7 +467,7 @@ export default function EventDetailClient({
 										>
 											{isFacilityOrAdmin ? (
 												<Link
-													href={`/admin/users/${r.userId}`}
+													href={`/clients/${r.userId}`}
 													className="flex min-w-0 flex-1 items-center gap-2.5 transition-colors hover:text-[var(--primary)] hover:underline"
 												>
 													{nameContent}

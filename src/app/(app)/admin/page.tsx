@@ -7,7 +7,6 @@ import {
 	Receipt,
 	ReceiptText,
 	Search,
-	Users,
 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -26,12 +25,6 @@ const quickLinks = [
 		description: "View and manage all video collections across the club.",
 		href: "/admin/collections",
 		icon: FileVideo,
-	},
-	{
-		title: "Users",
-		description: "Manage club members, roles, and facility access.",
-		href: "/admin/users",
-		icon: Users,
 	},
 	{
 		title: "Database",

@@ -11,14 +11,13 @@ const prisma = new PrismaClient();
 
 const CLUBS = [
 	{ clubShortName: "dc-badminton", clubName: "DC Badminton Club" },
-	{ clubShortName: "nova-shuttle", clubName: "Nova Shuttle Academy" },
+	{ clubShortName: "testshortname", clubName: "Club-Test" },
 ];
 
 const FACILITIES = [
 	{ clubShortName: "dc-badminton", name: "Georgetown Courts", city: "Washington", state: "DC" },
 	{ clubShortName: "dc-badminton", name: "Capitol Hill Gym", city: "Washington", state: "DC" },
-	{ clubShortName: "nova-shuttle", name: "Fairfax Center", city: "Fairfax", state: "VA" },
-	{ clubShortName: "nova-shuttle", name: "Arlington Courts", city: "Arlington", state: "VA" },
+	{ clubShortName: "testshortname", name: "Fairfax Center", city: "Fairfax", state: "VA" },
 ];
 
 // 22 users — mix of roles across both clubs
@@ -204,9 +203,16 @@ async function main() {
 		const first = EXTRA_FIRST[i];
 		const last = EXTRA_LAST[i];
 		const email = `${first.toLowerCase()}${i}@test.com`;
-		const club = i % 2 === 0 ? "dc-badminton" : "nova-shuttle";
-		const facilityIdx = i % 4; // cycles through all 4 facilities
+		// Round-robin across every facility regardless of how many clubs the
+		// script defines — adding a new demo club + facility automatically
+		// gets filler coaches without further script edits. Deriving club
+		// from facility also fixes a latent mismatch in the prior version
+		// where User.clubShortName could disagree with UserClub.clubShortName
+		// on odd iterations (alternation said nova-shuttle, facility was
+		// dc-badminton).
+		const facilityIdx = i % facilityRecords.length;
 		const facility = facilityRecords[facilityIdx];
+		const club = facility.clubShortName;
 
 		const user = await prisma.user.upsert({
 			where: { clerkUserId: `seed_${email}` },
@@ -282,7 +288,9 @@ async function main() {
 		const first = STUDENT_FIRST[i];
 		const last = STUDENT_LAST[i];
 		const email = `${first.toLowerCase()}${i}@test.com`;
-		const facilityIdx = i % 4;
+		// Round-robin across every facility — adding new clubs/facilities to
+		// the arrays at the top automatically picks up filler students here.
+		const facilityIdx = i % facilityRecords.length;
 		const facility = facilityRecords[facilityIdx];
 		const club = FACILITIES[facilityIdx].clubShortName; // derived from facility to keep User.clubShortName consistent
 

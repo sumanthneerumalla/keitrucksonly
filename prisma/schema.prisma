@@ -45,6 +45,7 @@ model Club {
   rentalBookings    RentalBooking[]
   familyGroups      FamilyGroup[]
   invoices          Invoice[]
+  emailGroups       EmailGroup[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -83,12 +84,19 @@ model User {
   memberPackages        MemberPackage[]         @relation("MemberPackageOwner")
   soldPackages          MemberPackage[]         @relation("MemberPackageSeller")
 
-  // Phase 9-EOD invoicing relations (Round 4: closedInvoices added)
-  invoices         Invoice[]        @relation("InvoiceMember")
-  createdInvoices  Invoice[]        @relation("InvoiceCreatedBy")
-  closedInvoices   Invoice[]        @relation("InvoiceClosedBy")
-  receivedPayments InvoicePayment[] @relation("PaymentReceivedBy")
-  issuedRefunds    InvoiceRefund[]  @relation("RefundIssuedBy")
+  // Phase 9-EOD invoicing relations (Round 4: closedInvoices added; Round 5: billedInvoices added)
+  invoices              Invoice[]         @relation("InvoiceMember")
+  createdInvoices       Invoice[]         @relation("InvoiceCreatedBy")
+  closedInvoices        Invoice[]         @relation("InvoiceClosedBy")
+  // Phase 9a Round 5 — invoices where this user is the "Bill to" target
+  // (the payer), regardless of who consumed the charges (the `userId` /
+  // "member"). When billedToUserId is null, the consumer is also the payer.
+  billedInvoices        Invoice[]         @relation("InvoiceBilledTo")
+  receivedPayments      InvoicePayment[]  @relation("PaymentReceivedBy")
+  issuedRefunds         InvoiceRefund[]   @relation("RefundIssuedBy")
+  // Phase 9a line-item hardening — CREDIT lines that snapshot this user as the
+  // source payer (whose carried-forward overpayment credit they represent).
+  creditSourceLineItems InvoiceLineItem[] @relation("LineItemCreditFromUser")
 
   // Multi-club membership registry
   clubMemberships UserClub[]
@@ -103,6 +111,16 @@ model User {
   // Cross-club: a user in two clubs can be in two independent FamilyGroups (one per club).
   familyGroupId String?
   familyGroup   FamilyGroup? @relation(fields: [familyGroupId], references: [familyGroupId], onDelete: SetNull)
+
+  // Date of birth — promoted from StudentProfile.profileData JSON blob for indexed age-range queries
+  dateOfBirth DateTime?
+
+  // Email groups
+  emailGroupsCreated   EmailGroup[]          @relation("EmailGroupCreator")
+  emailGroupMembers    EmailGroupMember[]    @relation("EmailGroupMemberships")
+  emailGroupExclusions EmailGroupExclusion[] @relation("EmailGroupExclusions")
+  emailsSent           EmailSendLog[]        @relation("EmailSender")
+  emailsReceived       EmailSendRecipient[]  @relation("EmailRecipient")
 
   @@index([clerkUserId])
   @@index([clubShortName])
@@ -352,6 +370,7 @@ model RevenueCategory {
 
   productCategories ProductCategory[]
   products          Product[]
+  invoiceLineItems  InvoiceLineItem[]
 
   @@unique([clubShortName, code])
   @@index([clubShortName])
@@ -423,6 +442,7 @@ model ClubFacility {
   attendances    Attendance[]
   rentalBookings RentalBooking[]
   invoices       Invoice[]
+  emailGroups    EmailGroup[]
 
   @@unique([clubShortName, name])
   @@index([clubShortName])
@@ -856,8 +876,30 @@ model Invoice {
   clubShortName     String
   club              Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   invoiceNumber     String // human-readable, e.g., "INV-000042"; sequential per club
-  userId            String
+  userId            String // the "member" / consumer — whose MemberPackages and check-ins these charges relate to
   user              User          @relation("InvoiceMember", fields: [userId], references: [userId])
+  // Phase 9a Round 5 — optional "Bill to" override. When set, this is the
+  // user who OWES the invoice (the payer), which may differ from `userId`
+  // (the consumer). Common case: a parent (billedToUserId) paying for a
+  // child's classes (userId). NULL means "same as userId" — the consumer
+  // pays for themselves (Phase 9a Rounds 1–4 default behavior, preserved
+  // for all existing invoices). Set at invoice creation, never mutated
+  // after — changing who-owes mid-flight creates audit confusion.
+  //
+  // Used by:
+  // - `sellPackage`'s running-tab find + credit-pull (keyed off the
+  //   effective payer = COALESCE(billedToUserId, userId)).
+  // - `billing.getMemberBilling`'s widened invoice list (returns invoices
+  //   where the viewed user is EITHER the consumer OR the payer).
+  // - Future PDF generation (Phase 13) — "Bill To" section uses this.
+  billedToUserId    String?
+  // `onDelete: SetNull` matches what the original migration already applied
+  // at the DB level — declared here in the schema so future `prisma migrate
+  // dev` runs don't generate a "fix" migration that would change behavior.
+  // If a payer User is ever deleted, their bill-to invoices retroactively
+  // become "self-pay" in the data (the audit-trail of who-paid is lost —
+  // revisit when a user-delete feature actually ships).
+  billedToUser      User?         @relation("InvoiceBilledTo", fields: [billedToUserId], references: [userId], onDelete: SetNull)
   facilityId        String?
   facility          ClubFacility? @relation(fields: [facilityId], references: [facilityId])
   status            String        @db.VarChar(20) // "draft" | "open" | "partially_paid" | "paid" | "void" | "overdue"
@@ -882,14 +924,14 @@ model Invoice {
   // in the same transaction). Once closedAt is non-null, `sellPackage` does NOT
   // append new line items to this invoice — a fresh invoice opens for the next
   // charge. See designFiles/roadmap/phase9-invoicing.md.
-  closedAt          DateTime?
-  closedBy          String?
-  closedByUser      User?         @relation("InvoiceClosedBy", fields: [closedBy], references: [userId])
+  closedAt         DateTime?
+  closedBy         String?
+  closedByUser     User?     @relation("InvoiceClosedBy", fields: [closedBy], references: [userId])
   // creditConsumedAt is stamped when this (auto-closed + overpaid) invoice's
   // negative balance was pulled forward as a "Credit from INV-XXX" line item on
   // a new invoice. Once stamped, the credit cannot be re-applied elsewhere.
   // NULL = either no credit to consume, or credit is still available.
-  creditConsumedAt  DateTime?
+  creditConsumedAt DateTime?
 
   lineItems                InvoiceLineItem[]
   payments                 InvoicePayment[]
@@ -907,30 +949,68 @@ model Invoice {
   @@index([createdBy])
   @@index([closedAt])
   @@index([creditConsumedAt])
+  // Phase 9a Round 5 — fast lookup for "invoices billed to this user"
+  // (BillingPanel widening + future "/clients/[userId]/billed-to" filters).
+  @@index([billedToUserId])
+  @@index([clubShortName, billedToUserId])
 }
 
 // InvoiceLineItem — a single charge on an invoice. unitPriceInCents is a SNAPSHOT
 // at invoice creation time so historical totals are immune to later plan-price edits.
+// Phase 9a line-item hardening — closed, code-controlled discriminator for what
+// a line represents. Enum (not String) because the value set is small + fixed by
+// us and feeds reporting GROUP BY + exhaustive switch rendering. (Contrast
+// Invoice.status / InvoicePayment.processor — String because they're
+// configurable / open-ended.) Adding a value = a one-line enum migration.
+enum InvoiceLineItemKind {
+  PACKAGE_SALE // sold PackagePlan (productId + packagePlanId + memberPackageId set)
+  CREDIT // overpayment credit carried forward (creditFromInvoiceId set; negative amount)
+  PRODUCT_SALE // a Product sold directly (productId only) — future (E19 / POS)
+  FEE // ad-hoc charge, no provenance FK — future
+  EVENT_REGISTRATION // billable event check-in w/o a covering package — future (E18)
+  RENTAL // court-rental charge — future
+  MEMBERSHIP_FEE // recurring membership charge — future (Phase 10; adds memberMembershipId)
+}
+
 model InvoiceLineItem {
-  lineItemId       String         @id @default(cuid())
-  invoiceId        String
-  invoice          Invoice        @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
-  productId        String?
-  product          Product?       @relation(fields: [productId], references: [productId])
-  packagePlanId    String?
-  packagePlan      PackagePlan?   @relation(fields: [packagePlanId], references: [packagePlanId])
-  memberPackageId  String?
-  memberPackage    MemberPackage? @relation(fields: [memberPackageId], references: [memberPackageId])
-  description      String         @db.VarChar(500)
-  quantity         Int            @default(1)
-  unitPriceInCents Int
-  discountInCents  Int            @default(0)
+  lineItemId        String              @id @default(cuid())
+  invoiceId         String
+  invoice           Invoice             @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  // Phase 9a line-item hardening — explicit discriminator. Producers set this
+  // alongside the matching provenance FK(s); do NOT infer the type from which FK
+  // is non-null (productId is set on BOTH PACKAGE_SALE and PRODUCT_SALE lines, so
+  // the FK pattern is ambiguous). The DB can't enforce "kind matches the FK set"
+  // (cross-column rule) — sellPackage + future producers assert it in app code.
+  kind              InvoiceLineItemKind
+  productId         String?
+  product           Product?            @relation(fields: [productId], references: [productId])
+  packagePlanId     String?
+  packagePlan       PackagePlan?        @relation(fields: [packagePlanId], references: [packagePlanId])
+  memberPackageId   String?
+  memberPackage     MemberPackage?      @relation(fields: [memberPackageId], references: [memberPackageId])
+  description       String              @db.VarChar(500)
+  // quantity = how many of THIS line unit (e.g. 2 drinks). For a package sale it
+  // is always 1 — the session COUNT lives on PackagePlan.sessionCount /
+  // MemberPackage.creditsTotal, NOT here.
+  quantity          Int                 @default(1)
+  // unitPriceInCents = SNAPSHOT of what was charged per unit at creation;
+  // authoritative. NOT the same as the linked Product/PackagePlan price (those
+  // can drift later; this can't). Negative on CREDIT lines.
+  unitPriceInCents  Int
+  discountInCents   Int                 @default(0)
   // Tax stored as basis points (1bp = 0.01%); 0 = no tax. Snapshot at creation.
-  taxRateBps       Int            @default(0)
-  taxAmountInCents Int            @default(0)
-  totalInCents     Int // (unitPrice * quantity - discount) + taxAmount
-  sortOrder        Int            @default(0)
-  createdAt        DateTime       @default(now())
+  taxRateBps        Int                 @default(0)
+  taxAmountInCents  Int                 @default(0)
+  // Phase 9a line-item hardening — SNAPSHOT the revenue category at creation
+  // (decision #5/Q3). Was derived live via productId -> Product.revenueCategoryId
+  // (drifts on recategorization). Tax was already snapshotted; this makes revenue
+  // classification consistent. Null when no category (credit lines, ad-hoc fees,
+  // isGeneralDropIn packages with no product).
+  revenueCategoryId String?
+  revenueCategory   RevenueCategory?    @relation(fields: [revenueCategoryId], references: [revenueCategoryId])
+  totalInCents      Int // (unitPrice * quantity - discount) + taxAmount
+  sortOrder         Int                 @default(0)
+  createdAt         DateTime            @default(now())
 
   // Phase 9a Round 4 — credit carry-forward.
   // When this line item represents credit pulled forward from an earlier
@@ -939,12 +1019,20 @@ model InvoiceLineItem {
   // `creditConsumedAt` stamped). Bidirectional audit trail.
   creditFromInvoiceId String?
   creditFromInvoice   Invoice? @relation("CreditSource", fields: [creditFromInvoiceId], references: [invoiceId])
+  // Phase 9a line-item hardening — SNAPSHOT of the credit source's payer (whose
+  // overpayment credit this is) so a CREDIT line can name its source person,
+  // robust against a future edit-bill-to mutation changing the source's payer.
+  creditFromUserId    String?
+  creditFromUser      User?    @relation("LineItemCreditFromUser", fields: [creditFromUserId], references: [userId], onDelete: SetNull)
 
   @@index([invoiceId])
+  @@index([kind])
   @@index([productId])
   @@index([packagePlanId])
   @@index([memberPackageId])
   @@index([creditFromInvoiceId])
+  @@index([revenueCategoryId])
+  @@index([creditFromUserId])
 }
 
 // InvoicePayment — a payment received against an invoice. Multi-processor by design:
@@ -1008,4 +1096,97 @@ model InvoiceRefund {
   @@index([paymentId])
   @@index([invoiceId])
   @@index([refundedBy])
+}
+
+// ============================================================
+// EMAIL GROUPS (see designFiles/email-groups.md)
+// ============================================================
+
+// EmailGroup — a named, reusable group scoped to a facility for bulk email sends.
+// Membership is dynamic (filter-based) with manual overrides.
+model EmailGroup {
+  emailGroupId    String       @id @default(cuid())
+  clubShortName   String
+  club            Club         @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  facilityId      String
+  facility        ClubFacility @relation(fields: [facilityId], references: [facilityId], onDelete: Cascade)
+  name            String       @db.VarChar(200)
+  createdByUserId String
+  createdByUser   User         @relation("EmailGroupCreator", fields: [createdByUserId], references: [userId])
+  // Stored filter config: { tagIds: string[], ageMin?: number, ageMax?: number }
+  filterConfig    Json?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  members    EmailGroupMember[]
+  exclusions EmailGroupExclusion[]
+  sendLogs   EmailSendLog[]
+
+  @@index([clubShortName])
+  @@index([facilityId])
+  @@index([createdByUserId])
+}
+
+// EmailGroupMember — explicit membership in an email group (from filter sync or manual add)
+model EmailGroupMember {
+  id           String     @id @default(cuid())
+  emailGroupId String
+  emailGroup   EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  userId       String
+  user         User       @relation("EmailGroupMemberships", fields: [userId], references: [userId], onDelete: Cascade)
+  source       String     @db.VarChar(20) // "filter" | "manual"
+  joinedAt     DateTime   @default(now())
+
+  @@unique([emailGroupId, userId])
+  @@index([emailGroupId])
+  @@index([userId])
+}
+
+// EmailGroupExclusion — users who left or were manually removed from a group
+model EmailGroupExclusion {
+  id           String     @id @default(cuid())
+  emailGroupId String
+  emailGroup   EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  userId       String
+  user         User       @relation("EmailGroupExclusions", fields: [userId], references: [userId], onDelete: Cascade)
+  reason       String     @db.VarChar(20) // "left" | "removed"
+  excludedAt   DateTime   @default(now())
+
+  @@unique([emailGroupId, userId])
+  @@index([emailGroupId])
+  @@index([userId])
+}
+
+// EmailSendLog — audit log of every email sent to a group
+model EmailSendLog {
+  sendLogId      String     @id @default(cuid())
+  emailGroupId   String
+  emailGroup     EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  senderUserId   String
+  sender         User       @relation("EmailSender", fields: [senderUserId], references: [userId])
+  subject        String     @db.VarChar(500)
+  bodyHtml       String     @db.Text
+  attachmentUrls String[]
+  recipientCount Int
+  sentAt         DateTime   @default(now())
+
+  recipients EmailSendRecipient[]
+
+  @@index([emailGroupId])
+  @@index([senderUserId])
+  @@index([sentAt])
+}
+
+// EmailSendRecipient — per-recipient delivery record for a sent email
+model EmailSendRecipient {
+  id        String       @id @default(cuid())
+  sendLogId String
+  sendLog   EmailSendLog @relation(fields: [sendLogId], references: [sendLogId], onDelete: Cascade)
+  userId    String
+  user      User         @relation("EmailRecipient", fields: [userId], references: [userId])
+  email     String       @db.VarChar(255) // snapshot at send time
+  status    String       @db.VarChar(20) // "sent" | "failed"
+
+  @@index([sendLogId])
+  @@index([userId])
 }

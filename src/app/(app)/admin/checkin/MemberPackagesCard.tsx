@@ -24,7 +24,7 @@ function formatDate(date: Date | string | null) {
  * Family-share label (public-shop.md #15 + D7). Renders only when the row
  * isn't the current user's own pack — i.e. when the credits are flowing from
  * a parent/sibling's package via `consumeCredit` widening. Matches the small
- * pill pattern used by user tags in `UsersClient.tsx` (rounded-full + xs).
+ * pill pattern used by client tags in `ClientsList.tsx` (rounded-full + xs).
  */
 function OwnerBadge({
 	ownedBy,
