@@ -17,6 +17,13 @@ export const billingRouter = createTRPCRouter({
 	 * Three-number summary + invoice list for one member, scoped to the staff
 	 * user's club. Existing pre-2026-05-02 `MemberPackage` rows have no
 	 * invoice (line-in-the-sand backfill stance) and contribute $0.
+	 *
+	 * Phase 9a Round 5 — widened to surface invoices where the viewed user is
+	 * EITHER the consumer (`userId`) OR the explicit bill-to target
+	 * (`billedToUserId`). This way staff viewing user X's BillingPanel see
+	 * both "X bought stuff" and "someone else's charges billed to X." Each
+	 * row also returns `consumer` + `billedTo` user shapes so the UI can
+	 * label rows like "Billed to: John" or "Billed for: Jane".
 	 */
 	getMemberBilling: facilityProcedure
 		.input(z.object({ userId: z.string() }))
@@ -39,8 +46,15 @@ export const billingRouter = createTRPCRouter({
 
 			const invoices = await ctx.db.invoice.findMany({
 				where: {
-					userId: input.userId,
 					clubShortName: ctx.user.clubShortName,
+					// Phase 9a Round 5 — match invoices where `input.userId` is
+					// either the consumer (today's invoices + legacy self-pay)
+					// OR the explicit bill-to target. The OR is a union, not a
+					// dedupe target — a single invoice can match at most one
+					// branch (consumer = X with billedToUserId = X would
+					// collapse to "self-pay" with billedToUserId = NULL by
+					// sellPackage convention, so no row is double-counted).
+					OR: [{ userId: input.userId }, { billedToUserId: input.userId }],
 				},
 				orderBy: { issueDate: "desc" },
 				include: {
@@ -52,6 +66,17 @@ export const billingRouter = createTRPCRouter({
 						// panel rows can shuffle between renders.
 						orderBy: [{ receivedAt: "desc" }, { paymentId: "asc" }],
 						include: { refunds: true },
+					},
+					// Phase 9a Round 5 — embed both user shapes so the panel can
+					// render names without a second roundtrip. `user` is the
+					// InvoiceMember (consumer); `billedToUser` is the
+					// InvoiceBilledTo back-relation, null when billedToUserId
+					// is NULL (self-pay).
+					user: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
+					billedToUser: {
+						select: { userId: true, firstName: true, lastName: true },
 					},
 				},
 			});
@@ -91,6 +116,24 @@ export const billingRouter = createTRPCRouter({
 					// is intentionally NOT exposed (internal accounting only).
 					closedAt: inv.closedAt,
 					closedBy: inv.closedBy,
+					// Phase 9a Round 5 — bill-to surfacing. `billedToUserId` lets
+					// the UI fast-check "is this row a bill-to?" without inspecting
+					// the nested shape. `consumer` is always present (every
+					// invoice has a member); `billedTo` is null exactly when
+					// billedToUserId is null (self-pay).
+					billedToUserId: inv.billedToUserId,
+					consumer: {
+						userId: inv.user.userId,
+						firstName: inv.user.firstName,
+						lastName: inv.user.lastName,
+					},
+					billedTo: inv.billedToUser
+						? {
+								userId: inv.billedToUser.userId,
+								firstName: inv.billedToUser.firstName,
+								lastName: inv.billedToUser.lastName,
+							}
+						: null,
 					lineItems: inv.lineItems.map((li) => ({
 						lineItemId: li.lineItemId,
 						description: li.description,
@@ -167,7 +210,15 @@ export const billingRouter = createTRPCRouter({
 					invoiceId: input.invoiceId,
 					clubShortName: ctx.user.clubShortName,
 				},
-				select: { invoiceId: true, status: true, totalInCents: true },
+				// Phase 9a Round 5 — also select userId + billedToUserId so we
+				// can derive the effective payer for the advisory lock below.
+				select: {
+					invoiceId: true,
+					status: true,
+					totalInCents: true,
+					userId: true,
+					billedToUserId: true,
+				},
 			});
 
 			if (!invoice) {
@@ -197,17 +248,29 @@ export const billingRouter = createTRPCRouter({
 				});
 			}
 
-			const totalInCents = invoice.totalInCents;
+			// Phase 9a Round 5 — derive the effective payer for the advisory
+			// lock (matches sellPackage's effective-payer logic). When the
+			// invoice has billedToUserId set, the payer is the bill-to user;
+			// otherwise the consumer (self-pay).
+			const effectivePayerUserId = invoice.billedToUserId ?? invoice.userId;
 
 			return await ctx.db.$transaction(async (tx) => {
+				// Phase 9a Round 5 — advisory lock first, BEFORE any reads or
+				// writes inside the tx. Shares the `invoice-payer-` prefix with
+				// `sellPackage` and `closeInvoice` so all three invoice
+				// mutations serialize per `(payer, club)`. Closes the
+				// cross-class race where a concurrent sale on John's tab could
+				// append a line and recompute status from a snapshot that
+				// doesn't see this payment (the "$50 paid + concurrent $30
+				// sale → invoice lands at `open` instead of `partially_paid`"
+				// bug flagged in the Round 5 review).
+				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+
 				// Row lock just this invoice for the transaction duration. Holding
 				// the lock means a concurrent `recordPayment` on the same invoice
 				// waits here rather than racing the aggregate-then-update sequence
 				// below and clobbering each other's `amountPaidInCents`.
-				//
-				// Per-invoice scope is the correct grain here. This does NOT address
-				// the `sellPackage` find-or-create-open-invoice race (that race is
-				// `(userId, clubShortName)`-scoped — backlog item A7, separate task).
 				//
 				// CONTRACT FOR FUTURE A2 (recordRefund): the refund mutation MUST take
 				// this same row lock at the same point in its transaction. Without it
@@ -220,6 +283,21 @@ export const billingRouter = createTRPCRouter({
 				// advisory-lock call in `rentals.ts` — Prisma parameterizes
 				// `invoiceId` safely (no string interpolation into the SQL text).
 				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+
+				// Re-read totalInCents AFTER acquiring the lock. The pre-transaction
+				// read (used for the cross-tenant + void/draft guards) can be STALE:
+				// a concurrent `sellPackage` for the same payer may have appended a
+				// line item and raised the total in the window before we got the
+				// lock. Status MUST be judged against the current total — otherwise a
+				// $50 payment on a now-$80 invoice would wrongly mark it `paid` +
+				// auto-close, hiding a real $30 balance. (Round 5 review must-fix:
+				// the advisory lock serializes the tx bodies, but the total was
+				// captured before the lock; this closes that residual window.)
+				const locked = await tx.invoice.findUniqueOrThrow({
+					where: { invoiceId: input.invoiceId },
+					select: { totalInCents: true },
+				});
+				const totalInCents = locked.totalInCents;
 
 				// Insert the payment row. Status defaults to "succeeded" via the
 				// Prisma schema default. P2002 here would mean a (processor, txId)
@@ -348,7 +426,15 @@ export const billingRouter = createTRPCRouter({
 					invoiceId: input.invoiceId,
 					clubShortName: ctx.user.clubShortName,
 				},
-				select: { invoiceId: true, status: true, closedAt: true },
+				// Phase 9a Round 5 — also select userId + billedToUserId so we
+				// can derive the effective payer for the advisory lock below.
+				select: {
+					invoiceId: true,
+					status: true,
+					closedAt: true,
+					userId: true,
+					billedToUserId: true,
+				},
 			});
 
 			if (!invoice) {
@@ -398,7 +484,19 @@ export const billingRouter = createTRPCRouter({
 				});
 			}
 
+			// Phase 9a Round 5 — derive the effective payer for the advisory
+			// lock (matches sellPackage / recordPayment).
+			const effectivePayerUserId = invoice.billedToUserId ?? invoice.userId;
+
 			return await ctx.db.$transaction(async (tx) => {
+				// Phase 9a Round 5 — advisory lock first. Shares the
+				// `invoice-payer-` prefix with `sellPackage` and `recordPayment`
+				// so all three invoice mutations serialize per `(payer, club)`.
+				// Closes the cross-class race where a concurrent sale/payment
+				// could write conflicting state mid-close.
+				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+
 				// Row lock for consistency with `recordPayment` — without it a
 				// concurrent payment could race the close and we'd land in an
 				// "closed + status not paid" state that contradicts an in-flight

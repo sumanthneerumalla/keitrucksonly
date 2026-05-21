@@ -84,10 +84,14 @@ model User {
   memberPackages        MemberPackage[]         @relation("MemberPackageOwner")
   soldPackages          MemberPackage[]         @relation("MemberPackageSeller")
 
-  // Phase 9-EOD invoicing relations (Round 4: closedInvoices added)
+  // Phase 9-EOD invoicing relations (Round 4: closedInvoices added; Round 5: billedInvoices added)
   invoices         Invoice[]        @relation("InvoiceMember")
   createdInvoices  Invoice[]        @relation("InvoiceCreatedBy")
   closedInvoices   Invoice[]        @relation("InvoiceClosedBy")
+  // Phase 9a Round 5 — invoices where this user is the "Bill to" target
+  // (the payer), regardless of who consumed the charges (the `userId` /
+  // "member"). When billedToUserId is null, the consumer is also the payer.
+  billedInvoices   Invoice[]        @relation("InvoiceBilledTo")
   receivedPayments InvoicePayment[] @relation("PaymentReceivedBy")
   issuedRefunds    InvoiceRefund[]  @relation("RefundIssuedBy")
 
@@ -868,8 +872,30 @@ model Invoice {
   clubShortName     String
   club              Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
   invoiceNumber     String // human-readable, e.g., "INV-000042"; sequential per club
-  userId            String
+  userId            String // the "member" / consumer — whose MemberPackages and check-ins these charges relate to
   user              User          @relation("InvoiceMember", fields: [userId], references: [userId])
+  // Phase 9a Round 5 — optional "Bill to" override. When set, this is the
+  // user who OWES the invoice (the payer), which may differ from `userId`
+  // (the consumer). Common case: a parent (billedToUserId) paying for a
+  // child's classes (userId). NULL means "same as userId" — the consumer
+  // pays for themselves (Phase 9a Rounds 1–4 default behavior, preserved
+  // for all existing invoices). Set at invoice creation, never mutated
+  // after — changing who-owes mid-flight creates audit confusion.
+  //
+  // Used by:
+  // - `sellPackage`'s running-tab find + credit-pull (keyed off the
+  //   effective payer = COALESCE(billedToUserId, userId)).
+  // - `billing.getMemberBilling`'s widened invoice list (returns invoices
+  //   where the viewed user is EITHER the consumer OR the payer).
+  // - Future PDF generation (Phase 13) — "Bill To" section uses this.
+  billedToUserId    String?
+  // `onDelete: SetNull` matches what the original migration already applied
+  // at the DB level — declared here in the schema so future `prisma migrate
+  // dev` runs don't generate a "fix" migration that would change behavior.
+  // If a payer User is ever deleted, their bill-to invoices retroactively
+  // become "self-pay" in the data (the audit-trail of who-paid is lost —
+  // revisit when a user-delete feature actually ships).
+  billedToUser      User?         @relation("InvoiceBilledTo", fields: [billedToUserId], references: [userId], onDelete: SetNull)
   facilityId        String?
   facility          ClubFacility? @relation(fields: [facilityId], references: [facilityId])
   status            String        @db.VarChar(20) // "draft" | "open" | "partially_paid" | "paid" | "void" | "overdue"
@@ -919,6 +945,10 @@ model Invoice {
   @@index([createdBy])
   @@index([closedAt])
   @@index([creditConsumedAt])
+  // Phase 9a Round 5 — fast lookup for "invoices billed to this user"
+  // (BillingPanel widening + future "/clients/[userId]/billed-to" filters).
+  @@index([billedToUserId])
+  @@index([clubShortName, billedToUserId])
 }
 
 // InvoiceLineItem — a single charge on an invoice. unitPriceInCents is a SNAPSHOT

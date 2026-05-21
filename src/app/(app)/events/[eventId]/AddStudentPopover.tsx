@@ -57,7 +57,7 @@ export default function AddStudentPopover({
 	}, [open]);
 
 	const { data: searchData, isFetching: isSearching } =
-		api.checkin.searchMembers.useQuery(
+		api.user.searchMembers.useQuery(
 			{ query: debouncedQuery, facilityId: facilityId ?? "" },
 			{ enabled: !!debouncedQuery && !!facilityId && open },
 		);
@@ -152,14 +152,8 @@ export default function AddStudentPopover({
 							</button>
 						</div>
 						<div className="flex flex-col gap-2">
-							<Button
-								size="sm"
-								onClick={handleRegister}
-								disabled={isPending}
-							>
-								{staffRegisterMutation.isPending
-									? "Registering…"
-									: "Register"}
+							<Button size="sm" onClick={handleRegister} disabled={isPending}>
+								{staffRegisterMutation.isPending ? "Registering…" : "Register"}
 							</Button>
 							<Button
 								variant="outline"

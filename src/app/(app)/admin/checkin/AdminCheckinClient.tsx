@@ -59,7 +59,12 @@ type CheckinCardMember = {
 	email: string | null;
 	profileImage: string | null;
 	memberSince: Date | string;
-	tags: { tagId: string; name: string; bgColor: string | null; textColor: string | null }[];
+	tags: {
+		tagId: string;
+		name: string;
+		bgColor: string | null;
+		textColor: string | null;
+	}[];
 };
 
 type TodayRegistration = {
@@ -158,7 +163,7 @@ export default function AdminCheckinClient() {
 	const isFacilityOrAdmin = user ? isFacilityOrAbove(user) : false;
 
 	// Search members (only query when we have 1+ chars)
-	const { data: searchData } = api.checkin.searchMembers.useQuery(
+	const { data: searchData } = api.user.searchMembers.useQuery(
 		{ query: debouncedQuery, facilityId },
 		{ enabled: !!debouncedQuery && !!facilityId },
 	);
@@ -190,7 +195,9 @@ export default function AdminCheckinClient() {
 			}
 			void utils.checkin.getMemberCheckinCard.invalidate();
 			void utils.checkin.getRecentCheckins.invalidate();
-			void utils.packages.getMemberPackages.invalidate({ userId: selectedUserId! });
+			void utils.packages.getMemberPackages.invalidate({
+				userId: selectedUserId!,
+			});
 		},
 		onError: (err) => toast(err.message, "error"),
 	});
@@ -205,7 +212,11 @@ export default function AdminCheckinClient() {
 
 	// Show dropdown when search results arrive
 	useEffect(() => {
-		if (searchData?.members && searchData.members.length > 0 && debouncedQuery) {
+		if (
+			searchData?.members &&
+			searchData.members.length > 0 &&
+			debouncedQuery
+		) {
 			setShowDropdown(true);
 		}
 	}, [searchData, debouncedQuery]);
@@ -346,20 +357,24 @@ export default function AdminCheckinClient() {
 	}
 
 	const members = searchData?.members ?? [];
-	const recentCheckins: RecentCheckin[] = (recentData?.checkins as RecentCheckin[]) ?? [];
-	const member: CheckinCardMember | undefined = cardData?.member as CheckinCardMember | undefined;
+	const recentCheckins: RecentCheckin[] =
+		(recentData?.checkins as RecentCheckin[]) ?? [];
+	const member: CheckinCardMember | undefined = cardData?.member as
+		| CheckinCardMember
+		| undefined;
 	const todayRegistrations: TodayRegistration[] =
 		(cardData?.todayRegistrations as TodayRegistration[]) ?? [];
 	const nearbyEvents: NearbyEvent[] =
 		(cardData?.nearbyEvents as NearbyEvent[]) ?? [];
 
 	const memberFullName = member
-		? `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() || member.email || ""
+		? `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() ||
+			member.email ||
+			""
 		: "";
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-
 			{/* Walk-in confirmation dialog */}
 			{walkinConfirm && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -374,7 +389,8 @@ export default function AdminCheckinClient() {
 						</p>
 						{walkinConfirm.isFull && (
 							<p className="mt-2 rounded bg-orange-50 px-3 py-2 text-orange-700 text-sm">
-								⚠ This event is full ({walkinConfirm.currentRegistrations}/{walkinConfirm.maxParticipants}). Proceed anyway?
+								⚠ This event is full ({walkinConfirm.currentRegistrations}/
+								{walkinConfirm.maxParticipants}). Proceed anyway?
 							</p>
 						)}
 						<div className="mt-4 flex justify-end gap-2">
@@ -419,7 +435,7 @@ export default function AdminCheckinClient() {
 				<div className="relative">
 					<Search
 						size={18}
-						className="absolute top-1/2 left-3 -translate-y-1/2 text-[var(--muted-foreground)]"
+						className="-translate-y-1/2 absolute top-1/2 left-3 text-[var(--muted-foreground)]"
 					/>
 					<Input
 						ref={searchRef}
@@ -441,7 +457,7 @@ export default function AdminCheckinClient() {
 								setShowDropdown(false);
 								searchRef.current?.focus();
 							}}
-							className="absolute top-1/2 right-3 -translate-y-1/2 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+							className="-translate-y-1/2 absolute top-1/2 right-3 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
 						>
 							<X size={16} />
 						</button>
@@ -461,7 +477,7 @@ export default function AdminCheckinClient() {
 								onClick={() => selectMember(m.userId)}
 								className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--accent)]"
 							>
-								<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--foreground)] text-sm font-medium">
+								<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-medium text-[var(--foreground)] text-sm">
 									{m.profileImage ? (
 										<img
 											src={m.profileImage}
@@ -476,10 +492,10 @@ export default function AdminCheckinClient() {
 									)}
 								</div>
 								<div className="min-w-0 flex-1">
-									<p className="truncate font-medium text-sm text-[var(--foreground)]">
+									<p className="truncate font-medium text-[var(--foreground)] text-sm">
 										{m.firstName} {m.lastName}
 									</p>
-									<p className="truncate text-xs text-[var(--muted-foreground)]">
+									<p className="truncate text-[var(--muted-foreground)] text-xs">
 										{m.email}
 									</p>
 								</div>
@@ -493,7 +509,7 @@ export default function AdminCheckinClient() {
 						ref={dropdownRef}
 						className="absolute z-40 mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 shadow-lg"
 					>
-						<p className="text-center text-sm text-[var(--muted-foreground)]">
+						<p className="text-center text-[var(--muted-foreground)] text-sm">
 							No members found
 						</p>
 					</div>
@@ -504,19 +520,19 @@ export default function AdminCheckinClient() {
 			<div className="grid gap-6 lg:grid-cols-[1fr_1.5fr]">
 				{/* Left panel: Recent Check-ins */}
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)]">
-					<div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-3">
+					<div className="flex items-center gap-2 border-[var(--border)] border-b px-4 py-3">
 						<Clock size={16} className="text-[var(--muted-foreground)]" />
-						<h2 className="font-semibold text-sm text-[var(--foreground)]">
+						<h2 className="font-semibold text-[var(--foreground)] text-sm">
 							Recent Check-ins
 						</h2>
-						<span className="ml-auto text-xs text-[var(--muted-foreground)]">
+						<span className="ml-auto text-[var(--muted-foreground)] text-xs">
 							{recentCheckins.length} today
 						</span>
 					</div>
 					<div className="max-h-[calc(100vh-20rem)] overflow-auto">
 						{recentCheckins.length === 0 ? (
 							<div className="flex h-32 items-center justify-center">
-								<p className="text-sm text-[var(--muted-foreground)]">
+								<p className="text-[var(--muted-foreground)] text-sm">
 									No check-ins today yet
 								</p>
 							</div>
@@ -526,13 +542,13 @@ export default function AdminCheckinClient() {
 									key={ci.attendanceId}
 									type="button"
 									onClick={() => selectMember(ci.member.userId)}
-									className={`flex w-full items-center gap-3 border-b border-[var(--border)] px-4 py-3 text-left transition-colors hover:bg-[var(--accent)] ${
+									className={`flex w-full items-center gap-3 border-[var(--border)] border-b px-4 py-3 text-left transition-colors hover:bg-[var(--accent)] ${
 										selectedUserId === ci.member.userId
 											? "bg-[var(--accent)]"
 											: ""
 									}`}
 								>
-									<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--foreground)] text-xs font-medium">
+									<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-medium text-[var(--foreground)] text-xs">
 										{ci.member.profileImage ? (
 											<img
 												src={ci.member.profileImage}
@@ -547,14 +563,14 @@ export default function AdminCheckinClient() {
 										)}
 									</div>
 									<div className="min-w-0 flex-1">
-										<p className="truncate font-medium text-sm text-[var(--foreground)]">
+										<p className="truncate font-medium text-[var(--foreground)] text-sm">
 											{ci.member.firstName} {ci.member.lastName}
 										</p>
-										<p className="truncate text-xs text-[var(--muted-foreground)]">
+										<p className="truncate text-[var(--muted-foreground)] text-xs">
 											{ci.event ? ci.event.title : "General check-in"}
 										</p>
 									</div>
-									<span className="shrink-0 text-xs text-[var(--muted-foreground)]">
+									<span className="shrink-0 text-[var(--muted-foreground)] text-xs">
 										{timeAgo(ci.checkedInAt)}
 									</span>
 								</button>
@@ -572,7 +588,7 @@ export default function AdminCheckinClient() {
 									size={40}
 									className="mx-auto text-[var(--muted-foreground)]"
 								/>
-								<p className="mt-3 text-sm text-[var(--muted-foreground)]">
+								<p className="mt-3 text-[var(--muted-foreground)] text-sm">
 									Search and select a member to check them in
 								</p>
 							</div>
@@ -593,7 +609,7 @@ export default function AdminCheckinClient() {
 						<div className="divide-y divide-[var(--border)]">
 							{/* Member header */}
 							<div className="flex items-start gap-4 p-4">
-								<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--foreground)] text-lg font-semibold">
+								<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-semibold text-[var(--foreground)] text-lg">
 									{member.profileImage ? (
 										<img
 											src={member.profileImage}
@@ -608,13 +624,13 @@ export default function AdminCheckinClient() {
 									)}
 								</div>
 								<div className="min-w-0 flex-1">
-									<h3 className="font-semibold text-lg text-[var(--foreground)]">
+									<h3 className="font-semibold text-[var(--foreground)] text-lg">
 										{memberFullName}
 									</h3>
-									<p className="text-sm text-[var(--muted-foreground)]">
+									<p className="text-[var(--muted-foreground)] text-sm">
 										{member.email}
 									</p>
-									<p className="text-xs text-[var(--muted-foreground)]">
+									<p className="text-[var(--muted-foreground)] text-xs">
 										Member since{" "}
 										{new Date(member.memberSince).toLocaleDateString()}
 									</p>
@@ -623,12 +639,10 @@ export default function AdminCheckinClient() {
 											{member.tags.map((tag) => (
 												<span
 													key={tag.tagId}
-													className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+													className="inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs"
 													style={{
-														backgroundColor:
-															tag.bgColor ?? "var(--accent)",
-														color:
-															tag.textColor ?? "var(--foreground)",
+														backgroundColor: tag.bgColor ?? "var(--accent)",
+														color: tag.textColor ?? "var(--foreground)",
 													}}
 												>
 													{tag.name}
@@ -648,12 +662,12 @@ export default function AdminCheckinClient() {
 
 							{/* Today's Events */}
 							<div className="p-4">
-								<h4 className="mb-3 flex items-center gap-2 font-semibold text-sm text-[var(--foreground)]">
+								<h4 className="mb-3 flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
 									<CalendarDays size={14} />
 									Today&apos;s Events
 								</h4>
 								{todayRegistrations.length === 0 ? (
-									<p className="text-sm text-[var(--muted-foreground)]">
+									<p className="text-[var(--muted-foreground)] text-sm">
 										No events registered for today
 									</p>
 								) : (
@@ -672,10 +686,10 @@ export default function AdminCheckinClient() {
 													className="flex items-center gap-3 rounded-md border border-[var(--border)] p-3"
 												>
 													<div className="min-w-0 flex-1">
-														<p className="font-medium text-sm text-[var(--foreground)]">
+														<p className="font-medium text-[var(--foreground)] text-sm">
 															{reg.event.title}
 														</p>
-														<div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+														<div className="mt-0.5 flex flex-wrap items-center gap-2 text-[var(--muted-foreground)] text-xs">
 															<span className="flex items-center gap-1">
 																<Clock size={12} />
 																{formatTime(reg.event.start)} -{" "}
@@ -697,7 +711,7 @@ export default function AdminCheckinClient() {
 														</div>
 													</div>
 													{isCheckedIn ? (
-														<span className="flex items-center gap-1 text-green-600 text-xs font-medium">
+														<span className="flex items-center gap-1 font-medium text-green-600 text-xs">
 															<Check size={16} />
 															Checked in
 														</span>
@@ -707,9 +721,7 @@ export default function AdminCheckinClient() {
 															onClick={() =>
 																handleStaffCheckin(reg.event.eventId)
 															}
-															disabled={
-																staffCheckinMutation.isPending
-															}
+															disabled={staffCheckinMutation.isPending}
 														>
 															<UserCheck size={14} />
 															Check in
@@ -725,7 +737,7 @@ export default function AdminCheckinClient() {
 							{/* Nearby Events */}
 							{nearbyEvents.length > 0 && (
 								<div className="p-4">
-									<h4 className="mb-3 flex items-center gap-2 font-semibold text-sm text-[var(--foreground)]">
+									<h4 className="mb-3 flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
 										<MapPin size={14} />
 										Nearby Events (not registered)
 									</h4>
@@ -733,12 +745,10 @@ export default function AdminCheckinClient() {
 										{nearbyEvents.map((evt) => {
 											const isFull =
 												evt.maxParticipants !== null &&
-												evt.currentRegistrations >=
-													evt.maxParticipants;
+												evt.currentRegistrations >= evt.maxParticipants;
 											const spotsLeft =
 												evt.maxParticipants !== null
-													? evt.maxParticipants -
-														evt.currentRegistrations
+													? evt.maxParticipants - evt.currentRegistrations
 													: null;
 
 											return (
@@ -747,14 +757,13 @@ export default function AdminCheckinClient() {
 													className="flex items-center gap-3 rounded-md border border-[var(--border)] p-3"
 												>
 													<div className="min-w-0 flex-1">
-														<p className="font-medium text-sm text-[var(--foreground)]">
+														<p className="font-medium text-[var(--foreground)] text-sm">
 															{evt.title}
 														</p>
-														<div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+														<div className="mt-0.5 flex flex-wrap items-center gap-2 text-[var(--muted-foreground)] text-xs">
 															<span className="flex items-center gap-1">
 																<Clock size={12} />
-																{formatTime(evt.start)} -{" "}
-																{formatTime(evt.end)}
+																{formatTime(evt.start)} - {formatTime(evt.end)}
 															</span>
 															{evt.resourceTitle && (
 																<span className="flex items-center gap-1">
@@ -764,15 +773,13 @@ export default function AdminCheckinClient() {
 															)}
 															{isFull ? (
 																<span className="font-medium text-orange-600">
-																	(Full -{" "}
-																	{evt.currentRegistrations}/
+																	(Full - {evt.currentRegistrations}/
 																	{evt.maxParticipants})
 																</span>
 															) : spotsLeft !== null ? (
 																<span>
 																	{spotsLeft} spot
-																	{spotsLeft !== 1 ? "s" : ""}{" "}
-																	left
+																	{spotsLeft !== 1 ? "s" : ""} left
 																</span>
 															) : null}
 														</div>
@@ -781,14 +788,9 @@ export default function AdminCheckinClient() {
 														size="sm"
 														variant="outline"
 														onClick={() =>
-															handleWalkinCheckin(
-																evt,
-																memberFullName,
-															)
+															handleWalkinCheckin(evt, memberFullName)
 														}
-														disabled={
-															staffCheckinMutation.isPending
-														}
+														disabled={staffCheckinMutation.isPending}
 													>
 														<UserCheck size={14} />
 														Check in (walk-in)
@@ -825,7 +827,7 @@ export default function AdminCheckinClient() {
 						</div>
 					) : (
 						<div className="flex h-32 items-center justify-center">
-							<p className="text-sm text-[var(--muted-foreground)]">
+							<p className="text-[var(--muted-foreground)] text-sm">
 								Member not found
 							</p>
 						</div>
@@ -835,4 +837,3 @@ export default function AdminCheckinClient() {
 		</div>
 	);
 }
-

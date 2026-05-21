@@ -61,7 +61,7 @@ function MemberTypeahead({
 	}, [open]);
 
 	const { data: searchData, isFetching: isSearching } =
-		api.checkin.searchMembers.useQuery(
+		api.user.searchMembers.useQuery(
 			{ query: debouncedQuery },
 			{ enabled: !!debouncedQuery && open },
 		);
