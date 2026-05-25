@@ -303,7 +303,16 @@ export default function InvoiceDetail({
 									Bill to
 								</dt>
 								<dd className="text-[var(--foreground)]">
-									{formatPersonName(inv.billedTo)}
+									{isStaff ? (
+										<Link
+											href={`/clients/${inv.billedTo.userId}`}
+											className="underline-offset-2 hover:underline"
+										>
+											{formatPersonName(inv.billedTo)}
+										</Link>
+									) : (
+										formatPersonName(inv.billedTo)
+									)}
 									{isStaff && inv.billedTo.email && (
 										<span className="text-[var(--muted-foreground)]">
 											{" "}
@@ -315,7 +324,16 @@ export default function InvoiceDetail({
 							<div>
 								<dt className="text-[var(--muted-foreground)] text-xs">For</dt>
 								<dd className="text-[var(--foreground)]">
-									{formatPersonName(inv.consumer)}
+									{isStaff ? (
+										<Link
+											href={`/clients/${inv.consumer.userId}`}
+											className="underline-offset-2 hover:underline"
+										>
+											{formatPersonName(inv.consumer)}
+										</Link>
+									) : (
+										formatPersonName(inv.consumer)
+									)}
 								</dd>
 							</div>
 						</dl>
@@ -326,7 +344,16 @@ export default function InvoiceDetail({
 									Member
 								</dt>
 								<dd className="text-[var(--foreground)]">
-									{formatPersonName(inv.consumer)}
+									{isStaff ? (
+										<Link
+											href={`/clients/${inv.consumer.userId}`}
+											className="underline-offset-2 hover:underline"
+										>
+											{formatPersonName(inv.consumer)}
+										</Link>
+									) : (
+										formatPersonName(inv.consumer)
+									)}
 									{isStaff && inv.consumer.email && (
 										<span className="text-[var(--muted-foreground)]">
 											{" "}

@@ -928,10 +928,17 @@ model Invoice {
   closedBy         String?
   closedByUser     User?     @relation("InvoiceClosedBy", fields: [closedBy], references: [userId])
   // creditConsumedAt is stamped when this (auto-closed + overpaid) invoice's
-  // negative balance was pulled forward as a "Credit from INV-XXX" line item on
-  // a new invoice. Once stamped, the credit cannot be re-applied elsewhere.
-  // NULL = either no credit to consume, or credit is still available.
+  // overpayment credit has been FULLY consumed — either pulled forward as a
+  // "Credit from INV-XXX" line on a new invoice (sellPackage), or drawn down to
+  // zero by manual Account-Credit applications. NULL = credit still (partly)
+  // available. Pair with `creditConsumedInCents` for partial draw-downs.
   creditConsumedAt DateTime?
+  // How much of this invoice's overpayment credit has been spent so far (across
+  // one or more Account-Credit applications / carry-forwards). Available credit
+  // from this invoice = (amountPaidInCents - totalInCents) - creditConsumedInCents.
+  // When that hits 0, `creditConsumedAt` is stamped. Always 0 for invoices that
+  // were never overpaid.
+  creditConsumedInCents Int @default(0)
 
   lineItems                InvoiceLineItem[]
   payments                 InvoicePayment[]

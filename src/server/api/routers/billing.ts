@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import dayjs from "~/lib/dayjs-config";
 import {
 	createTRPCRouter,
 	facilityProcedure,
@@ -21,6 +22,24 @@ import {
  * designFiles/roadmap/phase9-invoicing.md for the full design, and HANDOFF.md
  * decisions 92–105 for the partial-payment + overpayment policy.
  */
+
+/**
+ * Spendable account credit remaining on a single overpaid invoice = its
+ * overpayment (amountPaid − total) minus whatever has already been drawn down
+ * (`creditConsumedInCents`). Returns 0 for invoices that were never overpaid.
+ * Used everywhere we sum a payer's available credit so the formula stays
+ * identical across getMemberBilling / getAccountCreditContext / applyAccountCredit.
+ */
+function sourceAvailableCreditInCents(inv: {
+	totalInCents: number;
+	amountPaidInCents: number;
+	creditConsumedInCents: number;
+}): number {
+	return Math.max(
+		0,
+		inv.amountPaidInCents - inv.totalInCents - inv.creditConsumedInCents,
+	);
+}
 
 export const billingRouter = createTRPCRouter({
 	/**
@@ -91,27 +110,75 @@ export const billingRouter = createTRPCRouter({
 				},
 			});
 
-			// Rollups: void invoices excluded entirely.
-			// `amountPaidInCents` is already net of refunds (per phase9-invoicing.md).
-			// Per the Version A overpayment policy (HANDOFF decision #104),
-			// `outstandingInCents` and per-invoice `balanceInCents` are SIGNED — a
-			// negative value represents account credit (the member overpaid and we
-			// surface that as a negative balance on the open running tab).
+			// Rollups: void invoices excluded entirely. `amountPaidInCents` is
+			// already net of refunds (per phase9-invoicing.md).
+			//
+			// We DON'T net owed-vs-credit into one signed number: a member can owe
+			// on open invoices while ALSO holding credit from earlier overpayments
+			// (credit isn't auto-applied to open tabs). So we split:
+			//   - outstandingInCents     = Σ positive balances (still owed)
+			//   - availableCreditInCents = Σ UNCONSUMED overpayment credit
+			// Both are PAYER-scoped: a bill-to invoice's balance/credit belongs to
+			// the payer, not the consumer, so they count toward the viewed user
+			// only when that user is the effective payer (explicit bill-to, or the
+			// consumer on a self-pay invoice). Per-invoice `balanceInCents` stays
+			// SIGNED (negative = that invoice is in credit).
 			let totalBilledInCents = 0;
 			let totalPaidInCents = 0;
 			let outstandingInCents = 0;
+			let availableCreditInCents = 0;
+			let creditAppliedInCents = 0;
+			let billedToOthersInCents = 0;
 
 			for (const inv of invoices) {
 				if (inv.status === "void") continue;
+
+				// Charges this user CONSUMED but a different member is billed for —
+				// context only, NOT part of this user's payer totals.
+				if (
+					inv.userId === input.userId &&
+					inv.billedToUserId !== null &&
+					inv.billedToUserId !== input.userId
+				) {
+					billedToOthersInCents += inv.totalInCents;
+				}
+
+				// Only count money the VIEWED user is responsible for / holds.
+				const viewerIsPayer =
+					inv.billedToUserId === input.userId ||
+					(inv.billedToUserId === null && inv.userId === input.userId);
+				if (!viewerIsPayer) continue;
+
+				// Payer-scoped lifetime activity.
 				totalBilledInCents += inv.totalInCents;
 				totalPaidInCents += inv.amountPaidInCents;
-				outstandingInCents += inv.totalInCents - inv.amountPaidInCents;
+
+				const balance = inv.totalInCents - inv.amountPaidInCents;
+				if (balance > 0) {
+					outstandingInCents += balance;
+				} else if (balance < 0) {
+					// Overpaid invoice = credit. Split the overpayment into the part
+					// still available vs the part already applied elsewhere. (A legacy
+					// carry-forward stamps creditConsumedAt but left
+					// creditConsumedInCents at 0, so a stamped invoice counts as fully
+					// consumed.)
+					const overpayment = -balance;
+					const applied =
+						inv.creditConsumedAt != null
+							? overpayment
+							: Math.min(overpayment, inv.creditConsumedInCents);
+					creditAppliedInCents += applied;
+					availableCreditInCents += overpayment - applied;
+				}
 			}
 
 			return {
 				totalBilledInCents,
 				totalPaidInCents,
 				outstandingInCents,
+				availableCreditInCents,
+				creditAppliedInCents,
+				billedToOthersInCents,
 				invoices: invoices.map((inv) => ({
 					invoiceId: inv.invoiceId,
 					invoiceNumber: inv.invoiceNumber,
@@ -398,6 +465,176 @@ export const billingRouter = createTRPCRouter({
 						lastName: r.refundedByUser.lastName,
 					},
 				})),
+			};
+		}),
+
+	/**
+	 * Phase 9a (B9) — paginated, searchable invoice list for the staff
+	 * `/admin/invoices` page. Scoped to the caller's club (facilityProcedure).
+	 *
+	 * `search` (type-ahead, trimmed) matches the consumer's OR the payer's
+	 * first/last name or email (case-insensitive `contains`, mirroring
+	 * `user.searchMembers`), plus the invoice number, any line-item
+	 * description, the invoice notes, and a payment reference (the manual
+	 * check # / free-text field) — so staff can find an invoice by who's on
+	 * it, its number, what's on it, a note, or how it was paid. Optional
+	 * `status` filters on
+	 * the STORED status (draft|open|partially_paid|paid|void); the derived
+	 * "Due"/"Credit" labels are a display concern, not a filter axis.
+	 *
+	 * Cursor pagination (newest first, `invoiceId` tiebreaker for stability)
+	 * returns `{ items, nextCursor }` — the client appends pages via
+	 * useInfiniteQuery.
+	 */
+	listInvoices: facilityProcedure
+		.input(
+			z.object({
+				search: z.string().trim().max(100).optional(),
+				// Multi-select: empty/omitted = all statuses. Filters on the STORED
+				// status only (the derived "Due"/"Credit" labels aren't queryable).
+				status: z
+					.array(z.enum(["draft", "open", "partially_paid", "paid", "void"]))
+					.optional(),
+				// Inclusive issue-date range as "YYYY-MM-DD" calendar dates, anchored
+				// to day boundaries in the staff user's timezone (see issueDateFilter).
+				startDate: z.string().date().optional(),
+				endDate: z.string().date().optional(),
+				cursor: z.string().nullish(),
+				limit: z.number().int().min(1).max(50).default(20),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const search = input.search?.trim();
+
+			// Date-range filter on issueDate. The UI sends calendar dates
+			// ("YYYY-MM-DD"); we anchor them to day boundaries in the staff user's
+			// timezone so "May 1 – May 23" means local midnight-to-midnight, not UTC
+			// (which would slice a few hours off each end of the range).
+			const tz = ctx.user.timeZone || "America/New_York";
+			const issueDateFilter: Prisma.DateTimeFilter = {};
+			if (input.startDate) {
+				issueDateFilter.gte = dayjs
+					.tz(input.startDate, tz)
+					.startOf("day")
+					.toDate();
+			}
+			if (input.endDate) {
+				issueDateFilter.lte = dayjs.tz(input.endDate, tz).endOf("day").toDate();
+			}
+			const hasDateFilter = input.startDate != null || input.endDate != null;
+
+			// Reused name/email matcher for either party (consumer or payer).
+			const personMatch = search
+				? {
+						OR: [
+							{ firstName: { contains: search, mode: "insensitive" as const } },
+							{ lastName: { contains: search, mode: "insensitive" as const } },
+							{ email: { contains: search, mode: "insensitive" as const } },
+						],
+					}
+				: undefined;
+
+			const rows = await ctx.db.invoice.findMany({
+				where: {
+					clubShortName: ctx.user.clubShortName,
+					...(input.status && input.status.length > 0
+						? { status: { in: input.status } }
+						: {}),
+					...(hasDateFilter ? { issueDate: issueDateFilter } : {}),
+					...(search
+						? {
+								OR: [
+									{ user: personMatch },
+									{ billedToUser: personMatch },
+									{
+										invoiceNumber: {
+											contains: search,
+											mode: "insensitive" as const,
+										},
+									},
+									// Find an invoice by what's ON it (e.g. "Summer Camp",
+									// "Private Lesson") — matches any line item's description.
+									{
+										lineItems: {
+											some: {
+												description: {
+													contains: search,
+													mode: "insensitive" as const,
+												},
+											},
+										},
+									},
+									// The invoice-level staff comment.
+									{ notes: { contains: search, mode: "insensitive" as const } },
+									// Payment reference — the human-entered check # / free-text
+									// reference field. NOT the opaque processor transaction id
+									// (staff never type that; it'd only add noise).
+									{
+										payments: {
+											some: {
+												reference: {
+													contains: search,
+													mode: "insensitive" as const,
+												},
+											},
+										},
+									},
+								],
+							}
+						: {}),
+				},
+				orderBy: [{ issueDate: "desc" }, { invoiceId: "desc" }],
+				take: input.limit + 1,
+				...(input.cursor
+					? { cursor: { invoiceId: input.cursor }, skip: 1 }
+					: {}),
+				include: {
+					user: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+							email: true,
+						},
+					},
+					billedToUser: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
+				},
+			});
+
+			let nextCursor: string | null = null;
+			if (rows.length > input.limit) {
+				const extra = rows.pop();
+				nextCursor = extra?.invoiceId ?? null;
+			}
+
+			return {
+				items: rows.map((inv) => ({
+					invoiceId: inv.invoiceId,
+					invoiceNumber: inv.invoiceNumber,
+					status: inv.status,
+					issueDate: inv.issueDate,
+					dueDate: inv.dueDate,
+					closedAt: inv.closedAt,
+					totalInCents: inv.totalInCents,
+					amountPaidInCents: inv.amountPaidInCents,
+					balanceInCents: inv.totalInCents - inv.amountPaidInCents,
+					billedToUserId: inv.billedToUserId,
+					consumer: {
+						userId: inv.user.userId,
+						firstName: inv.user.firstName,
+						lastName: inv.user.lastName,
+					},
+					billedTo: inv.billedToUser
+						? {
+								userId: inv.billedToUser.userId,
+								firstName: inv.billedToUser.firstName,
+								lastName: inv.billedToUser.lastName,
+							}
+						: null,
+				})),
+				nextCursor,
 			};
 		}),
 
@@ -768,6 +1005,293 @@ export const billingRouter = createTRPCRouter({
 				});
 
 				return { invoice: updated };
+			});
+		}),
+
+	/**
+	 * Phase 9a — context for the "Account Credit" payment option. For the target
+	 * invoice's PAYER (billedToUserId ?? userId), returns how much spendable
+	 * credit they hold, how much is owed on this invoice, and the amount actually
+	 * applicable = min(owed, available). The modal uses this to show "Available:
+	 * $X" and to cap/default the amount field.
+	 */
+	getAccountCreditContext: facilityProcedure
+		.input(z.object({ invoiceId: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const invoice = await ctx.db.invoice.findFirst({
+				where: {
+					invoiceId: input.invoiceId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: {
+					invoiceNumber: true,
+					userId: true,
+					billedToUserId: true,
+					totalInCents: true,
+					amountPaidInCents: true,
+				},
+			});
+			if (!invoice) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found",
+				});
+			}
+
+			const payerUserId = invoice.billedToUserId ?? invoice.userId;
+			const owedInCents = Math.max(
+				0,
+				invoice.totalInCents - invoice.amountPaidInCents,
+			);
+
+			// Payer's unconsumed overpayment credit — same scoping as
+			// sellPackage's carry-forward + getMemberBilling.
+			const sources = await ctx.db.invoice.findMany({
+				where: {
+					clubShortName: ctx.user.clubShortName,
+					status: "paid",
+					closedAt: { not: null },
+					creditConsumedAt: null,
+					OR: [
+						{ userId: payerUserId, billedToUserId: null },
+						{ billedToUserId: payerUserId },
+					],
+				},
+				select: {
+					totalInCents: true,
+					amountPaidInCents: true,
+					creditConsumedInCents: true,
+				},
+			});
+			const availableCreditInCents = sources.reduce(
+				(sum, s) => sum + sourceAvailableCreditInCents(s),
+				0,
+			);
+
+			return {
+				invoiceNumber: invoice.invoiceNumber,
+				owedInCents,
+				availableCreditInCents,
+				applicableInCents: Math.min(owedInCents, availableCreditInCents),
+			};
+		}),
+
+	/**
+	 * Phase 9a — apply a member's accrued account credit to reduce what's owed
+	 * on a specific invoice. Surfaced as the "Account Credit" option in the
+	 * Record Payment modal, but it is NOT a payment: no money changes hands, no
+	 * `InvoicePayment` row is created, and it must never count as revenue. It is
+	 * a credit transfer — overpayment liability the club already holds for the
+	 * payer is moved to offset this invoice's charges; the charges remain the
+	 * revenue.
+	 *
+	 * Mechanics (mirror sellPackage's carry-forward, FIFO oldest-credit-first):
+	 *  - Draw down the payer's credit sources by `closedAt` asc, adding ONE
+	 *    negative `kind=CREDIT` line PER source to the TARGET (so the target
+	 *    shows where each chunk came from), and bumping each source's
+	 *    `creditConsumedInCents` — stamping `creditConsumedAt` only once a source
+	 *    is fully spent (this is what enables PARTIAL consumption).
+	 *  - Recompute the target's subtotal/total + status, auto-closing if the
+	 *    credit settles it (mirrors the package-sale recompute).
+	 *
+	 * Capped at min(amount owed, available credit): you can't overspend credit,
+	 * and you can't over-apply (which would just recreate credit on the target).
+	 * Serialized with the other invoice mutations via the per-payer advisory lock.
+	 */
+	applyAccountCredit: facilityProcedure
+		.input(
+			z.object({
+				invoiceId: z.string(),
+				amountInCents: z.number().int().positive(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const target = await ctx.db.invoice.findFirst({
+				where: {
+					invoiceId: input.invoiceId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: {
+					invoiceId: true,
+					invoiceNumber: true,
+					userId: true,
+					billedToUserId: true,
+					status: true,
+				},
+			});
+			if (!target) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found",
+				});
+			}
+			if (target.status === "void") {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "Cannot apply credit to a void invoice",
+				});
+			}
+			if (target.status === "draft") {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "Cannot apply credit to a draft invoice",
+				});
+			}
+
+			const payerUserId = target.billedToUserId ?? target.userId;
+
+			return await ctx.db.$transaction(async (tx) => {
+				// Same per-payer advisory lock as sellPackage/recordPayment/
+				// closeInvoice — serializes ALL credit movement for this payer, so
+				// reading + drawing down the sources below is race-free without a
+				// separate row lock on each source.
+				const lockKey = `invoice-payer-${payerUserId}-${ctx.user.clubShortName}`;
+				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+
+				// Re-read the target under the lock — owed may have shifted since
+				// the modal computed its cap.
+				const locked = await tx.invoice.findUniqueOrThrow({
+					where: { invoiceId: input.invoiceId },
+					select: {
+						subtotalInCents: true,
+						totalInCents: true,
+						amountPaidInCents: true,
+					},
+				});
+				const owed = locked.totalInCents - locked.amountPaidInCents;
+				if (owed <= 0) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message: "Invoice has no outstanding balance to apply credit to",
+					});
+				}
+				if (input.amountInCents > owed) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Amount exceeds the invoice balance",
+					});
+				}
+
+				// Payer's credit sources, oldest credit first (FIFO).
+				const sources = await tx.invoice.findMany({
+					where: {
+						clubShortName: ctx.user.clubShortName,
+						status: "paid",
+						closedAt: { not: null },
+						creditConsumedAt: null,
+						OR: [
+							{ userId: payerUserId, billedToUserId: null },
+							{ billedToUserId: payerUserId },
+						],
+					},
+					orderBy: { closedAt: "asc" },
+					select: {
+						invoiceId: true,
+						invoiceNumber: true,
+						totalInCents: true,
+						amountPaidInCents: true,
+						creditConsumedInCents: true,
+						userId: true,
+						billedToUserId: true,
+					},
+				});
+				const available = sources.reduce(
+					(sum, s) => sum + sourceAvailableCreditInCents(s),
+					0,
+				);
+				if (input.amountInCents > available) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Amount exceeds available account credit",
+					});
+				}
+
+				// Append the credit lines after any existing line items.
+				const lastLine = await tx.invoiceLineItem.findFirst({
+					where: { invoiceId: target.invoiceId },
+					orderBy: { sortOrder: "desc" },
+					select: { sortOrder: true },
+				});
+				let sortOrder = (lastLine?.sortOrder ?? -1) + 1;
+
+				let remaining = input.amountInCents;
+				let appliedInCents = 0;
+				for (const s of sources) {
+					if (remaining <= 0) break;
+					const srcAvailable = sourceAvailableCreditInCents(s);
+					if (srcAvailable <= 0) continue;
+					const chunk = Math.min(remaining, srcAvailable);
+
+					await tx.invoiceLineItem.create({
+						data: {
+							invoiceId: target.invoiceId,
+							kind: "CREDIT",
+							description: `Account credit from ${s.invoiceNumber}`,
+							quantity: 1,
+							unitPriceInCents: -chunk,
+							discountInCents: 0,
+							taxRateBps: 0,
+							taxAmountInCents: 0,
+							totalInCents: -chunk,
+							sortOrder,
+							creditFromInvoiceId: s.invoiceId,
+							creditFromUserId: s.billedToUserId ?? s.userId,
+						},
+					});
+					sortOrder += 1;
+
+					const overpayment = s.amountPaidInCents - s.totalInCents;
+					const newConsumed = s.creditConsumedInCents + chunk;
+					await tx.invoice.update({
+						where: { invoiceId: s.invoiceId },
+						data: {
+							creditConsumedInCents: newConsumed,
+							...(newConsumed >= overpayment
+								? { creditConsumedAt: new Date() }
+								: {}),
+						},
+					});
+
+					remaining -= chunk;
+					appliedInCents += chunk;
+				}
+
+				// Recompute the target's subtotal/total + status from the applied
+				// total (mirrors the package-sale recompute; the zero-tax credit
+				// lines leave tax untouched). Auto-close if the credit settles it.
+				const newSubtotal = locked.subtotalInCents - appliedInCents;
+				const newTotal = locked.totalInCents - appliedInCents;
+				const amountPaid = locked.amountPaidInCents;
+				let newStatus: string;
+				if (amountPaid >= newTotal) {
+					newStatus = "paid";
+				} else if (amountPaid <= 0) {
+					newStatus = "open";
+				} else {
+					newStatus = "partially_paid";
+				}
+
+				const updated = await tx.invoice.update({
+					where: { invoiceId: target.invoiceId },
+					data: {
+						subtotalInCents: newSubtotal,
+						totalInCents: newTotal,
+						status: newStatus,
+						...(newStatus === "paid"
+							? { closedAt: new Date(), closedBy: ctx.user.userId }
+							: {}),
+					},
+					select: {
+						invoiceId: true,
+						invoiceNumber: true,
+						status: true,
+						totalInCents: true,
+						amountPaidInCents: true,
+					},
+				});
+
+				return { invoice: updated, appliedInCents };
 			});
 		}),
 });

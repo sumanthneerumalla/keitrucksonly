@@ -7,6 +7,7 @@ import {
 	createTRPCRouter,
 	facilityProcedure,
 } from "~/server/api/trpc";
+import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
 
 // ============================================================
 // HELPERS
@@ -196,25 +197,13 @@ async function getFacilityTimezoneForUser(
 	);
 }
 
-/**
- * Phase 9a line-item hardening — the DB can't enforce that `kind` matches the
- * provenance FKs set (a cross-column rule a Postgres enum can't express), so
- * producers assert it here. Keeps the discriminator honest as more charge
- * sources are added. Throws on mismatch (a programmer error — the values are
- * constants in the producer, so it should never fire; it guards future edits).
- */
-function assertLineItemKindConsistency(d: {
-	kind: string;
-	packagePlanId?: string | null;
-	creditFromInvoiceId?: string | null;
-}): void {
-	if (d.kind === "PACKAGE_SALE" && !d.packagePlanId) {
-		throw new Error("InvoiceLineItem kind=PACKAGE_SALE requires packagePlanId");
-	}
-	if (d.kind === "CREDIT" && !d.creditFromInvoiceId) {
-		throw new Error("InvoiceLineItem kind=CREDIT requires creditFromInvoiceId");
-	}
-}
+// Phase 9a — auto credit carry-forward toggle. OFF: the club owner wants to
+// control WHEN overpayment credit is applied (manually, via Record Payment →
+// "Account credit"), NOT have it silently pulled onto the next new invoice.
+// When false, sellPackage opens a new invoice without auto-applying credit;
+// the credit stays available for a deliberate Account-Credit application.
+// (Global for now — promote to a per-club Club setting if clubs ever differ.)
+const AUTO_APPLY_CREDIT_ON_NEW_INVOICE = false;
 
 // ============================================================
 // ROUTER
@@ -664,14 +653,27 @@ export const packagesRouter = createTRPCRouter({
 							amountPaidInCents: true,
 							// Phase 9a line-item hardening — need the source payer to
 							// snapshot `creditFromUserId` on the credit line below.
+							creditConsumedInCents: true,
 							userId: true,
 							billedToUserId: true,
 						},
 					});
 
-					const sourcesWithCredit = creditSources.filter(
-						(s) => s.amountPaidInCents > s.totalInCents,
-					);
+					// Auto carry-forward is gated by AUTO_APPLY_CREDIT_ON_NEW_INVOICE
+					// (OFF by default — the owner applies credit manually). When off we
+					// select NO sources, so the loop below is a no-op and the new
+					// invoice carries no auto-applied credit lines (credit stays
+					// available). The query above still runs but its result is ignored —
+					// negligible, and keeps the diff minimal vs re-nesting the block.
+					const sourcesWithCredit = AUTO_APPLY_CREDIT_ON_NEW_INVOICE
+						? creditSources.filter(
+								(s) =>
+									s.amountPaidInCents -
+										s.totalInCents -
+										s.creditConsumedInCents >
+									0,
+							)
+						: [];
 
 					// Add a negative line item per credit source + stamp each source's
 					// `creditConsumedAt`. Empty `sourcesWithCredit` case: this loop
@@ -679,7 +681,10 @@ export const packagesRouter = createTRPCRouter({
 					// transaction behaves exactly like pre-Round-4 new-invoice flow.
 					let sortIndex = 0;
 					for (const s of sourcesWithCredit) {
-						const creditCents = s.amountPaidInCents - s.totalInCents;
+						// Remaining (not gross) credit — an Account-Credit application
+						// may have already spent part of this source.
+						const creditCents =
+							s.amountPaidInCents - s.totalInCents - s.creditConsumedInCents;
 
 						assertLineItemKindConsistency({
 							kind: "CREDIT",
@@ -705,7 +710,13 @@ export const packagesRouter = createTRPCRouter({
 
 						await tx.invoice.update({
 							where: { invoiceId: s.invoiceId },
-							data: { creditConsumedAt: new Date() },
+							// Carry-forward consumes the source's ENTIRE remaining credit, so
+							// it's now fully spent: bump the counter to the full overpayment
+							// and stamp `creditConsumedAt`.
+							data: {
+								creditConsumedInCents: s.amountPaidInCents - s.totalInCents,
+								creditConsumedAt: new Date(),
+							},
 						});
 
 						totalCreditPulledCents += creditCents;

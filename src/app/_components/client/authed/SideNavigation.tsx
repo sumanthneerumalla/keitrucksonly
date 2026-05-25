@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
 	Sidebar,
 	SidebarContent,
@@ -311,6 +311,15 @@ export default function SideNavigation({
 	const handleLeafClick = isMobile ? () => setOpenMobile(false) : undefined;
 	const [facilityModalOpen, setFacilityModalOpen] = useState(false);
 
+	// Defer the menu (Radix Collapsibles) to after mount. The collapsibles'
+	// internal useId values can differ between the SSR pass and the first client
+	// render, which React flags as a hydration mismatch. Rendering the skeleton on
+	// both the server and the first client render keeps them identical; the real
+	// menu mounts in an effect. Mirrors the same guard ClientsList uses for its
+	// Radix popover.
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+
 	// Get active facility name for the switcher button
 	const { data: facilityMemberships } =
 		api.user.getFacilityMemberships.useQuery(undefined, { enabled: !!user });
@@ -324,7 +333,7 @@ export default function SideNavigation({
 			<SidebarContent>
 				<SidebarGroup>
 					<SidebarGroupContent>
-						{isLoading ? (
+						{!mounted || isLoading ? (
 							<div className="animate-pulse space-y-2 p-4">
 								<div className="h-9 rounded bg-gray-200" />
 								<div className="h-9 rounded bg-gray-200" />

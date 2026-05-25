@@ -7,8 +7,7 @@ import { isFacilityOrAbove } from "~/lib/utils";
  * Phase 9a (C14) — admin invoice detail. Shares the `<InvoiceDetail>` component
  * with /clients/[userId]/invoices/[invoiceId]; per-invoice authorization lives
  * in `billing.getInvoice` (consumer OR payer OR same-club staff). `backHref`
- * points at the admin landing today; repoint at /admin/invoices once the C13
- * list page ships.
+ * returns to the C13 invoice list.
  */
 export default async function AdminInvoiceDetailPage({
 	params,
@@ -24,6 +23,10 @@ export default async function AdminInvoiceDetailPage({
 	const { invoiceId } = await params;
 
 	return (
-		<InvoiceDetail invoiceId={invoiceId} audience="staff" backHref="/admin" />
+		<InvoiceDetail
+			invoiceId={invoiceId}
+			audience="staff"
+			backHref="/admin/invoices"
+		/>
 	);
 }

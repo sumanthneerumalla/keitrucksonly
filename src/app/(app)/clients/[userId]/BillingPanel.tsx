@@ -25,12 +25,10 @@ import RecordPaymentModal from "./RecordPaymentModal";
  * Phase 9a additions:
  *  - "Record Payment" action on each open/partially_paid/paid/overdue invoice
  *    row, opening a slide-out RecordPaymentModal.
- *  - Signed-credit display (decision 104, Version A overpayment): when the
- *    invoice balance or overall outstanding goes negative, render it as
- *    "Account credit" / "(credit)" in a neutral tone rather than a red number.
- *    The backend un-floor lives in `billing.ts` (backlog B8) — this UI is
- *    forward-compatible: while the floor remains, balances simply never go
- *    negative; once removed, credit surfaces here without further UI changes.
+ *  - Signed-credit display (decision 104, Version A overpayment): when an
+ *    invoice balance goes negative, render it as "(credit)" in a neutral tone
+ *    rather than a red number. The backend un-floor lives in `billing.ts`
+ *    (backlog B8).
  *
  * Phase 9a Round 4 additions (status relabel):
  *  - "Mark as due" action on each open/partially_paid invoice that isn't
@@ -192,28 +190,6 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 	// source of truth for the in-flight flag — no separate useState to drift.
 	const closing = closeInvoiceMutation.isPending;
 
-	// Derive the outstanding-tile presentation from the (potentially signed)
-	// `outstandingInCents`. When `< 0`, the club holds member credit — neutral
-	// tone, "Account credit" label. When `> 0`, money owed — red emphasis.
-	// When `= 0`, neutral.
-	const outstandingDisplay = (() => {
-		if (!data)
-			return { label: "Outstanding", value: formatCents(0), emphasize: false };
-		const cents = data.outstandingInCents;
-		if (cents < 0) {
-			return {
-				label: "Account credit",
-				value: formatCents(Math.abs(cents)),
-				emphasize: false,
-			};
-		}
-		return {
-			label: "Outstanding",
-			value: formatCents(cents),
-			emphasize: cents > 0,
-		};
-	})();
-
 	return (
 		<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
 			<h4 className="mb-3 flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
@@ -236,21 +212,7 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 
 			{data && (
 				<>
-					<div className="mb-4 grid grid-cols-3 gap-3">
-						<RollupTile
-							label="Total billed"
-							value={formatCents(data.totalBilledInCents)}
-						/>
-						<RollupTile
-							label="Total paid"
-							value={formatCents(data.totalPaidInCents)}
-						/>
-						<RollupTile
-							label={outstandingDisplay.label}
-							value={outstandingDisplay.value}
-							emphasize={outstandingDisplay.emphasize}
-						/>
-					</div>
+					<BalanceSummary data={data} />
 
 					{data.invoices.length === 0 ? (
 						<p className="text-[var(--muted-foreground)] text-xs">
@@ -455,23 +417,70 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 	);
 }
 
+// Simplified balance summary — the older big-number tile layout. We
+// deliberately show only the three numbers staff act on: what's owed
+// (Outstanding), what credit is on file (Available credit), and the net after
+// applying that credit (Net owed). The backend still returns totalBilled /
+// totalPaid / billedToOthers / creditApplied — we can surface "total billed,
+// paid, and credited to/from others" here later when we're ready.
+function BalanceSummary({
+	data,
+}: {
+	data: { outstandingInCents: number; availableCreditInCents: number };
+}) {
+	const netOwed = Math.max(
+		0,
+		data.outstandingInCents - data.availableCreditInCents,
+	);
+	return (
+		<div className="mb-4 grid grid-cols-3 gap-3">
+			<RollupTile
+				label="Outstanding balance"
+				value={formatCents(data.outstandingInCents)}
+				valueClassName={
+					data.outstandingInCents > 0
+						? "text-[var(--foreground)]"
+						: "text-[var(--muted-foreground)]"
+				}
+			/>
+			<RollupTile
+				label="Available credit"
+				value={formatCents(data.availableCreditInCents)}
+				valueClassName={
+					data.availableCreditInCents > 0
+						? "text-emerald-700 dark:text-emerald-400"
+						: "text-[var(--muted-foreground)]"
+				}
+			/>
+			<RollupTile
+				label="Net owed"
+				value={formatCents(netOwed)}
+				valueClassName={
+					netOwed > 0
+						? "text-red-700 dark:text-red-400"
+						: "text-[var(--muted-foreground)]"
+				}
+			/>
+		</div>
+	);
+}
+
 function RollupTile({
 	label,
 	value,
-	emphasize,
+	valueClassName,
 }: {
 	label: string;
 	value: string;
-	emphasize?: boolean;
+	/** Override the value color (e.g. red for owed, emerald for credit). */
+	valueClassName?: string;
 }) {
 	return (
 		<div className="rounded-md border border-[var(--border)] bg-[var(--background)] p-3">
 			<div className="text-[var(--muted-foreground)] text-xs">{label}</div>
 			<div
 				className={`mt-1 font-semibold text-lg ${
-					emphasize
-						? "text-red-700 dark:text-red-400"
-						: "text-[var(--foreground)]"
+					valueClassName ?? "text-[var(--foreground)]"
 				}`}
 			>
 				{value}

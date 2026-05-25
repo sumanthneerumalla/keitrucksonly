@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# pre-push build gate
+# -------------------
+# Runs a production build before every push so build-class SSR errors are caught
+# HERE instead of breaking the cron-driven auto-deploy on the server. Examples it
+# catches: a client component using useSearchParams() without a <Suspense>
+# boundary, or other dynamic-API / static-generation bailouts. A non-zero exit
+# aborts the push.
+#
+# `next build` does NOT catch hydration mismatches (those are runtime-only) — see
+# the smoke-test / jsdom-hydration options if you want those covered too.
+#
+# SKIP_ENV_VALIDATION=1 makes the build fail on genuine build/SSR problems rather
+# than on missing local env vars (see next.config.js).
+#
+# Emergency bypass (use sparingly): git push --no-verify
+#
+# This hook is COMMITTED in .githooks/ and activated for every dev via the
+# `prepare` script in package.json (sets core.hooksPath=.githooks on `npm install`).
+# No husky / dependency required. That prepare step is intentionally guarded with
+# `2>/dev/null || true` so it's a harmless no-op during the Docker `npm ci` build
+# (where .git and the git binary aren't present) — see the "//prepare" note in
+# package.json. Don't remove that guard.
+
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# Skip the build when the push only DELETES remote refs (nothing new to build).
+# Conservative: if we can't tell, we build.
+have_updates=0
+read_any=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+	read_any=1
+	case "${local_sha:-}" in
+		"") ;;
+		*[!0]*) have_updates=1 ;; # a non-all-zero sha = a real ref update
+	esac
+done
+
+if [ "$read_any" -eq 1 ] && [ "$have_updates" -eq 0 ]; then
+	echo "pre-push: deletion-only push — skipping build gate."
+	exit 0
+fi
+
+echo "pre-push: running build gate (SKIP_ENV_VALIDATION=1 npm run build)…"
+if SKIP_ENV_VALIDATION=1 npm run build; then
+	echo "pre-push: build OK — push allowed."
+else
+	echo ""
+	echo "pre-push: 'next build' FAILED — push aborted."
+	echo "  Fix the error above and push again, or bypass with: git push --no-verify"
+	exit 1
+fi

@@ -13,7 +13,7 @@
  *   condition                              member                     staff
  *   --------------------------------------------------------------------------
  *   paid                                   "Paid"                     "Paid"
- *   overpaid (balance < 0)                 "Account credit $X"        "Credit $X"
+ *   overpaid (balance < 0)                 "Account credit $X"        "Paid"
  *   marked due (closedAt set) + owes       "Amount due $X"            "Due · $X"
  *   partially paid, still an open tab      "Partially paid · $X due"  "Open tab · partially paid"
  *   open tab, nothing marked due yet       "Current balance $X"       "Open tab · $X"
@@ -21,6 +21,12 @@
  *
  * ($X is formatted via formatCents; the staff "Open tab · partially paid" row
  * intentionally omits the amount per the approved spec.)
+ *
+ * NOTE on staff + overpaid (2026-05-25): staff see a plain "Paid" for overpaid
+ * invoices instead of "Credit $X". Every staff view that renders this pill also
+ * has a Balance column that already surfaces the credit, so repeating it in the
+ * status was redundant and harder to scan. Members still get "Account credit $X"
+ * (a member view may lack a balance column, so their credit stays in the label).
  *
  * NOTE on overdue: today "Mark as due" sets `dueDate = now` and there are no
  * penalties, so "Due" and "Overdue" collapse — we show "Due". The derive logic
@@ -78,17 +84,21 @@ export function invoiceStatusDisplay(
 		return { label: "Draft", tone: "muted", hiddenFromMember: false };
 	}
 
-	// Overpayment surfaces as account credit (signed negative balance).
+	// Overpaid (paid > billed → negative balance). Staff just see "Paid": every
+	// staff view that renders this pill also has a Balance column that already
+	// shows the credit, so repeating "Credit $X" in the status is redundant noise.
+	// Members keep the explicit "Account credit $X" — a member view may not have a
+	// balance column, so their credit must stay visible in the label itself.
 	if (bal < 0) {
 		return {
-			label: isMember
-				? `Account credit ${creditAmount}`
-				: `Credit ${creditAmount}`,
+			label: isMember ? `Account credit ${creditAmount}` : "Paid",
 			tone: "success",
 			hiddenFromMember: false,
 		};
 	}
 
+	// Paid in full (balance == 0). Full payment auto-settles the invoice to
+	// "paid" server-side, so this also covers the "paid == billed" case.
 	if (inv.status === "paid") {
 		return { label: "Paid", tone: "success", hiddenFromMember: false };
 	}
