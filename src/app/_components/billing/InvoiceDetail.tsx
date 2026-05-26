@@ -124,6 +124,8 @@ export default function InvoiceDetail({
 
 	const [paymentOpen, setPaymentOpen] = useState(false);
 	const [markDueOpen, setMarkDueOpen] = useState(false);
+	const [voidOpen, setVoidOpen] = useState(false);
+	const [voidReason, setVoidReason] = useState("");
 
 	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
 		onSuccess: async () => {
@@ -150,6 +152,33 @@ export default function InvoiceDetail({
 		},
 	});
 	const marking = closeInvoiceMutation.isPending;
+
+	const voidMutation = api.billing.voidInvoice.useMutation({
+		onSuccess: async () => {
+			toast(`Invoice ${inv?.invoiceNumber ?? ""} voided`, "success");
+			// Refresh this page + both parties' BillingPanels + the admin list.
+			await Promise.all([
+				utils.billing.getInvoice.invalidate({ invoiceId }),
+				inv
+					? utils.billing.getMemberBilling.invalidate({
+							userId: inv.consumer.userId,
+						})
+					: Promise.resolve(),
+				inv?.billedTo
+					? utils.billing.getMemberBilling.invalidate({
+							userId: inv.billedTo.userId,
+						})
+					: Promise.resolve(),
+				utils.billing.listInvoices.invalidate(),
+			]);
+			setVoidOpen(false);
+			setVoidReason("");
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+	});
+	const voiding = voidMutation.isPending;
 
 	if (isLoading) {
 		return (
@@ -214,6 +243,16 @@ export default function InvoiceDetail({
 		inv.status !== "paid" &&
 		inv.status !== "draft" &&
 		inv.closedAt === null;
+	// Void is clubAdmin-only and only for a "clean" invoice: no money in (refund
+	// first) and no applied account credit. Mirrors the backend guards; the
+	// voidInvoice mutation re-checks authoritatively.
+	const hasCreditLine = inv.lineItems.some((li) => li.kind === "CREDIT");
+	const canVoid =
+		isStaff &&
+		inv.viewerIsClubAdmin &&
+		inv.status !== "void" &&
+		inv.amountPaidInCents === 0 &&
+		!hasCreditLine;
 
 	return (
 		<div className="mx-auto max-w-4xl space-y-6 p-6">
@@ -242,7 +281,7 @@ export default function InvoiceDetail({
 				</div>
 
 				{/* Actions (staff) */}
-				{(canRecordPayment || canMarkDue) && (
+				{(canRecordPayment || canMarkDue || canVoid) && (
 					<div className="flex items-center gap-2">
 						{canRecordPayment && (
 							<Button
@@ -260,6 +299,16 @@ export default function InvoiceDetail({
 								onClick={() => setMarkDueOpen(true)}
 							>
 								Mark as due
+							</Button>
+						)}
+						{canVoid && (
+							<Button
+								variant="outline"
+								size="sm"
+								className="text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+								onClick={() => setVoidOpen(true)}
+							>
+								Void
 							</Button>
 						)}
 					</div>
@@ -608,6 +657,42 @@ export default function InvoiceDetail({
 							setMarkDueOpen(false);
 						}}
 					/>
+
+					<AlertDialog
+						open={voidOpen}
+						destructive
+						title={`Void invoice ${inv.invoiceNumber}`}
+						description="This cancels the invoice and removes it from balances and reporting. It does NOT revoke any package or credits granted by this sale — reverse those separately if needed. This can't be undone."
+						confirmLabel={voiding ? "Voiding…" : "Void invoice"}
+						cancelLabel="Cancel"
+						confirmDisabled={voiding || voidReason.trim().length === 0}
+						onConfirm={() => {
+							if (voiding || voidReason.trim().length === 0) return;
+							voidMutation.mutate({
+								invoiceId,
+								reason: voidReason.trim(),
+							});
+						}}
+						onCancel={() => {
+							if (voiding) return;
+							setVoidOpen(false);
+							setVoidReason("");
+						}}
+					>
+						<label className="block space-y-1">
+							<span className="text-[var(--muted-foreground)] text-xs">
+								Reason (required) — appended to the invoice notes
+							</span>
+							<textarea
+								value={voidReason}
+								onChange={(e) => setVoidReason(e.target.value)}
+								rows={3}
+								maxLength={500}
+								placeholder="e.g. Duplicate of INV-000041 / billed in error"
+								className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-[var(--foreground)] text-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+							/>
+						</label>
+					</AlertDialog>
 				</>
 			)}
 		</div>

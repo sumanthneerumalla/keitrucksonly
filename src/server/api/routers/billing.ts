@@ -1,8 +1,9 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import dayjs from "~/lib/dayjs-config";
 import {
+	clubAdminProcedure,
 	createTRPCRouter,
 	facilityProcedure,
 	protectedProcedure,
@@ -354,12 +355,27 @@ export const billingRouter = createTRPCRouter({
 				});
 			}
 
+			// Whether THIS viewer may void the invoice: a club admin or platform
+			// admin, AND in the invoice's own club. The same-club gate applies even
+			// to platform admins because `voidInvoice` (clubAdminProcedure) scopes
+			// its lookup to the caller's own clubShortName — so the button must only
+			// appear where the void will actually succeed, not on another club's
+			// invoice where the mutation would 404. (Cross-club platform operations
+			// would be a separate, broader change.) FACILITY staff are excluded.
+			// Button-visibility gate only — the mutation re-checks authoritatively.
+			const viewerIsClubAdmin =
+				(isPlatformAdmin(viewer) || viewer.userType === UserType.CLUB_ADMIN) &&
+				isSameClub(viewer, invoice);
+
 			const balanceInCents = invoice.totalInCents - invoice.amountPaidInCents;
 
 			return {
 				invoiceId: invoice.invoiceId,
 				invoiceNumber: invoice.invoiceNumber,
 				status: invoice.status,
+				// UI gate for the Void button (see above) — NOT security; the
+				// voidInvoice mutation re-checks via clubAdminProcedure.
+				viewerIsClubAdmin,
 				issueDate: invoice.issueDate,
 				dueDate: invoice.dueDate,
 				closedAt: invoice.closedAt,
@@ -1292,6 +1308,133 @@ export const billingRouter = createTRPCRouter({
 				});
 
 				return { invoice: updated, appliedInCents };
+			});
+		}),
+
+	/**
+	 * Phase 9a (A4) — void an invoice. clubAdmin-gated. Marks status="void"
+	 * (excluded from billing/reporting) and appends the required reason to the
+	 * invoice's `notes`. Does NOT touch line items, granted MemberPackage
+	 * credits, payments, or applied credit — void is a document-level cancel,
+	 * not a reversal (the confirm dialog warns staff to reverse a package sale
+	 * separately if that's what they actually want).
+	 *
+	 * Guards (a void must leave no money or credit dangling):
+	 *  - already void → CONFLICT.
+	 *  - any net payment (amountPaid > 0) → PRECONDITION_FAILED (refund first).
+	 *    This also covers overpaid / credit-SOURCE invoices (they hold a payment).
+	 *  - carries CREDIT line items (account credit applied TO this invoice) →
+	 *    PRECONDITION_FAILED (un-applying credit isn't a built action yet; block
+	 *    to protect the credit ledger).
+	 * Re-checks inside the shared per-payer advisory lock so a payment/credit
+	 * that committed just before the lock can't slip a void through (mirrors the
+	 * recordPayment stale-read fix, HANDOFF #118).
+	 */
+	voidInvoice: clubAdminProcedure
+		.input(
+			z.object({
+				invoiceId: z.string(),
+				reason: z.string().trim().min(1, "A reason is required").max(500),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const reason = input.reason.trim();
+
+			// Cross-tenant guard + pre-lock fast-fail (mirrors closeInvoice).
+			const invoice = await ctx.db.invoice.findFirst({
+				where: {
+					invoiceId: input.invoiceId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: {
+					invoiceId: true,
+					status: true,
+					amountPaidInCents: true,
+					userId: true,
+					billedToUserId: true,
+				},
+			});
+			if (!invoice) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found in this club",
+				});
+			}
+			if (invoice.status === "void") {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "Invoice is already void",
+				});
+			}
+			if (invoice.amountPaidInCents > 0) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						"This invoice has a payment recorded. Refund the payment before voiding.",
+				});
+			}
+
+			const effectivePayerUserId = invoice.billedToUserId ?? invoice.userId;
+
+			return await ctx.db.$transaction(async (tx) => {
+				// Same per-payer advisory lock as sellPackage / recordPayment /
+				// closeInvoice / applyAccountCredit — serializes every invoice
+				// mutation for this (payer, club).
+				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+
+				// Re-read INSIDE the lock — a payment/credit could have committed
+				// between the pre-lock read and acquiring the lock.
+				const locked = await tx.invoice.findUniqueOrThrow({
+					where: { invoiceId: input.invoiceId },
+					select: { status: true, notes: true, amountPaidInCents: true },
+				});
+				if (locked.status === "void") {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message: "Invoice is already void",
+					});
+				}
+				if (locked.amountPaidInCents > 0) {
+					throw new TRPCError({
+						code: "PRECONDITION_FAILED",
+						message:
+							"This invoice has a payment recorded. Refund the payment before voiding.",
+					});
+				}
+				const creditLineCount = await tx.invoiceLineItem.count({
+					where: { invoiceId: input.invoiceId, kind: "CREDIT" },
+				});
+				if (creditLineCount > 0) {
+					throw new TRPCError({
+						code: "PRECONDITION_FAILED",
+						message:
+							"This invoice has account credit applied to it. Remove the applied credit before voiding.",
+					});
+				}
+
+				// Decision: the void reason lives in the invoice `notes` (no separate
+				// column). Stamp the time in the acting staff's timezone.
+				const stamp = dayjs()
+					.tz(ctx.user.timeZone || "America/New_York")
+					.format("YYYY-MM-DD HH:mm");
+				const voidNote = `[Voided ${stamp}] ${reason}`;
+				const newNotes = locked.notes
+					? `${locked.notes}\n${voidNote}`
+					: voidNote;
+
+				const updated = await tx.invoice.update({
+					where: { invoiceId: input.invoiceId },
+					data: { status: "void", notes: newNotes },
+					select: {
+						invoiceId: true,
+						invoiceNumber: true,
+						status: true,
+						notes: true,
+					},
+				});
+				return { invoice: updated };
 			});
 		}),
 });
