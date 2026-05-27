@@ -24,7 +24,7 @@
 		"docker:volumes:ensure:dev": "docker volume create shuttlementor-dev-postgres-data",
 		"docker:images:prune": "docker image prune -f",
 		"docker:images:prune:all": "docker image prune -a -f && docker builder prune -f",
-		"docker:volumes:prune:dev": "sh -c 'for name in shuttlementor-app-dev shuttlementor-db-dev; do docker ps --format \"{{.Names}}\" | grep -qx \"$name\" || { echo \"Refusing to prune: expected running container $name\"; exit 1; }; done; volumes=$(docker volume ls -q --filter dangling=true --filter label=com.docker.compose.project=shuttlementor-dev | sort -u); if [ -z \"$volumes\" ]; then echo \"No unused dev volumes to prune\"; exit 0; fi; printf \"%s\\n\" \"$volumes\" | xargs docker volume rm'",
+		"docker:volumes:prune:dev": "docker volume prune -f",
 		"docker:volumes:prune:prod": "sh -c 'for name in shuttlementor-app-prod shuttlementor-db-prod; do docker ps --format \"{{.Names}}\" | grep -qx \"$name\" || { echo \"Refusing to prune: expected running container $name\"; exit 1; }; done; volumes=$(docker volume ls -q --filter dangling=true --filter label=com.docker.compose.project=shuttlementor-prod | sort -u); if [ -z \"$volumes\" ]; then echo \"No unused prod volumes to prune\"; exit 0; fi; printf \"%s\\n\" \"$volumes\" | xargs docker volume rm'",
 		"docker:volumes:prune:all": "npm run docker:volumes:prune:dev && npm run docker:volumes:prune:prod",
 		"docker:build": "docker compose build",
