@@ -4,6 +4,9 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import RecordPaymentModal from "~/app/(app)/clients/[userId]/RecordPaymentModal";
+import RefundModal, {
+	type RefundContext,
+} from "~/app/(app)/clients/[userId]/RefundModal";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -126,6 +129,7 @@ export default function InvoiceDetail({
 	const [markDueOpen, setMarkDueOpen] = useState(false);
 	const [voidOpen, setVoidOpen] = useState(false);
 	const [voidReason, setVoidReason] = useState("");
+	const [refundCtx, setRefundCtx] = useState<RefundContext | null>(null);
 
 	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
 		onSuccess: async () => {
@@ -253,6 +257,10 @@ export default function InvoiceDetail({
 		inv.status !== "void" &&
 		inv.amountPaidInCents === 0 &&
 		!hasCreditLine;
+	// Refund is clubAdmin-only; blocked once this invoice's overpayment credit
+	// was consumed elsewhere (D1). Per-payment also requires a positive
+	// refundable balance (p.netInCents > 0). The mutation re-checks all of this.
+	const canRefund = isStaff && inv.viewerIsClubAdmin && !inv.hasConsumedCredit;
 
 	return (
 		<div className="mx-auto max-w-4xl space-y-6 p-6">
@@ -571,6 +579,24 @@ export default function InvoiceDetail({
 											{formatCents(p.netInCents)}
 										</div>
 									)}
+									{canRefund && p.netInCents > 0 && (
+										<Button
+											variant="outline"
+											size="sm"
+											className="mt-1 text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+											onClick={() =>
+												setRefundCtx({
+													paymentId: p.paymentId,
+													invoiceId: inv.invoiceId,
+													invoiceNumber: inv.invoiceNumber,
+													refundableInCents: p.netInCents,
+													paymentLabel: `${PAYMENT_METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod} · ${formatCents(p.amountInCents)}`,
+												})
+											}
+										>
+											Refund
+										</Button>
+									)}
 								</div>
 							</div>
 						))}
@@ -693,6 +719,16 @@ export default function InvoiceDetail({
 							/>
 						</label>
 					</AlertDialog>
+
+					<RefundModal
+						open={refundCtx !== null}
+						onOpenChange={(o) => {
+							if (!o) setRefundCtx(null);
+						}}
+						refund={refundCtx}
+						consumerUserId={inv.consumer.userId}
+						payerUserId={inv.billedTo?.userId ?? null}
+					/>
 				</>
 			)}
 		</div>

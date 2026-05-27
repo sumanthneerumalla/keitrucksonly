@@ -390,6 +390,11 @@ export const billingRouter = createTRPCRouter({
 				(isPlatformAdmin(viewer) || viewer.userType === UserType.CLUB_ADMIN) &&
 				isSameClub(viewer, invoice);
 
+			// UI gate for the per-payment Refund button — refunds are blocked when
+			// this invoice's overpayment credit was applied elsewhere (D1).
+			const hasConsumedCredit =
+				invoice.creditConsumedInCents > 0 || invoice.creditConsumedAt !== null;
+
 			const balanceInCents = invoice.totalInCents - invoice.amountPaidInCents;
 
 			return {
@@ -399,6 +404,9 @@ export const billingRouter = createTRPCRouter({
 				// UI gate for the Void button (see above) — NOT security; the
 				// voidInvoice mutation re-checks via clubAdminProcedure.
 				viewerIsClubAdmin,
+				// UI gate for the per-payment Refund button (D1 — refunds blocked
+				// once this invoice's credit was consumed elsewhere).
+				hasConsumedCredit,
 				issueDate: invoice.issueDate,
 				dueDate: invoice.dueDate,
 				closedAt: invoice.closedAt,
@@ -1549,6 +1557,257 @@ export const billingRouter = createTRPCRouter({
 							entityType: "Invoice",
 							entityId: invoice.invoiceId,
 							metadata: { invoiceId: invoice.invoiceId, reason },
+						}),
+					};
+				},
+			);
+		}),
+
+	/**
+	 * Phase 9a (A2) — refund a payment. clubAdmin-gated. Records an
+	 * `InvoiceRefund` row (never deletes/mutates the payment), recomputes the
+	 * payment's status + the invoice's net `amountPaidInCents` + status, and
+	 * emits a `REFUND_ISSUED` audit row.
+	 *
+	 * BOOKKEEPING ONLY (D3): does NOT call any payment processor — staff hand
+	 * back cash / refund in the processor dashboard separately; processor-backed
+	 * refunds plug into the same row at Phase 12.
+	 *
+	 * Guards:
+	 *  - payment must be in the caller's club; invoice not void.
+	 *  - D1: BLOCK when the invoice has CONSUMED credit (`creditConsumedInCents`
+	 *    > 0 or `creditConsumedAt` set) — its overpayment was applied as account
+	 *    credit to OTHER invoices, so refunding it would double-pay. Refunding
+	 *    consumed credit is deliberately out of scope (mirrors voidInvoice #121).
+	 *    Refunding a payment whose overpayment is still unspent is fine (R4).
+	 *  - no over-refund: amount ≤ payment.amount − already-refunded.
+	 *  - D2: a refund that re-opens a balance on a paid (auto-closed) invoice
+	 *    leaves `closedAt` UNTOUCHED — it shows "Due" again; new charges still
+	 *    open a fresh invoice. No auto-reopen.
+	 * Serialized via the shared per-payer advisory lock (#113); the credit +
+	 * over-refund guards are RE-CHECKED inside the lock (a concurrent
+	 * applyAccountCredit / refund could move them after the pre-lock read).
+	 */
+	recordRefund: clubAdminProcedure
+		.input(
+			z.object({
+				paymentId: z.string(),
+				amountInCents: z.number().int().positive(),
+				reason: z.string().trim().min(1, "A reason is required").max(500),
+				processorRefundId: z.string().max(255).optional(),
+				processorFeeInCents: z.number().int().nonnegative().optional(),
+				notes: z.string().max(2000).optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const reason = input.reason.trim();
+
+			// Cross-tenant guard + pre-lock fast-fail. The invoice carries the
+			// club + payer + credit markers we need.
+			const payment = await ctx.db.invoicePayment.findFirst({
+				where: {
+					paymentId: input.paymentId,
+					invoice: { clubShortName: ctx.user.clubShortName },
+				},
+				select: {
+					amountInCents: true,
+					processor: true,
+					invoiceId: true,
+					invoice: {
+						select: {
+							status: true,
+							userId: true,
+							billedToUserId: true,
+							creditConsumedInCents: true,
+							creditConsumedAt: true,
+						},
+					},
+				},
+			});
+			if (!payment) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Payment not found in this club",
+				});
+			}
+			if (payment.invoice.status === "void") {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "Cannot refund a payment on a void invoice",
+				});
+			}
+			// D1 — refunding consumed account credit is out of scope.
+			if (
+				payment.invoice.creditConsumedInCents > 0 ||
+				payment.invoice.creditConsumedAt !== null
+			) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						"This invoice's overpayment was applied as account credit to other invoices, so it can't be refunded here.",
+				});
+			}
+
+			const effectivePayerUserId =
+				payment.invoice.billedToUserId ?? payment.invoice.userId;
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Shared per-payer advisory lock (#113) + invoice row lock —
+					// serializes against concurrent payment / sale / credit / void.
+					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${payment.invoiceId} FOR UPDATE`;
+
+					// Re-read inside the lock: re-check the credit/void guards (a
+					// concurrent applyAccountCredit could have consumed credit after
+					// the pre-lock read) and get the current total for the recompute.
+					const locked = await tx.invoice.findUniqueOrThrow({
+						where: { invoiceId: payment.invoiceId },
+						select: {
+							totalInCents: true,
+							status: true,
+							creditConsumedInCents: true,
+							creditConsumedAt: true,
+						},
+					});
+					if (locked.status === "void") {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: "Cannot refund a payment on a void invoice",
+						});
+					}
+					if (
+						locked.creditConsumedInCents > 0 ||
+						locked.creditConsumedAt !== null
+					) {
+						throw new TRPCError({
+							code: "PRECONDITION_FAILED",
+							message:
+								"This invoice's overpayment was applied as account credit to other invoices, so it can't be refunded here.",
+						});
+					}
+
+					// No over-refund: cap at the payment's not-yet-refunded balance.
+					const priorRefunds = await tx.invoiceRefund.aggregate({
+						_sum: { amountInCents: true },
+						where: { paymentId: input.paymentId },
+					});
+					const alreadyRefunded = priorRefunds._sum.amountInCents ?? 0;
+					const refundableRemaining = payment.amountInCents - alreadyRefunded;
+					if (input.amountInCents > refundableRemaining) {
+						throw new TRPCError({
+							code: "PRECONDITION_FAILED",
+							message: `Refund exceeds the payment's refundable balance ($${(refundableRemaining / 100).toFixed(2)}).`,
+						});
+					}
+
+					// Insert the refund (never delete/mutate the payment). processor
+					// inherits the payment's; (processor, processorRefundId) is unique
+					// for webhook idempotency (nulls distinct → manual refunds don't
+					// collide).
+					let refund: Awaited<ReturnType<typeof tx.invoiceRefund.create>>;
+					try {
+						refund = await tx.invoiceRefund.create({
+							data: {
+								paymentId: input.paymentId,
+								invoiceId: payment.invoiceId,
+								amountInCents: input.amountInCents,
+								reason,
+								refundedBy: ctx.user.userId,
+								processor: payment.processor,
+								processorRefundId: input.processorRefundId,
+								processorFeeInCents: input.processorFeeInCents,
+								notes: input.notes,
+							},
+						});
+					} catch (error) {
+						if (
+							error instanceof Prisma.PrismaClientKnownRequestError &&
+							error.code === "P2002"
+						) {
+							throw new TRPCError({
+								code: "CONFLICT",
+								message:
+									"This refund has already been recorded for this processor",
+							});
+						}
+						throw error;
+					}
+
+					// Payment status from cumulative refunds against it.
+					const totalRefundedForPayment = alreadyRefunded + input.amountInCents;
+					const newPaymentStatus =
+						totalRefundedForPayment >= payment.amountInCents
+							? "refunded"
+							: "partially_refunded";
+					await tx.invoicePayment.update({
+						where: { paymentId: input.paymentId },
+						data: { status: newPaymentStatus },
+					});
+
+					// Authoritative invoice recompute (Σ payments − Σ refunds), same
+					// formula as recordPayment. D2: leave `closedAt` UNTOUCHED — a
+					// refund that re-opens a balance does NOT resurrect the tab.
+					const paymentsSum = await tx.invoicePayment.aggregate({
+						_sum: { amountInCents: true },
+						where: { invoiceId: payment.invoiceId },
+					});
+					const refundsSum = await tx.invoiceRefund.aggregate({
+						_sum: { amountInCents: true },
+						where: { invoiceId: payment.invoiceId },
+					});
+					const newAmountPaid =
+						(paymentsSum._sum.amountInCents ?? 0) -
+						(refundsSum._sum.amountInCents ?? 0);
+					const total = locked.totalInCents;
+					let newStatus: string;
+					if (newAmountPaid <= 0) {
+						newStatus = "open";
+					} else if (newAmountPaid < total) {
+						newStatus = "partially_paid";
+					} else {
+						newStatus = "paid";
+					}
+					await tx.invoice.update({
+						where: { invoiceId: payment.invoiceId },
+						data: { amountPaidInCents: newAmountPaid, status: newStatus },
+					});
+
+					return {
+						result: {
+							refund,
+							payment: {
+								paymentId: input.paymentId,
+								status: newPaymentStatus,
+								amountInCents: payment.amountInCents,
+								refundedTotalInCents: totalRefundedForPayment,
+							},
+							invoice: {
+								invoiceId: payment.invoiceId,
+								amountPaidInCents: newAmountPaid,
+								totalInCents: total,
+								status: newStatus,
+							},
+						},
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.REFUND_ISSUED,
+							consumerUserId: payment.invoice.userId,
+							payerUserId: payment.invoice.billedToUserId,
+							entityType: "InvoiceRefund",
+							entityId: refund.refundId,
+							metadata: {
+								amountInCents: input.amountInCents,
+								paymentId: input.paymentId,
+								invoiceId: payment.invoiceId,
+								reason,
+							},
 						}),
 					};
 				},
