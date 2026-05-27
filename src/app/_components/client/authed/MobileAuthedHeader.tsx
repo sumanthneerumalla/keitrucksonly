@@ -2,6 +2,7 @@
 
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { SidebarTrigger } from "~/app/_components/shared/ui/sidebar";
 
 const PAGE_TITLES: Record<string, string> = {
@@ -41,6 +42,14 @@ export default function MobileAuthedHeader({
 	const pathname = usePathname();
 	const pageTitle = resolvePageTitle(pathname);
 
+	// Clerk's <UserButton /> SSRs a placeholder then swaps to the real button
+	// once clerk.js loads client-side; if that load wins the race against
+	// hydration, the server/client HTML diverges. Defer it to client mount
+	// (same pattern as NavBar) so the first render matches on both sides.
+	// A same-size placeholder reserves the slot to avoid layout shift.
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+
 	return (
 		<div className="flex h-14 items-center justify-between border-gray-200 border-b bg-white px-4 md:hidden">
 			{/* Hamburger — toggles SidebarProvider openMobile, which opens the Sidebar Sheet */}
@@ -49,8 +58,12 @@ export default function MobileAuthedHeader({
 			{/* Page title */}
 			<span className="font-semibold text-gray-800 text-sm">{pageTitle}</span>
 
-			{/* User menu */}
-			<UserButton />
+			{/* User menu — client-only to avoid Clerk hydration mismatch */}
+			{mounted ? (
+				<UserButton />
+			) : (
+				<div className="h-7 w-7" aria-hidden="true" />
+			)}
 		</div>
 	);
 }

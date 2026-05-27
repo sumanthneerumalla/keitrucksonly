@@ -57,3 +57,4 @@ services:
 volumes:
   postgres_data_prod:
     name: shuttlementor-prod-postgres-data
+    external: true

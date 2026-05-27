@@ -9,8 +9,9 @@ import { type Plan, PlansSection } from "./PlansClient";
 
 export const metadata: Metadata = {
 	title: "Pricing | Facility Presence",
+	// Pricing hidden — previous description cited Free up to 100 members and $300/mo ($250/mo annual) for 3 locations.
 	description:
-		"Honest pricing for racquet clubs. Free for up to 100 members, $300/mo (or $250/mo billed annually) for up to 3 locations, custom for everything else. No per-transaction fees.",
+		"Honest pricing for racquet clubs. No per-transaction fees. Let's talk about the plan that fits your facility.",
 };
 
 // Yearly pricing is "2 months free" — pay 10 months when billing annually.
@@ -19,9 +20,11 @@ const PLANS: Plan[] = [
 	{
 		id: "free",
 		name: "Free",
-		forWho: "Solo operators getting started",
-		pricing: { monthly: 0, yearly: 0 },
-		anchor: "Up to 100 members, 1 location",
+		forWho: "Solo operators",
+		// Pricing hidden — quote-driven; the "Let's talk" button is the only CTA.
+		// pricing: { monthly: 0, yearly: 0 },
+		pricing: null,
+		anchor: "100 members, 1 location",
 		cta: "Let's talk",
 		popular: false,
 		includes: [
@@ -39,15 +42,17 @@ const PLANS: Plan[] = [
 		id: "growth",
 		name: "Growth",
 		forWho: "Independent clubs running leagues, lessons, retail",
-		pricing: { monthly: 300, yearly: 250 },
-		anchor: "Up to 3 locations, unlimited members",
+		// Pricing hidden — quote-driven; the "Let's talk" button is the only CTA.
+		// pricing: { monthly: 300, yearly: 250 },
+		pricing: null,
+		anchor: "3 locations, unlimited members",
 		cta: "Let's talk",
 		popular: true,
 		includes: [
 			"Everything in Free",
 			"Up to 3 locations",
 			"Leagues & ladders",
-			"Open play with caps & waitlists",
+			"Open play + waitlists",
 			"Branded email + SMS automations",
 			"Inventory & house accounts",
 			"Cohort & utilization reports",
@@ -58,9 +63,8 @@ const PLANS: Plan[] = [
 	{
 		id: "scale",
 		name: "Custom",
-		forWho: "Multi-location operators (4+) and enterprise",
+		forWho: "4+ locations, enterprise",
 		pricing: null,
-		custom: "Let's talk",
 		anchor: "Unlimited locations, SSO, dedicated CSM",
 		cta: "Let's talk",
 		popular: false,
@@ -68,9 +72,9 @@ const PLANS: Plan[] = [
 			"Everything in Growth",
 			"Unlimited locations",
 			"Multi-location dashboards & roles",
-			"Single sign-on (SAML)",
+			"SSO (SAML)",
 			"Custom roles & permissions",
-			"API access & webhooks",
+			"API + webhooks",
 			"SOC 2 reports under NDA",
 			"Dedicated CSM",
 			"Phone support (1-hr response)",
@@ -140,24 +144,23 @@ const ROW_GROUPS: Array<{
 
 const PRICING_FAQS: Array<[string, string]> = [
 	[
-		"Do you charge per booking or per transaction?",
+		"Do you charge per transaction?",
 		"No. Your subscription is the only number you'll see from us. Stripe's standard processing rates pass through unchanged — we don't add a markup or take a slice.",
 	],
 	[
-		"What happens if I outgrow my plan?",
+		"What if I outgrow my plan?",
 		"We email you when you approach the limit on your plan (members on Free, locations on Growth). Upgrade is one click, prorated to the day. We never surprise-bill you for an overage.",
 	],
 	[
 		"Is there a setup fee?",
-		"No setup fee. Migration is free on Growth and Custom. On Free, we provide a self-serve import tool, or you can buy a one-time migration for $499.",
+		// Pricing hidden — previous answer cited a $499 one-time migration fee.
+		"No setup fee. Migration is free on Growth and Custom. On Free, we provide a self-serve import tool, or a one-time assisted migration — let's talk.",
 	],
-	[
-		"What's the contract?",
-		"Month-to-month, no annual lock-in, no termination fees. We'd rather earn the renewal than lock you in.",
-	],
+	["What's the contract?", "Month-to-month. No lock-in, no termination fee."],
 	[
 		"Do you have nonprofit or municipal pricing?",
-		"Yes. Public parks, school programs, and 501(c)(3) clubs get 25% off Growth. Get in touch with your designation and we'll set it up.",
+		// Pricing hidden — previous answer cited 25% off Growth.
+		"Yes. Public parks, school programs, and 501(c)(3) clubs qualify for discounted pricing. Get in touch with your designation and let's talk.",
 	],
 	[
 		"What counts as a 'location'?",
@@ -188,6 +191,7 @@ function PageHero() {
 	);
 }
 
+/* Pricing hidden — ROI dollar comparison disabled.
 function ROIComparison() {
 	const stack: Array<[string, number]> = [
 		["Booking software", 99],
@@ -270,6 +274,7 @@ function ROIComparison() {
 		</section>
 	);
 }
+*/
 
 function ComparisonTable() {
 	const cell = (v: Cell, popular: boolean) => {
@@ -291,7 +296,7 @@ function ComparisonTable() {
 		<section className="py-20 md:py-[120px]">
 			<div className="container mx-auto px-4">
 				<SectionHead
-					num="03 / Compare"
+					num="02 / Compare"
 					title="Compare every plan, line by line."
 				/>
 				<div className="overflow-x-auto rounded-2xl border border-[var(--line)]">
@@ -377,11 +382,11 @@ function Guarantee() {
 							<span className="eyebrow-dot">●</span>
 							&nbsp;&nbsp;Operator guarantee
 						</div>
-						<h3 style={{ fontSize: 26 }}>30 days. No card. No contract.</h3>
+						<h3 style={{ fontSize: 26 }}>45 days. No card. No contract.</h3>
 						<p className="mt-1.5 max-w-[600px] text-[var(--ink-2)]">
 							If we can't beat your current stack on cost, time saved, or member
-							experience in your first month, we'll help you migrate to
-							whatever's next — and refund anything you've paid us.
+							experience in 45 days, we'll help you migrate to whatever's next —
+							and refund anything you've paid us.
 						</p>
 					</div>
 					<a
@@ -403,11 +408,12 @@ export default function PricingPage() {
 		<div className="marketing-page">
 			<PageHero />
 			<PlansSection plans={PLANS} />
-			<ROIComparison />
+			{/* Pricing hidden — ROI dollar comparison removed. */}
+			{/* <ROIComparison /> */}
 			<ComparisonTable />
 			<Guarantee />
 			<FAQ
-				num="04 / FAQ"
+				num="03 / FAQ"
 				title="Pricing questions, answered."
 				items={PRICING_FAQS}
 			/>

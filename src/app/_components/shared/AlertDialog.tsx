@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle } from "lucide-react";
+import type { ReactNode } from "react";
 import { Button } from "~/app/_components/shared/Button";
 
 interface AlertDialogProps {
@@ -10,6 +11,13 @@ interface AlertDialogProps {
 	confirmLabel?: string;
 	cancelLabel?: string;
 	destructive?: boolean;
+	/** Disables the confirm button (e.g. while a required input is empty). */
+	confirmDisabled?: boolean;
+	/**
+	 * Optional extra body content (e.g. a required reason input) rendered
+	 * between the description and the action buttons.
+	 */
+	children?: ReactNode;
 	onConfirm: () => void;
 	onCancel: () => void;
 }
@@ -21,6 +29,8 @@ export function AlertDialog({
 	confirmLabel = "Confirm",
 	cancelLabel = "Cancel",
 	destructive = false,
+	confirmDisabled = false,
+	children,
 	onConfirm,
 	onCancel,
 }: AlertDialogProps) {
@@ -28,7 +38,8 @@ export function AlertDialog({
 
 	return (
 		<div className="fixed inset-0 z-[60] flex items-center justify-center">
-			{/* Backdrop */}
+			{/* Backdrop — click to dismiss. */}
+			{/* biome-ignore lint/a11y/useKeyWithClickEvents: supplementary click-to-dismiss; the dialog is fully operable via the Cancel/Confirm buttons. */}
 			<div
 				className="absolute inset-0 bg-black/40 backdrop-blur-sm"
 				onClick={onCancel}
@@ -53,12 +64,15 @@ export function AlertDialog({
 					</div>
 				</div>
 
+				{children && <div>{children}</div>}
+
 				<div className="flex justify-end gap-2">
 					<Button variant="outline" size="sm" onClick={onCancel}>
 						{cancelLabel}
 					</Button>
 					<Button
 						size="sm"
+						disabled={confirmDisabled}
 						onClick={onConfirm}
 						className={
 							destructive

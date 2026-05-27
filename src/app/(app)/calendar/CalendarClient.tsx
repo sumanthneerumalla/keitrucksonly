@@ -4,6 +4,7 @@ import { IlamyCalendar, IlamyResourceCalendar } from "@ilamy/calendar";
 import type {
 	BusinessHours,
 	CalendarEvent as IlamyCalendarEvent,
+	RenderCurrentTimeIndicatorProps,
 	Resource,
 } from "@ilamy/calendar";
 import { keepPreviousData } from "@tanstack/react-query";
@@ -63,12 +64,13 @@ const CALENDAR_CLASSES_OVERRIDE = {
 };
 
 // Custom now-line override — wired via renderCurrentTimeIndicator on the
-// calendar components. Pulled out so the inline JSX inside
-// commonCalendarProps stays tidy. Only the `progress` prop is used; the
-// other props (currentTime, resource, view) are available if we ever want
-// to show a time badge or per-view variant.
-function renderNowLine({ progress }: { progress: number }) {
-	return <CalendarNowLine progress={progress} />;
+// calendar components. Branches on `axis` (added in @ilamy/calendar v1.7.0)
+// so the line positions correctly in both vertical (day/week) and
+// horizontal (resource hour) grids. Other render-fn props (currentTime,
+// resource, view) stay available if we later want a time badge or
+// per-view variant.
+function renderNowLine({ progress, axis }: RenderCurrentTimeIndicatorProps) {
+	return <CalendarNowLine progress={progress} axis={axis} />;
 }
 
 // Parse RRULE string into rrule.js options — defined outside component to avoid re-creation on every render
@@ -554,7 +556,12 @@ export default function CalendarClient() {
 						// Staff: resource calendar (default)
 						<IlamyResourceCalendar
 							{...commonCalendarProps}
-							key={`resource-${userTimezone}-${orientation}`}
+							// Workaround for @ilamy/calendar: ResourceCalendarProvider seeds
+							// currentResources from props only at mount and never resyncs,
+							// so prop changes after a facility switch are dropped. Including
+							// effectiveFacilityId in the key forces a remount when the user
+							// changes facilities, which re-seeds the internal resource list.
+							key={`resource-${userTimezone}-${orientation}-${effectiveFacilityId ?? "all"}`}
 							resources={resources}
 							events={events}
 							orientation={orientation}

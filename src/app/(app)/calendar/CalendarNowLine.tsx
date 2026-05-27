@@ -1,28 +1,43 @@
 "use client";
 
+import type { RenderCurrentTimeIndicatorProps } from "@ilamy/calendar";
+
 /**
  * Brand-indigo "now line" indicator for the calendar.
  *
- * Replaces ilamy's default solid red horizontal line with a dashed brand-indigo
- * stroke + 3px head circle, matching the marketing CalendarMock aesthetic.
+ * Replaces ilamy's default solid red line with a dashed brand-indigo stroke
+ * + 3px head circle, matching the marketing CalendarMock aesthetic.
  *
  * Wired via `renderCurrentTimeIndicator` on `IlamyCalendar` /
- * `IlamyResourceCalendar`. Per the ilamy library, the indicator is only
- * rendered inside vertical-grid views (week/day standard, vertical resource).
- * Horizontal resource views currently don't render an indicator at all in
- * ilamy — adding one there would require a PR upstream or a custom overlay.
- *
- * Positioning: ilamy's indicator wrapper uses absolute positioning with
- * `top: ${progress}%` to place the line vertically based on the time-grid
- * progress (0–100%). We replicate that contract.
+ * `IlamyResourceCalendar`. Branches on the library's `axis` prop (added in
+ * @ilamy/calendar v1.7.0 — see kcsujeet/ilamy-calendar#121):
+ *   - `'vertical'` (default): horizontal stroke positioned by `top: ${progress}%`,
+ *     used in day/week vertical grids (regular calendar + resource vertical).
+ *   - `'horizontal'`: vertical stroke positioned by `left: ${progress}%`,
+ *     used in resource hour-resolution horizontal grids (day, week-hourly).
  */
 
-interface CalendarNowLineProps {
-	/** Percentage (0–100) through the visible time range. */
-	progress: number;
-}
+export function CalendarNowLine({
+	progress,
+	axis = "vertical",
+}: Pick<RenderCurrentTimeIndicatorProps, "progress" | "axis">) {
+	if (axis === "horizontal") {
+		return (
+			<div
+				className="pointer-events-none absolute top-0 bottom-0 z-50"
+				style={{ left: `${progress}%` }}
+				data-testid="calendar-now-line"
+			>
+				{/* The dashed brand-indigo rule, vertical */}
+				<div className="border-[var(--brand)] border-l border-dashed h-full" />
+				{/* Head circle pinned at the top edge — mirrors the vertical-axis
+				 * "pin in calendar" look. -1.5px horizontal offset so the 3px dot
+				 * centers on the line. */}
+				<span className="-top-[3px] -left-[3px] absolute inline-block h-1.5 w-1.5 rounded-full bg-[var(--brand)]" />
+			</div>
+		);
+	}
 
-export function CalendarNowLine({ progress }: CalendarNowLineProps) {
 	return (
 		<div
 			className="pointer-events-none absolute right-0 left-0 z-50"
