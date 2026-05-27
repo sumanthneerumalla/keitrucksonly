@@ -8,6 +8,12 @@ import {
 	facilityProcedure,
 	protectedProcedure,
 } from "~/server/api/trpc";
+import {
+	AUDIT_ACTIONS,
+	AUDIT_SOURCES,
+	buildPartyAuditEntries,
+	writeAuditedMutation,
+} from "~/server/utils/auditedMutation";
 import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
 import {
 	getCurrentUser,
@@ -766,161 +772,183 @@ export const billingRouter = createTRPCRouter({
 			// otherwise the consumer (self-pay).
 			const effectivePayerUserId = invoice.billedToUserId ?? invoice.userId;
 
-			return await ctx.db.$transaction(async (tx) => {
-				// Phase 9a Round 5 — advisory lock first, BEFORE any reads or
-				// writes inside the tx. Shares the `invoice-payer-` prefix with
-				// `sellPackage` and `closeInvoice` so all three invoice
-				// mutations serialize per `(payer, club)`. Closes the
-				// cross-class race where a concurrent sale on John's tab could
-				// append a line and recompute status from a snapshot that
-				// doesn't see this payment (the "$50 paid + concurrent $30
-				// sale → invoice lands at `open` instead of `partially_paid`"
-				// bug flagged in the Round 5 review).
-				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
-				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Phase 9a Round 5 — advisory lock first, BEFORE any reads or
+					// writes inside the tx. Shares the `invoice-payer-` prefix with
+					// `sellPackage` and `closeInvoice` so all three invoice
+					// mutations serialize per `(payer, club)`. Closes the
+					// cross-class race where a concurrent sale on John's tab could
+					// append a line and recompute status from a snapshot that
+					// doesn't see this payment (the "$50 paid + concurrent $30
+					// sale → invoice lands at `open` instead of `partially_paid`"
+					// bug flagged in the Round 5 review).
+					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
 
-				// Row lock just this invoice for the transaction duration. Holding
-				// the lock means a concurrent `recordPayment` on the same invoice
-				// waits here rather than racing the aggregate-then-update sequence
-				// below and clobbering each other's `amountPaidInCents`.
-				//
-				// CONTRACT FOR FUTURE A2 (recordRefund): the refund mutation MUST take
-				// this same row lock at the same point in its transaction. Without it
-				// a concurrent refund + payment can both read pre-write aggregates and
-				// each write a stale `amountPaidInCents`. The recompute formula
-				// (Σ payments − Σ refunds) is correct; what keeps it correct under
-				// concurrency is BOTH sides holding the Invoice row lock.
-				//
-				// CONTRACT FOR FUTURE A2 (account credit reconciliation): a refund
-				// returns paid dollars, but some of this invoice's overpayment may
-				// already have been redistributed as account credit to OTHER invoices
-				// (tracked by `creditConsumedInCents`, or fully-consumed when
-				// `creditConsumedAt != null`). Those dollars are spent — refunding them
-				// here too is a double-payout. recordRefund MUST NOT let net
-				// `amountPaidInCents` fall below the credit already consumed from this
-				// invoice. Simplest safe rule (mirrors `voidInvoice`, decision #121,
-				// which PRECONDITION_FAILs on a consumed/credit-bearing invoice): BLOCK
-				// refunding any invoice that has consumed credit and require the applied
-				// credit to be reversed first; a precise partial cap is deferred until a
-				// real case appears. See phase9-invoicing.md "Refunds vs. overpayment
-				// credit".
-				//
-				// Raw SQL uses the same `$executeRaw` template-literal style as the
-				// advisory-lock call in `rentals.ts` — Prisma parameterizes
-				// `invoiceId` safely (no string interpolation into the SQL text).
-				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+					// Row lock just this invoice for the transaction duration. Holding
+					// the lock means a concurrent `recordPayment` on the same invoice
+					// waits here rather than racing the aggregate-then-update sequence
+					// below and clobbering each other's `amountPaidInCents`.
+					//
+					// CONTRACT FOR FUTURE A2 (recordRefund): the refund mutation MUST take
+					// this same row lock at the same point in its transaction. Without it
+					// a concurrent refund + payment can both read pre-write aggregates and
+					// each write a stale `amountPaidInCents`. The recompute formula
+					// (Σ payments − Σ refunds) is correct; what keeps it correct under
+					// concurrency is BOTH sides holding the Invoice row lock.
+					//
+					// CONTRACT FOR FUTURE A2 (account credit reconciliation): a refund
+					// returns paid dollars, but some of this invoice's overpayment may
+					// already have been redistributed as account credit to OTHER invoices
+					// (tracked by `creditConsumedInCents`, or fully-consumed when
+					// `creditConsumedAt != null`). Those dollars are spent — refunding them
+					// here too is a double-payout. recordRefund MUST NOT let net
+					// `amountPaidInCents` fall below the credit already consumed from this
+					// invoice. Simplest safe rule (mirrors `voidInvoice`, decision #121,
+					// which PRECONDITION_FAILs on a consumed/credit-bearing invoice): BLOCK
+					// refunding any invoice that has consumed credit and require the applied
+					// credit to be reversed first; a precise partial cap is deferred until a
+					// real case appears. See phase9-invoicing.md "Refunds vs. overpayment
+					// credit".
+					//
+					// Raw SQL uses the same `$executeRaw` template-literal style as the
+					// advisory-lock call in `rentals.ts` — Prisma parameterizes
+					// `invoiceId` safely (no string interpolation into the SQL text).
+					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
 
-				// Re-read totalInCents AFTER acquiring the lock. The pre-transaction
-				// read (used for the cross-tenant + void/draft guards) can be STALE:
-				// a concurrent `sellPackage` for the same payer may have appended a
-				// line item and raised the total in the window before we got the
-				// lock. Status MUST be judged against the current total — otherwise a
-				// $50 payment on a now-$80 invoice would wrongly mark it `paid` +
-				// auto-close, hiding a real $30 balance. (Round 5 review must-fix:
-				// the advisory lock serializes the tx bodies, but the total was
-				// captured before the lock; this closes that residual window.)
-				const locked = await tx.invoice.findUniqueOrThrow({
-					where: { invoiceId: input.invoiceId },
-					select: { totalInCents: true },
-				});
-				const totalInCents = locked.totalInCents;
+					// Re-read totalInCents AFTER acquiring the lock. The pre-transaction
+					// read (used for the cross-tenant + void/draft guards) can be STALE:
+					// a concurrent `sellPackage` for the same payer may have appended a
+					// line item and raised the total in the window before we got the
+					// lock. Status MUST be judged against the current total — otherwise a
+					// $50 payment on a now-$80 invoice would wrongly mark it `paid` +
+					// auto-close, hiding a real $30 balance. (Round 5 review must-fix:
+					// the advisory lock serializes the tx bodies, but the total was
+					// captured before the lock; this closes that residual window.)
+					const locked = await tx.invoice.findUniqueOrThrow({
+						where: { invoiceId: input.invoiceId },
+						select: { totalInCents: true },
+					});
+					const totalInCents = locked.totalInCents;
 
-				// Insert the payment row. Status defaults to "succeeded" via the
-				// Prisma schema default. P2002 here would mean a (processor, txId)
-				// collision — webhook idempotency triggered. Manual cash/check
-				// payments have both nulls, which Postgres treats as distinct, so
-				// they can't collide with each other.
-				let payment: Awaited<ReturnType<typeof tx.invoicePayment.create>>;
-				try {
-					payment = await tx.invoicePayment.create({
+					// Insert the payment row. Status defaults to "succeeded" via the
+					// Prisma schema default. P2002 here would mean a (processor, txId)
+					// collision — webhook idempotency triggered. Manual cash/check
+					// payments have both nulls, which Postgres treats as distinct, so
+					// they can't collide with each other.
+					let payment: Awaited<ReturnType<typeof tx.invoicePayment.create>>;
+					try {
+						payment = await tx.invoicePayment.create({
+							data: {
+								invoiceId: input.invoiceId,
+								amountInCents: input.amountInCents,
+								paymentMethod: input.paymentMethod,
+								processor: input.processor,
+								processorTransactionId: input.processorTransactionId,
+								processorChargeId: input.processorChargeId,
+								processorFeeInCents: input.processorFeeInCents,
+								reference: input.reference,
+								notes: input.notes,
+								receivedBy: ctx.user.userId,
+							},
+						});
+					} catch (error) {
+						if (
+							error instanceof Prisma.PrismaClientKnownRequestError &&
+							error.code === "P2002"
+						) {
+							throw new TRPCError({
+								code: "CONFLICT",
+								message:
+									"This transaction has already been recorded for this processor",
+							});
+						}
+						throw error;
+					}
+
+					// Authoritative recompute (HANDOFF #102, decision: never a blind
+					// `increment`). Σ payments − Σ refunds, against the locked invoice.
+					const paymentsSum = await tx.invoicePayment.aggregate({
+						_sum: { amountInCents: true },
+						where: { invoiceId: input.invoiceId },
+					});
+					// Use the denormalized `InvoiceRefund.invoiceId` column directly
+					// (schema.prisma:962 — "denormalized for invoice-level queries").
+					// Going through payment → refunds would be slower and the
+					// denormalized column is the canonical lookup path.
+					const refundsSum = await tx.invoiceRefund.aggregate({
+						_sum: { amountInCents: true },
+						where: { invoiceId: input.invoiceId },
+					});
+					const newAmountPaid =
+						(paymentsSum._sum.amountInCents ?? 0) -
+						(refundsSum._sum.amountInCents ?? 0);
+
+					// Status mapping (status-transitions diagram + HANDOFF #102/#104):
+					//   newAmountPaid <= 0           → "open"           (no net payment yet, or fully refunded)
+					//   0 < newAmountPaid < total    → "partially_paid"
+					//   newAmountPaid >= total       → "paid"           (overpaid stays "paid" — negative balance = credit)
+					// `overdue` is auto-derived from dueDate by a future scheduled job;
+					// we don't preserve it across a payment because there's no automation
+					// yet to re-derive it after the payment lands.
+					//
+					// Phase 9a Round 4 (HANDOFF #103): when status flips to "paid", we
+					// ALSO stamp `closedAt`/`closedBy` in the SAME update. This is the
+					// auto-close half of the close-tab feature — full payment terminates
+					// the running tab so the next `sellPackage` opens a fresh invoice.
+					// See designFiles/roadmap/phase9-invoicing.md.
+					let newStatus: string;
+					if (newAmountPaid <= 0) {
+						newStatus = "open";
+					} else if (newAmountPaid < totalInCents) {
+						newStatus = "partially_paid";
+					} else {
+						newStatus = "paid";
+					}
+
+					await tx.invoice.update({
+						where: { invoiceId: input.invoiceId },
 						data: {
-							invoiceId: input.invoiceId,
-							amountInCents: input.amountInCents,
-							paymentMethod: input.paymentMethod,
-							processor: input.processor,
-							processorTransactionId: input.processorTransactionId,
-							processorChargeId: input.processorChargeId,
-							processorFeeInCents: input.processorFeeInCents,
-							reference: input.reference,
-							notes: input.notes,
-							receivedBy: ctx.user.userId,
+							amountPaidInCents: newAmountPaid,
+							status: newStatus,
+							...(newStatus === "paid"
+								? { closedAt: new Date(), closedBy: ctx.user.userId }
+								: {}),
 						},
 					});
-				} catch (error) {
-					if (
-						error instanceof Prisma.PrismaClientKnownRequestError &&
-						error.code === "P2002"
-					) {
-						throw new TRPCError({
-							code: "CONFLICT",
-							message:
-								"This transaction has already been recorded for this processor",
-						});
-					}
-					throw error;
-				}
 
-				// Authoritative recompute (HANDOFF #102, decision: never a blind
-				// `increment`). Σ payments − Σ refunds, against the locked invoice.
-				const paymentsSum = await tx.invoicePayment.aggregate({
-					_sum: { amountInCents: true },
-					where: { invoiceId: input.invoiceId },
-				});
-				// Use the denormalized `InvoiceRefund.invoiceId` column directly
-				// (schema.prisma:962 — "denormalized for invoice-level queries").
-				// Going through payment → refunds would be slower and the
-				// denormalized column is the canonical lookup path.
-				const refundsSum = await tx.invoiceRefund.aggregate({
-					_sum: { amountInCents: true },
-					where: { invoiceId: input.invoiceId },
-				});
-				const newAmountPaid =
-					(paymentsSum._sum.amountInCents ?? 0) -
-					(refundsSum._sum.amountInCents ?? 0);
-
-				// Status mapping (status-transitions diagram + HANDOFF #102/#104):
-				//   newAmountPaid <= 0           → "open"           (no net payment yet, or fully refunded)
-				//   0 < newAmountPaid < total    → "partially_paid"
-				//   newAmountPaid >= total       → "paid"           (overpaid stays "paid" — negative balance = credit)
-				// `overdue` is auto-derived from dueDate by a future scheduled job;
-				// we don't preserve it across a payment because there's no automation
-				// yet to re-derive it after the payment lands.
-				//
-				// Phase 9a Round 4 (HANDOFF #103): when status flips to "paid", we
-				// ALSO stamp `closedAt`/`closedBy` in the SAME update. This is the
-				// auto-close half of the close-tab feature — full payment terminates
-				// the running tab so the next `sellPackage` opens a fresh invoice.
-				// See designFiles/roadmap/phase9-invoicing.md.
-				let newStatus: string;
-				if (newAmountPaid <= 0) {
-					newStatus = "open";
-				} else if (newAmountPaid < totalInCents) {
-					newStatus = "partially_paid";
-				} else {
-					newStatus = "paid";
-				}
-
-				await tx.invoice.update({
-					where: { invoiceId: input.invoiceId },
-					data: {
-						amountPaidInCents: newAmountPaid,
-						status: newStatus,
-						...(newStatus === "paid"
-							? { closedAt: new Date(), closedBy: ctx.user.userId }
-							: {}),
-					},
-				});
-
-				return {
-					payment,
-					invoice: {
-						invoiceId: input.invoiceId,
-						amountPaidInCents: newAmountPaid,
-						totalInCents,
-						status: newStatus,
-					},
-				};
-			});
+					return {
+						result: {
+							payment,
+							invoice: {
+								invoiceId: input.invoiceId,
+								amountPaidInCents: newAmountPaid,
+								totalInCents,
+								status: newStatus,
+							},
+						},
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.PAYMENT_RECORDED,
+							consumerUserId: invoice.userId,
+							payerUserId: invoice.billedToUserId,
+							entityType: "InvoicePayment",
+							entityId: payment.paymentId,
+							metadata: {
+								amountInCents: input.amountInCents,
+								paymentMethod: input.paymentMethod,
+								invoiceId: input.invoiceId,
+							},
+						}),
+					};
+				},
+			);
 		}),
 
 	/**
@@ -1014,45 +1042,63 @@ export const billingRouter = createTRPCRouter({
 			// lock (matches sellPackage / recordPayment).
 			const effectivePayerUserId = invoice.billedToUserId ?? invoice.userId;
 
-			return await ctx.db.$transaction(async (tx) => {
-				// Phase 9a Round 5 — advisory lock first. Shares the
-				// `invoice-payer-` prefix with `sellPackage` and `recordPayment`
-				// so all three invoice mutations serialize per `(payer, club)`.
-				// Closes the cross-class race where a concurrent sale/payment
-				// could write conflicting state mid-close.
-				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
-				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Phase 9a Round 5 — advisory lock first. Shares the
+					// `invoice-payer-` prefix with `sellPackage` and `recordPayment`
+					// so all three invoice mutations serialize per `(payer, club)`.
+					// Closes the cross-class race where a concurrent sale/payment
+					// could write conflicting state mid-close.
+					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
 
-				// Row lock for consistency with `recordPayment` — without it a
-				// concurrent payment could race the close and we'd land in an
-				// "closed + status not paid" state that contradicts an in-flight
-				// payment that should have closed it via the paid path.
-				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+					// Row lock for consistency with `recordPayment` — without it a
+					// concurrent payment could race the close and we'd land in an
+					// "closed + status not paid" state that contradicts an in-flight
+					// payment that should have closed it via the paid path.
+					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
 
-				// Phase 9a "Mark as due" — manually closing a tab IS the staff
-				// "mark as due" action, so set `dueDate` to now alongside the close
-				// stamps. No payment terms / penalties yet, so dueDate = the moment
-				// marked due; the derived "Due"/"Overdue" label only diverges once
-				// future terms make this a future date (see src/lib/invoiceStatus.ts).
-				const now = new Date();
-				const updated = await tx.invoice.update({
-					where: { invoiceId: input.invoiceId },
-					data: {
-						closedAt: now,
-						closedBy: ctx.user.userId,
-						dueDate: now,
-					},
-					select: {
-						invoiceId: true,
-						status: true,
-						closedAt: true,
-						closedBy: true,
-						dueDate: true,
-					},
-				});
+					// Phase 9a "Mark as due" — manually closing a tab IS the staff
+					// "mark as due" action, so set `dueDate` to now alongside the close
+					// stamps. No payment terms / penalties yet, so dueDate = the moment
+					// marked due; the derived "Due"/"Overdue" label only diverges once
+					// future terms make this a future date (see src/lib/invoiceStatus.ts).
+					const now = new Date();
+					const updated = await tx.invoice.update({
+						where: { invoiceId: input.invoiceId },
+						data: {
+							closedAt: now,
+							closedBy: ctx.user.userId,
+							dueDate: now,
+						},
+						select: {
+							invoiceId: true,
+							status: true,
+							closedAt: true,
+							closedBy: true,
+							dueDate: true,
+						},
+					});
 
-				return { invoice: updated };
-			});
+					return {
+						result: { invoice: updated },
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.INVOICE_MARKED_DUE,
+							consumerUserId: invoice.userId,
+							payerUserId: invoice.billedToUserId,
+							entityType: "Invoice",
+							entityId: invoice.invoiceId,
+							metadata: { invoiceId: invoice.invoiceId },
+						}),
+					};
+				},
+			);
 		}),
 
 	/**
@@ -1187,163 +1233,181 @@ export const billingRouter = createTRPCRouter({
 
 			const payerUserId = target.billedToUserId ?? target.userId;
 
-			return await ctx.db.$transaction(async (tx) => {
-				// Same per-payer advisory lock as sellPackage/recordPayment/
-				// closeInvoice — serializes ALL credit movement for this payer, so
-				// reading + drawing down the sources below is race-free without a
-				// separate row lock on each source.
-				const lockKey = `invoice-payer-${payerUserId}-${ctx.user.clubShortName}`;
-				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
-				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Same per-payer advisory lock as sellPackage/recordPayment/
+					// closeInvoice — serializes ALL credit movement for this payer, so
+					// reading + drawing down the sources below is race-free without a
+					// separate row lock on each source.
+					const lockKey = `invoice-payer-${payerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
 
-				// Re-read the target under the lock — owed may have shifted since
-				// the modal computed its cap.
-				const locked = await tx.invoice.findUniqueOrThrow({
-					where: { invoiceId: input.invoiceId },
-					select: {
-						subtotalInCents: true,
-						totalInCents: true,
-						amountPaidInCents: true,
-					},
-				});
-				const owed = locked.totalInCents - locked.amountPaidInCents;
-				if (owed <= 0) {
-					throw new TRPCError({
-						code: "CONFLICT",
-						message: "Invoice has no outstanding balance to apply credit to",
-					});
-				}
-				if (input.amountInCents > owed) {
-					throw new TRPCError({
-						code: "BAD_REQUEST",
-						message: "Amount exceeds the invoice balance",
-					});
-				}
-
-				// Payer's credit sources, oldest credit first (FIFO).
-				const sources = await tx.invoice.findMany({
-					where: {
-						clubShortName: ctx.user.clubShortName,
-						status: "paid",
-						closedAt: { not: null },
-						creditConsumedAt: null,
-						OR: [
-							{ userId: payerUserId, billedToUserId: null },
-							{ billedToUserId: payerUserId },
-						],
-					},
-					orderBy: { closedAt: "asc" },
-					select: {
-						invoiceId: true,
-						invoiceNumber: true,
-						totalInCents: true,
-						amountPaidInCents: true,
-						creditConsumedInCents: true,
-						userId: true,
-						billedToUserId: true,
-					},
-				});
-				const available = sources.reduce(
-					(sum, s) => sum + sourceAvailableCreditInCents(s),
-					0,
-				);
-				if (input.amountInCents > available) {
-					throw new TRPCError({
-						code: "BAD_REQUEST",
-						message: "Amount exceeds available account credit",
-					});
-				}
-
-				// Append the credit lines after any existing line items.
-				const lastLine = await tx.invoiceLineItem.findFirst({
-					where: { invoiceId: target.invoiceId },
-					orderBy: { sortOrder: "desc" },
-					select: { sortOrder: true },
-				});
-				let sortOrder = (lastLine?.sortOrder ?? -1) + 1;
-
-				let remaining = input.amountInCents;
-				let appliedInCents = 0;
-				for (const s of sources) {
-					if (remaining <= 0) break;
-					const srcAvailable = sourceAvailableCreditInCents(s);
-					if (srcAvailable <= 0) continue;
-					const chunk = Math.min(remaining, srcAvailable);
-
-					assertLineItemKindConsistency({
-						kind: "CREDIT",
-						creditFromInvoiceId: s.invoiceId,
-					});
-					await tx.invoiceLineItem.create({
-						data: {
-							invoiceId: target.invoiceId,
-							kind: "CREDIT",
-							description: `Account credit from ${s.invoiceNumber}`,
-							quantity: 1,
-							unitPriceInCents: -chunk,
-							discountInCents: 0,
-							taxRateBps: 0,
-							taxAmountInCents: 0,
-							totalInCents: -chunk,
-							sortOrder,
-							creditFromInvoiceId: s.invoiceId,
-							creditFromUserId: s.billedToUserId ?? s.userId,
+					// Re-read the target under the lock — owed may have shifted since
+					// the modal computed its cap.
+					const locked = await tx.invoice.findUniqueOrThrow({
+						where: { invoiceId: input.invoiceId },
+						select: {
+							subtotalInCents: true,
+							totalInCents: true,
+							amountPaidInCents: true,
 						},
 					});
-					sortOrder += 1;
+					const owed = locked.totalInCents - locked.amountPaidInCents;
+					if (owed <= 0) {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: "Invoice has no outstanding balance to apply credit to",
+						});
+					}
+					if (input.amountInCents > owed) {
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Amount exceeds the invoice balance",
+						});
+					}
 
-					const overpayment = s.amountPaidInCents - s.totalInCents;
-					const newConsumed = s.creditConsumedInCents + chunk;
-					await tx.invoice.update({
-						where: { invoiceId: s.invoiceId },
+					// Payer's credit sources, oldest credit first (FIFO).
+					const sources = await tx.invoice.findMany({
+						where: {
+							clubShortName: ctx.user.clubShortName,
+							status: "paid",
+							closedAt: { not: null },
+							creditConsumedAt: null,
+							OR: [
+								{ userId: payerUserId, billedToUserId: null },
+								{ billedToUserId: payerUserId },
+							],
+						},
+						orderBy: { closedAt: "asc" },
+						select: {
+							invoiceId: true,
+							invoiceNumber: true,
+							totalInCents: true,
+							amountPaidInCents: true,
+							creditConsumedInCents: true,
+							userId: true,
+							billedToUserId: true,
+						},
+					});
+					const available = sources.reduce(
+						(sum, s) => sum + sourceAvailableCreditInCents(s),
+						0,
+					);
+					if (input.amountInCents > available) {
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Amount exceeds available account credit",
+						});
+					}
+
+					// Append the credit lines after any existing line items.
+					const lastLine = await tx.invoiceLineItem.findFirst({
+						where: { invoiceId: target.invoiceId },
+						orderBy: { sortOrder: "desc" },
+						select: { sortOrder: true },
+					});
+					let sortOrder = (lastLine?.sortOrder ?? -1) + 1;
+
+					let remaining = input.amountInCents;
+					let appliedInCents = 0;
+					for (const s of sources) {
+						if (remaining <= 0) break;
+						const srcAvailable = sourceAvailableCreditInCents(s);
+						if (srcAvailable <= 0) continue;
+						const chunk = Math.min(remaining, srcAvailable);
+
+						assertLineItemKindConsistency({
+							kind: "CREDIT",
+							creditFromInvoiceId: s.invoiceId,
+						});
+						await tx.invoiceLineItem.create({
+							data: {
+								invoiceId: target.invoiceId,
+								kind: "CREDIT",
+								description: `Account credit from ${s.invoiceNumber}`,
+								quantity: 1,
+								unitPriceInCents: -chunk,
+								discountInCents: 0,
+								taxRateBps: 0,
+								taxAmountInCents: 0,
+								totalInCents: -chunk,
+								sortOrder,
+								creditFromInvoiceId: s.invoiceId,
+								creditFromUserId: s.billedToUserId ?? s.userId,
+							},
+						});
+						sortOrder += 1;
+
+						const overpayment = s.amountPaidInCents - s.totalInCents;
+						const newConsumed = s.creditConsumedInCents + chunk;
+						await tx.invoice.update({
+							where: { invoiceId: s.invoiceId },
+							data: {
+								creditConsumedInCents: newConsumed,
+								...(newConsumed >= overpayment
+									? { creditConsumedAt: new Date() }
+									: {}),
+							},
+						});
+
+						remaining -= chunk;
+						appliedInCents += chunk;
+					}
+
+					// Recompute the target's subtotal/total + status from the applied
+					// total (mirrors the package-sale recompute; the zero-tax credit
+					// lines leave tax untouched). Auto-close if the credit settles it.
+					const newSubtotal = locked.subtotalInCents - appliedInCents;
+					const newTotal = locked.totalInCents - appliedInCents;
+					const amountPaid = locked.amountPaidInCents;
+					let newStatus: string;
+					if (amountPaid >= newTotal) {
+						newStatus = "paid";
+					} else if (amountPaid <= 0) {
+						newStatus = "open";
+					} else {
+						newStatus = "partially_paid";
+					}
+
+					const updated = await tx.invoice.update({
+						where: { invoiceId: target.invoiceId },
 						data: {
-							creditConsumedInCents: newConsumed,
-							...(newConsumed >= overpayment
-								? { creditConsumedAt: new Date() }
+							subtotalInCents: newSubtotal,
+							totalInCents: newTotal,
+							status: newStatus,
+							...(newStatus === "paid"
+								? { closedAt: new Date(), closedBy: ctx.user.userId }
 								: {}),
 						},
+						select: {
+							invoiceId: true,
+							invoiceNumber: true,
+							status: true,
+							totalInCents: true,
+							amountPaidInCents: true,
+						},
 					});
 
-					remaining -= chunk;
-					appliedInCents += chunk;
-				}
-
-				// Recompute the target's subtotal/total + status from the applied
-				// total (mirrors the package-sale recompute; the zero-tax credit
-				// lines leave tax untouched). Auto-close if the credit settles it.
-				const newSubtotal = locked.subtotalInCents - appliedInCents;
-				const newTotal = locked.totalInCents - appliedInCents;
-				const amountPaid = locked.amountPaidInCents;
-				let newStatus: string;
-				if (amountPaid >= newTotal) {
-					newStatus = "paid";
-				} else if (amountPaid <= 0) {
-					newStatus = "open";
-				} else {
-					newStatus = "partially_paid";
-				}
-
-				const updated = await tx.invoice.update({
-					where: { invoiceId: target.invoiceId },
-					data: {
-						subtotalInCents: newSubtotal,
-						totalInCents: newTotal,
-						status: newStatus,
-						...(newStatus === "paid"
-							? { closedAt: new Date(), closedBy: ctx.user.userId }
-							: {}),
-					},
-					select: {
-						invoiceId: true,
-						invoiceNumber: true,
-						status: true,
-						totalInCents: true,
-						amountPaidInCents: true,
-					},
-				});
-
-				return { invoice: updated, appliedInCents };
-			});
+					return {
+						result: { invoice: updated, appliedInCents },
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.ACCOUNT_CREDIT_APPLIED,
+							consumerUserId: target.userId,
+							payerUserId,
+							entityType: "Invoice",
+							entityId: target.invoiceId,
+							metadata: { appliedInCents, invoiceId: target.invoiceId },
+						}),
+					};
+				},
+			);
 		}),
 
 	/**
@@ -1411,65 +1475,83 @@ export const billingRouter = createTRPCRouter({
 
 			const effectivePayerUserId = invoice.billedToUserId ?? invoice.userId;
 
-			return await ctx.db.$transaction(async (tx) => {
-				// Same per-payer advisory lock as sellPackage / recordPayment /
-				// closeInvoice / applyAccountCredit — serializes every invoice
-				// mutation for this (payer, club).
-				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
-				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
-				await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Same per-payer advisory lock as sellPackage / recordPayment /
+					// closeInvoice / applyAccountCredit — serializes every invoice
+					// mutation for this (payer, club).
+					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
 
-				// Re-read INSIDE the lock — a payment/credit could have committed
-				// between the pre-lock read and acquiring the lock.
-				const locked = await tx.invoice.findUniqueOrThrow({
-					where: { invoiceId: input.invoiceId },
-					select: { status: true, notes: true, amountPaidInCents: true },
-				});
-				if (locked.status === "void") {
-					throw new TRPCError({
-						code: "CONFLICT",
-						message: "Invoice is already void",
+					// Re-read INSIDE the lock — a payment/credit could have committed
+					// between the pre-lock read and acquiring the lock.
+					const locked = await tx.invoice.findUniqueOrThrow({
+						where: { invoiceId: input.invoiceId },
+						select: { status: true, notes: true, amountPaidInCents: true },
 					});
-				}
-				if (locked.amountPaidInCents > 0) {
-					throw new TRPCError({
-						code: "PRECONDITION_FAILED",
-						message:
-							"This invoice has a payment recorded. Refund the payment before voiding.",
+					if (locked.status === "void") {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: "Invoice is already void",
+						});
+					}
+					if (locked.amountPaidInCents > 0) {
+						throw new TRPCError({
+							code: "PRECONDITION_FAILED",
+							message:
+								"This invoice has a payment recorded. Refund the payment before voiding.",
+						});
+					}
+					const creditLineCount = await tx.invoiceLineItem.count({
+						where: { invoiceId: input.invoiceId, kind: "CREDIT" },
 					});
-				}
-				const creditLineCount = await tx.invoiceLineItem.count({
-					where: { invoiceId: input.invoiceId, kind: "CREDIT" },
-				});
-				if (creditLineCount > 0) {
-					throw new TRPCError({
-						code: "PRECONDITION_FAILED",
-						message:
-							"This invoice has account credit applied to it. Remove the applied credit before voiding.",
-					});
-				}
+					if (creditLineCount > 0) {
+						throw new TRPCError({
+							code: "PRECONDITION_FAILED",
+							message:
+								"This invoice has account credit applied to it. Remove the applied credit before voiding.",
+						});
+					}
 
-				// Decision: the void reason lives in the invoice `notes` (no separate
-				// column). Stamp the time in the acting staff's timezone.
-				const stamp = dayjs()
-					.tz(ctx.user.timeZone || "America/New_York")
-					.format("YYYY-MM-DD HH:mm");
-				const voidNote = `[Voided ${stamp}] ${reason}`;
-				const newNotes = locked.notes
-					? `${locked.notes}\n${voidNote}`
-					: voidNote;
+					// Decision: the void reason lives in the invoice `notes` (no separate
+					// column). Stamp the time in the acting staff's timezone.
+					const stamp = dayjs()
+						.tz(ctx.user.timeZone || "America/New_York")
+						.format("YYYY-MM-DD HH:mm");
+					const voidNote = `[Voided ${stamp}] ${reason}`;
+					const newNotes = locked.notes
+						? `${locked.notes}\n${voidNote}`
+						: voidNote;
 
-				const updated = await tx.invoice.update({
-					where: { invoiceId: input.invoiceId },
-					data: { status: "void", notes: newNotes },
-					select: {
-						invoiceId: true,
-						invoiceNumber: true,
-						status: true,
-						notes: true,
-					},
-				});
-				return { invoice: updated };
-			});
+					const updated = await tx.invoice.update({
+						where: { invoiceId: input.invoiceId },
+						data: { status: "void", notes: newNotes },
+						select: {
+							invoiceId: true,
+							invoiceNumber: true,
+							status: true,
+							notes: true,
+						},
+					});
+					return {
+						result: { invoice: updated },
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.INVOICE_VOIDED,
+							consumerUserId: invoice.userId,
+							payerUserId: invoice.billedToUserId,
+							entityType: "Invoice",
+							entityId: invoice.invoiceId,
+							metadata: { invoiceId: invoice.invoiceId, reason },
+						}),
+					};
+				},
+			);
 		}),
 });
