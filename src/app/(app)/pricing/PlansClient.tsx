@@ -15,9 +15,8 @@ export interface Plan {
 	id: string;
 	name: string;
 	forWho: string;
-	/** null = quote-driven plan; render `custom` instead of a number. */
+	/** null = quote-driven plan; show the CTA button only, no price number. */
 	pricing: PlanPricing | null;
-	custom?: string;
 	anchor: string;
 	cta: string;
 	popular: boolean;
@@ -143,29 +142,23 @@ function PlanCard({ p, period }: { p: Plan; period: BillingPeriod }) {
 				{p.forWho}
 			</div>
 
-			<div className="mt-5 flex items-baseline gap-1.5">
-				{p.pricing ? (
-					<>
-						<span className="font-semibold text-[56px] leading-none tracking-[-0.03em]">
-							${displayPrice}
-						</span>
-						<span
-							className="text-[14px]"
-							style={{
-								color: popular ? "rgba(250,248,243,0.6)" : "var(--ink-3)",
-							}}
-						>
-							/ month
-						</span>
-					</>
-				) : (
-					<span className="font-semibold text-[44px] tracking-[-0.02em]">
-						{p.custom}
+			{p.pricing ? (
+				<div className="mt-5 flex items-baseline gap-1.5">
+					<span className="font-semibold text-[56px] leading-none tracking-[-0.03em]">
+						${displayPrice}
 					</span>
-				)}
-			</div>
+					<span
+						className="text-[14px]"
+						style={{
+							color: popular ? "rgba(250,248,243,0.6)" : "var(--ink-3)",
+						}}
+					>
+						/ month
+					</span>
+				</div>
+			) : null}
 			<div
-				className="mt-1.5 text-[13px]"
+				className={`${p.pricing ? "mt-1.5" : "mt-5"} text-[13px]`}
 				style={{ color: popular ? "rgba(250,248,243,0.55)" : "var(--ink-3)" }}
 			>
 				{subtitle}
@@ -206,11 +199,14 @@ export function PlansSection({ plans }: { plans: Plan[] }) {
 	return (
 		<section className="pb-16">
 			<div className="container mx-auto px-4">
-				<BillingToggle
-					period={period}
-					setPeriod={setPeriod}
-					savingsPct={savingsPct}
-				/>
+				{/* Billing toggle hidden while plans are quote-driven (no prices). */}
+				{plans.some((p) => p.pricing) && (
+					<BillingToggle
+						period={period}
+						setPeriod={setPeriod}
+						savingsPct={savingsPct}
+					/>
+				)}
 				<div className="grid grid-cols-1 items-stretch gap-[22px] lg:grid-cols-3">
 					{plans.map((p) => (
 						<PlanCard key={p.id} p={p} period={period} />

@@ -1,6 +1,7 @@
 // Marketing-page configuration. Change CALENDLY_URL when the real link is ready.
 
-export const CALENDLY_URL = "https://calendly.com/facility-presence/demo";
+// Previous placeholder: "https://calendly.com/facility-presence/demo"
+export const CALENDLY_URL = "https://cal.com/jungho-ham-jar83g/30min";
 
 export const BRAND_NAME = "Facility Presence";
 
