@@ -8,6 +8,7 @@ import {
 	facilityProcedure,
 	protectedProcedure,
 } from "~/server/api/trpc";
+import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
 import {
 	getCurrentUser,
 	isFacilityOrAbove,
@@ -189,9 +190,25 @@ export const billingRouter = createTRPCRouter({
 					totalInCents: inv.totalInCents,
 					amountPaidInCents: inv.amountPaidInCents,
 					balanceInCents: inv.totalInCents - inv.amountPaidInCents,
+					// Per-invoice REMAINING account credit (overpayment not yet drawn
+					// down), using the same rule as the rollup above: 0 once fully
+					// consumed (`creditConsumedAt` set, incl. legacy count-0 rows) or if
+					// never overpaid. Lets the panel show credit that SHRINKS as it's
+					// spent, instead of the static raw overpayment (`balanceInCents`).
+					availableCreditInCents:
+						inv.amountPaidInCents > inv.totalInCents &&
+						inv.creditConsumedAt == null
+							? Math.max(
+									0,
+									inv.amountPaidInCents -
+										inv.totalInCents -
+										inv.creditConsumedInCents,
+								)
+							: 0,
 					// Phase 9a Round 4: surface close-tab state so the UI can render
-					// the "closed" badge + gate the Close Tab button. `creditConsumedAt`
-					// is intentionally NOT exposed (internal accounting only).
+					// the "closed" badge + gate the Close Tab button. The raw
+					// `creditConsumedAt` timestamp stays internal — we expose only the
+					// derived `availableCreditInCents` above.
 					closedAt: inv.closedAt,
 					closedBy: inv.closedBy,
 					// Phase 9a Round 5 — bill-to surfacing. `billedToUserId` lets
@@ -774,6 +791,20 @@ export const billingRouter = createTRPCRouter({
 				// (Σ payments − Σ refunds) is correct; what keeps it correct under
 				// concurrency is BOTH sides holding the Invoice row lock.
 				//
+				// CONTRACT FOR FUTURE A2 (account credit reconciliation): a refund
+				// returns paid dollars, but some of this invoice's overpayment may
+				// already have been redistributed as account credit to OTHER invoices
+				// (tracked by `creditConsumedInCents`, or fully-consumed when
+				// `creditConsumedAt != null`). Those dollars are spent — refunding them
+				// here too is a double-payout. recordRefund MUST NOT let net
+				// `amountPaidInCents` fall below the credit already consumed from this
+				// invoice. Simplest safe rule (mirrors `voidInvoice`, decision #121,
+				// which PRECONDITION_FAILs on a consumed/credit-bearing invoice): BLOCK
+				// refunding any invoice that has consumed credit and require the applied
+				// credit to be reversed first; a precise partial cap is deferred until a
+				// real case appears. See phase9-invoicing.md "Refunds vs. overpayment
+				// credit".
+				//
 				// Raw SQL uses the same `$executeRaw` template-literal style as the
 				// advisory-lock call in `rentals.ts` — Prisma parameterizes
 				// `invoiceId` safely (no string interpolation into the SQL text).
@@ -1239,6 +1270,10 @@ export const billingRouter = createTRPCRouter({
 					if (srcAvailable <= 0) continue;
 					const chunk = Math.min(remaining, srcAvailable);
 
+					assertLineItemKindConsistency({
+						kind: "CREDIT",
+						creditFromInvoiceId: s.invoiceId,
+					});
 					await tx.invoiceLineItem.create({
 						data: {
 							invoiceId: target.invoiceId,

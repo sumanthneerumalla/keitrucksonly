@@ -317,12 +317,22 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 													}`}
 												>
 													{inv.balanceInCents < 0 ? (
-														<>
-															{formatCents(Math.abs(inv.balanceInCents))}{" "}
-															<span className="text-[var(--muted-foreground)]">
-																(credit)
+														<div className="flex flex-col items-end">
+															<span>
+																{formatCents(Math.abs(inv.balanceInCents))}{" "}
+																<span className="text-[var(--muted-foreground)]">
+																	(credit)
+																</span>
 															</span>
-														</>
+															{inv.availableCreditInCents <
+																Math.abs(inv.balanceInCents) && (
+																<span className="text-[11px] text-[var(--muted-foreground)] italic">
+																	{inv.availableCreditInCents > 0
+																		? `${formatCents(inv.availableCreditInCents)} available`
+																		: "fully applied"}
+																</span>
+															)}
+														</div>
 													) : (
 														formatCents(inv.balanceInCents)
 													)}

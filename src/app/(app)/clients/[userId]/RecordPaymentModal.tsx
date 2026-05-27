@@ -211,8 +211,24 @@ export default function RecordPaymentModal({
 			]);
 			onOpenChange(false);
 		},
-		onError: (err) => {
-			toast(err.message, "error");
+		onError: async (err) => {
+			// The credit may have been (partly) spent since the modal opened
+			// (a concurrent apply on the same payer); the mutation re-checks under
+			// its advisory lock and rejects. Refetch the live context so the
+			// "Available credit" line + amount pre-fill self-correct, then point the
+			// user at the fix instead of showing a bare server error.
+			if (invoice) {
+				await utils.billing.getAccountCreditContext.invalidate({
+					invoiceId: invoice.invoiceId,
+				});
+			}
+			const staleCredit = /exceeds available account credit/i.test(err.message);
+			toast(
+				staleCredit
+					? "Account credit changed since you opened this — the amount has been refreshed. Review and try again."
+					: err.message,
+				"error",
+			);
 		},
 	});
 
