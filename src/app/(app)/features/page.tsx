@@ -1,12 +1,10 @@
 import {
-	ArrowRight,
 	BarChart3,
 	Calendar,
 	CheckCircle,
 	CreditCard,
 	LayoutGrid,
 	Mail,
-	Play,
 	QrCode,
 	ShoppingCart,
 	Users,
@@ -395,15 +393,7 @@ function FeatureSection({ s, idx }: { s: Section; idx: number }) {
 								rel="noopener noreferrer"
 								className="btn btn-primary"
 							>
-								See it live in a demo <span className="arrow">→</span>
-							</a>
-							<a
-								href={CALENDLY_URL}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="btn btn-text"
-							>
-								<Play size={14} /> Watch 30-sec demo
+								Book a 15-min demo <span className="arrow">→</span>
 							</a>
 						</div>
 

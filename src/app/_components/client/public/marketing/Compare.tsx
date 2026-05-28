@@ -5,8 +5,8 @@ type Cell = boolean | string;
 const ROWS: Array<[string, Cell, Cell, Cell]> = [
 	["Built for racquet sports (courts, leagues, ladders)", true, false, false],
 	["Self-serve QR check-in (kiosk-ready)", true, false, false],
-	["Booking fees on top of payment processing", "none", "common", "n/a"],
-	["Free data migration", true, false, "do it yourself"],
+	["Booking fees", "none", "common", "n/a"],
+	["Free data migration", true, false, "DIY"],
 	["Modern API + webhooks", true, "limited", false],
 	["Setup time", "≤ 1 week", "4–8 weeks", "ongoing"],
 ];

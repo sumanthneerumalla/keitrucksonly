@@ -9,7 +9,7 @@ const ITEMS = [
 	{
 		icon: CreditCard,
 		title: "No per-transaction fees",
-		body: "We don't take a cut of bookings. Stripe's standard rates pass through.",
+		body: "We don't take a cut. Stripe rates pass through.",
 	},
 	{
 		icon: LayoutGrid,

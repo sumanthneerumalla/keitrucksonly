@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle, Play } from "lucide-react";
+import { CheckCircle } from "lucide-react";
 import { ProductPreview } from "~/app/_components/client/public/marketing/ProductPreview";
 import { RotatingHeadline } from "~/app/_components/client/public/marketing/RotatingHeadline";
 import { CALENDLY_URL } from "~/lib/marketing";
@@ -33,15 +33,6 @@ export function Hero() {
 							</a>
 							<a href="#how-it-works" className="btn btn-ghost btn-lg">
 								See how it works
-							</a>
-							<a
-								href={CALENDLY_URL}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="btn btn-text btn-lg"
-								style={{ paddingLeft: 6 }}
-							>
-								<Play size={16} /> Watch 90-sec tour
 							</a>
 						</div>
 

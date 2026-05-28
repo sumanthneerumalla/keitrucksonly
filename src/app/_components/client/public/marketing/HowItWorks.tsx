@@ -10,7 +10,7 @@ const STEPS = [
 	},
 	{
 		n: "02",
-		title: "You set up courts & pricing",
+		title: "Set up courts & pricing",
 		body: "Hours, peak rates, member-only windows, packages. Templates for clubs that look like yours.",
 		time: "≈ 30 min",
 	},
