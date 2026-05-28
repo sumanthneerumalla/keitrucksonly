@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Download } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import RecordPaymentModal from "~/app/(app)/clients/[userId]/RecordPaymentModal";
@@ -108,6 +108,52 @@ interface InvoiceDetailProps {
 	audience: InvoiceAudience;
 	/** Optional "back" target (e.g. the client page the staff drilled in from). */
 	backHref?: string;
+}
+
+/**
+ * Phase 9b — re-usable "Bill to" / "For" / "Member" block. Renders the
+ * name (with a deep-link for staff), email, and phone. The phone field
+ * arrives from `billing.getInvoice` via the JSON profileData blob and is
+ * null when the member hasn't set it.
+ */
+function PartyBlock({
+	label,
+	party,
+	isStaff,
+}: {
+	label: string;
+	party: {
+		userId: string;
+		firstName: string | null;
+		lastName: string | null;
+		email: string | null;
+		phone: string | null;
+	};
+	isStaff: boolean;
+}) {
+	return (
+		<div>
+			<dt className="text-[var(--muted-foreground)] text-xs">{label}</dt>
+			<dd className="text-[var(--foreground)]">
+				{isStaff ? (
+					<Link
+						href={`/clients/${party.userId}`}
+						className="underline-offset-2 hover:underline"
+					>
+						{formatPersonName(party)}
+					</Link>
+				) : (
+					formatPersonName(party)
+				)}
+			</dd>
+			{(party.email || party.phone) && (
+				<dd className="space-y-0.5 pt-0.5 text-[var(--muted-foreground)] text-xs">
+					{party.email && <div>{party.email}</div>}
+					{party.phone && <div>{party.phone}</div>}
+				</dd>
+			)}
+		</div>
+	);
 }
 
 export default function InvoiceDetail({
@@ -288,39 +334,53 @@ export default function InvoiceDetail({
 					</div>
 				</div>
 
-				{/* Actions (staff) */}
-				{(canRecordPayment || canMarkDue || canVoid) && (
-					<div className="flex items-center gap-2">
-						{canRecordPayment && (
-							<Button
-								variant="default"
-								size="sm"
-								onClick={() => setPaymentOpen(true)}
-							>
-								Record Payment
-							</Button>
-						)}
-						{canMarkDue && (
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => setMarkDueOpen(true)}
-							>
-								Mark as due
-							</Button>
-						)}
-						{canVoid && (
-							<Button
-								variant="outline"
-								size="sm"
-								className="text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
-								onClick={() => setVoidOpen(true)}
-							>
-								Void
-							</Button>
-						)}
-					</div>
-				)}
+				{/* Actions. The Download PDF link is shown to every viewer who can
+				    see the invoice (members AND staff). Backed by the Phase 9b
+				    `/api/invoices/[invoiceId]/pdf` route handler, which re-runs
+				    the same consumer-OR-payer-OR-staff auth check. */}
+				<div className="flex items-center gap-2">
+					<a
+						href={`/api/invoices/${inv.invoiceId}/pdf`}
+						// `download` forces a save instead of opening inline in a new
+						// tab. Left valueless so the browser uses the server's
+						// Content-Disposition filename (<Last>_<First>_<INV>.pdf);
+						// it's a same-origin request, so that header is honored.
+						download
+						rel="noreferrer noopener"
+						className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 font-medium text-[var(--foreground)] text-xs transition-colors hover:bg-[var(--muted)]"
+					>
+						<Download size={14} />
+						Download PDF
+					</a>
+					{canRecordPayment && (
+						<Button
+							variant="default"
+							size="sm"
+							onClick={() => setPaymentOpen(true)}
+						>
+							Record Payment
+						</Button>
+					)}
+					{canMarkDue && (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setMarkDueOpen(true)}
+						>
+							Mark as due
+						</Button>
+					)}
+					{canVoid && (
+						<Button
+							variant="outline"
+							size="sm"
+							className="text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+							onClick={() => setVoidOpen(true)}
+						>
+							Void
+						</Button>
+					)}
+				</div>
 			</div>
 
 			{/* Meta + parties */}
@@ -354,71 +414,21 @@ export default function InvoiceDetail({
 
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
 					{hasSeparatePayer && inv.billedTo ? (
-						<dl className="space-y-2">
-							<div>
-								<dt className="text-[var(--muted-foreground)] text-xs">
-									Bill to
-								</dt>
-								<dd className="text-[var(--foreground)]">
-									{isStaff ? (
-										<Link
-											href={`/clients/${inv.billedTo.userId}`}
-											className="underline-offset-2 hover:underline"
-										>
-											{formatPersonName(inv.billedTo)}
-										</Link>
-									) : (
-										formatPersonName(inv.billedTo)
-									)}
-									{isStaff && inv.billedTo.email && (
-										<span className="text-[var(--muted-foreground)]">
-											{" "}
-											· {inv.billedTo.email}
-										</span>
-									)}
-								</dd>
-							</div>
-							<div>
-								<dt className="text-[var(--muted-foreground)] text-xs">For</dt>
-								<dd className="text-[var(--foreground)]">
-									{isStaff ? (
-										<Link
-											href={`/clients/${inv.consumer.userId}`}
-											className="underline-offset-2 hover:underline"
-										>
-											{formatPersonName(inv.consumer)}
-										</Link>
-									) : (
-										formatPersonName(inv.consumer)
-									)}
-								</dd>
-							</div>
+						<dl className="space-y-3">
+							<PartyBlock
+								label="Bill to"
+								party={inv.billedTo}
+								isStaff={isStaff}
+							/>
+							<PartyBlock label="For" party={inv.consumer} isStaff={isStaff} />
 						</dl>
 					) : (
 						<dl className="space-y-2">
-							<div>
-								<dt className="text-[var(--muted-foreground)] text-xs">
-									Member
-								</dt>
-								<dd className="text-[var(--foreground)]">
-									{isStaff ? (
-										<Link
-											href={`/clients/${inv.consumer.userId}`}
-											className="underline-offset-2 hover:underline"
-										>
-											{formatPersonName(inv.consumer)}
-										</Link>
-									) : (
-										formatPersonName(inv.consumer)
-									)}
-									{isStaff && inv.consumer.email && (
-										<span className="text-[var(--muted-foreground)]">
-											{" "}
-											· {inv.consumer.email}
-										</span>
-									)}
-								</dd>
-							</div>
+							<PartyBlock
+								label="Member"
+								party={inv.consumer}
+								isStaff={isStaff}
+							/>
 						</dl>
 					)}
 				</div>

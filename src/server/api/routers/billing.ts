@@ -2,6 +2,7 @@ import { Prisma, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import dayjs from "~/lib/dayjs-config";
+import { phoneFromProfileData } from "~/lib/studentProfile";
 import {
 	clubAdminProcedure,
 	createTRPCRouter,
@@ -300,6 +301,11 @@ export const billingRouter = createTRPCRouter({
 							firstName: true,
 							lastName: true,
 							email: true,
+							// Phase 9b — surface phone on the invoice detail view + PDF
+							// "Bill to / For" blocks. Phone lives in the JSON
+							// profileData blob (TD-1); we read it raw here and parse
+							// safely below. Address is reserved (no column yet).
+							studentProfile: { select: { profileData: true } },
 						},
 					},
 					billedToUser: {
@@ -308,6 +314,7 @@ export const billingRouter = createTRPCRouter({
 							firstName: true,
 							lastName: true,
 							email: true,
+							studentProfile: { select: { profileData: true } },
 						},
 					},
 					closedByUser: {
@@ -424,6 +431,9 @@ export const billingRouter = createTRPCRouter({
 					firstName: invoice.user.firstName,
 					lastName: invoice.user.lastName,
 					email: invoice.user.email,
+					// Phase 9b — phone read defensively from the StudentProfile
+					// JSON blob (TD-1; same shape ProfileFieldsCard uses).
+					phone: phoneFromProfileData(invoice.user.studentProfile?.profileData),
 				},
 				billedTo: invoice.billedToUser
 					? {
@@ -431,6 +441,9 @@ export const billingRouter = createTRPCRouter({
 							firstName: invoice.billedToUser.firstName,
 							lastName: invoice.billedToUser.lastName,
 							email: invoice.billedToUser.email,
+							phone: phoneFromProfileData(
+								invoice.billedToUser.studentProfile?.profileData,
+							),
 						}
 					: null,
 				closedBy: invoice.closedByUser
