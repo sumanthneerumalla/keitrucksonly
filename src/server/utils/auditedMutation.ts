@@ -69,6 +69,14 @@ export const AUDIT_ACTIONS = {
 	INVOICE_MARKED_DUE: "invoice.marked_due",
 	INVOICE_VOIDED: "invoice.voided",
 	REFUND_ISSUED: "refund.issued",
+	// Phase 10a — memberships
+	MEMBERSHIP_SOLD: "membership.sold",
+	MEMBERSHIP_FROZEN: "membership.frozen",
+	MEMBERSHIP_UNFROZEN: "membership.unfrozen",
+	MEMBERSHIP_SUSPENDED: "membership.suspended",
+	MEMBERSHIP_REINSTATED: "membership.reinstated",
+	MEMBERSHIP_CANCELLED: "membership.cancelled",
+	MEMBERSHIP_VOIDED: "membership.voided",
 } as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
 

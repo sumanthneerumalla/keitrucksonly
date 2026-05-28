@@ -8,6 +8,7 @@ import { api } from "~/trpc/react";
 import AttendanceHistoryCard from "./AttendanceHistoryCard";
 import BillingPanel from "./BillingPanel";
 import FamilyCard from "./FamilyCard";
+import MemberMembershipsCard from "./MemberMembershipsCard";
 import ProfileFieldsCard from "./ProfileFieldsCard";
 import StudentSignupsCard from "./StudentSignupsCard";
 
@@ -129,6 +130,9 @@ export default function StudentDetailClient({
 
 			{/* Packages (reuses MemberPackagesCard — handles its own sell modal) */}
 			<MemberPackagesCard userId={user.userId} memberName={fullName} />
+
+			{/* Memberships — Phase 10a (WP6): list + status badges + actions; own sell modal */}
+			<MemberMembershipsCard userId={user.userId} memberName={fullName} />
 
 			{/* Active event sign-ups (event-level + series-level) */}
 			<StudentSignupsCard userId={user.userId} />

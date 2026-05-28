@@ -24,29 +24,40 @@ model Club {
   // Phase 9-EOD (2026-05-02): per-club sequential invoice number counter.
   // Atomically incremented inside the same $transaction as the invoice insert.
   nextInvoiceNumber     Int      @default(1)
+  // Phase 10a (2026-05-26): club-level membership settings bag (MembershipPreferences).
+  // App-validated JSON, NOT DB columns — shape lives in app code (requireRemarkFor*,
+  // billingAnchorMode/billingAnchorDay/prorateFirstTerm/cancelRefundStrategy/
+  // prorationRounding, autoGenerateMemberNumbers). Read alongside the club; promote
+  // to its own table only if it grows. See designFiles/roadmap/phase10-memberships.md
+  // "Membership Preferences".
+  membershipPreferences Json?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  users                User[]
-  memberships          UserClub[]
-  facilities           ClubFacility[]
-  resourceTypes        ClubResourceType[]
-  resources            ClubResource[]
-  calendarEvents       CalendarEvent[]
-  products             Product[]
-  productCategories    ProductCategory[]
-  revenueCategories    RevenueCategory[]
-  taxRates             TaxRate[]
-  attendances          Attendance[]
-  statusLogs           RegistrationStatusLog[]
-  packagePlans         PackagePlan[]
-  memberPackages       MemberPackage[]
-  tags                 Tag[]
-  rentalBookings       RentalBooking[]
-  familyGroups         FamilyGroup[]
-  invoices             Invoice[]
-  emailGroups          EmailGroup[]
-  auditLogs            AuditLog[]
+  users             User[]
+  memberships       UserClub[]
+  facilities        ClubFacility[]
+  resourceTypes     ClubResourceType[]
+  resources         ClubResource[]
+  calendarEvents    CalendarEvent[]
+  products          Product[]
+  productCategories ProductCategory[]
+  revenueCategories RevenueCategory[]
+  taxRates          TaxRate[]
+  attendances       Attendance[]
+  statusLogs        RegistrationStatusLog[]
+  packagePlans      PackagePlan[]
+  memberPackages    MemberPackage[]
+  tags              Tag[]
+  rentalBookings    RentalBooking[]
+  familyGroups      FamilyGroup[]
+  invoices          Invoice[]
+  emailGroups       EmailGroup[]
+  auditLogs         AuditLog[]
+  // Phase 10a — Memberships
+  membershipTypes   MembershipType[]
+  membershipPlans   MembershipPlan[]
+  memberMemberships MemberMembership[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -100,6 +111,10 @@ model User {
   creditSourceLineItems InvoiceLineItem[] @relation("LineItemCreditFromUser")
   // Phase 9b — invoice PDF renders this user triggered.
   generatedInvoicePdfs  InvoicePdf[]      @relation("InvoicePdfGeneratedBy")
+
+  // Phase 10a — Memberships (member is the beneficiary; staff sold it).
+  memberMemberships MemberMembership[] @relation("MemberMembershipOwner")
+  soldMemberships   MemberMembership[] @relation("MemberMembershipSeller")
 
   // Audit log (Option B) — actions this user performed + entries about them.
   auditActionsPerformed AuditLog[] @relation("AuditActor")
@@ -378,6 +393,8 @@ model RevenueCategory {
   productCategories ProductCategory[]
   products          Product[]
   invoiceLineItems  InvoiceLineItem[]
+  // Phase 10a — Memberships
+  membershipTypes   MembershipType[]
 
   @@unique([clubShortName, code])
   @@index([clubShortName])
@@ -450,6 +467,9 @@ model ClubFacility {
   rentalBookings    RentalBooking[]
   invoices          Invoice[]
   emailGroups       EmailGroup[]
+  // Phase 10a — Memberships (facility where the membership was sold / member's
+  // home location; attribution only, mirrors Invoice.facilityId).
+  memberMemberships MemberMembership[]
 
   @@unique([clubShortName, name])
   @@index([clubShortName])
@@ -1083,6 +1103,19 @@ model InvoiceLineItem {
   creditFromUserId    String?
   creditFromUser      User?    @relation("LineItemCreditFromUser", fields: [creditFromUserId], references: [userId], onDelete: SetNull)
 
+  // Phase 10a — Memberships (HANDOFF #119; the period/membership-FK slots were
+  // designed in the line-item hardening pass and deferred to Phase 10).
+  // memberMembershipId is the MEMBERSHIP_FEE provenance FK (parallels
+  // memberPackageId for PACKAGE_SALE). periodStart/periodEnd record the calendar
+  // term this charge covers (e.g. Feb 15 → Mar 14) — most useful for recurring /
+  // prorated membership charges. onDelete: SetNull preserves the financial line if
+  // a membership row is ever removed (memberships are soft-deleted, never hard
+  // DELETEd, so this is a safety net).
+  memberMembershipId String?
+  memberMembership   MemberMembership? @relation(fields: [memberMembershipId], references: [memberMembershipId], onDelete: SetNull)
+  periodStart        DateTime?
+  periodEnd          DateTime?
+
   @@index([invoiceId])
   @@index([kind])
   @@index([productId])
@@ -1091,6 +1124,7 @@ model InvoiceLineItem {
   @@index([creditFromInvoiceId])
   @@index([revenueCategoryId])
   @@index([creditFromUserId])
+  @@index([memberMembershipId])
 }
 
 // InvoicePayment — a payment received against an invoice. Multi-processor by design:
@@ -1154,6 +1188,137 @@ model InvoiceRefund {
   @@index([paymentId])
   @@index([invoiceId])
   @@index([refundedBy])
+}
+
+// ============================================================
+// MEMBERSHIPS (Phase 10a, 2026-05-26)
+// See designFiles/roadmap/phase10-memberships.md (spec) +
+// phase10a-build-plan.md (WP1). Driver: NVBC. Template -> instance shape mirrors
+// PackagePlan -> MemberPackage. Money in Int cents (#94). Membership statuses are
+// String (NOT a Prisma enum, unlike RegistrationStatus). Fixed-term, signup-
+// anchored; auto-renew + calendar-aligned proration fields ship but are inert in
+// 10a (no generator, no cron — expiry is computed-on-read at endDate, #27).
+// Status changes audit through the shared AuditLog (Option B) via
+// writeAuditedMutation (membership.* actions) — NO dedicated MembershipStatusLog.
+// ============================================================
+
+// MembershipType — a simple label + revenue category used to categorize
+// memberships for reporting (e.g. "Adult Monthly", "Junior Annual"). Club-scoped
+// catalog; a type can have multiple plans. Archive via isActive (#4/#51).
+model MembershipType {
+  membershipTypeId  String           @id @default(cuid())
+  clubShortName     String
+  club              Club             @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  name              String           @db.VarChar(200) // e.g., "Adult Monthly"
+  revenueCategoryId String? // for financial reporting
+  revenueCategory   RevenueCategory? @relation(fields: [revenueCategoryId], references: [revenueCategoryId])
+  isActive          Boolean          @default(true)
+  sortOrder         Int              @default(0)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  plans MembershipPlan[]
+
+  // A club can't duplicate its own type name (decided 2026-05-26); other clubs
+  // may reuse names freely.
+  @@unique([clubShortName, name])
+  @@index([clubShortName])
+  @@index([revenueCategoryId])
+}
+
+// MembershipPlan — the detailed config of how a membership works: billing
+// frequency/fee, contract length, included benefits, access rules. A type can
+// have multiple plans. Period length = billingInterval + billingUnit; the billing
+// ANCHOR, proration, and cancel-refund policy live in Club.membershipPreferences
+// (club-level), not on the plan. Restrict-FK on used plans blocks hard-delete;
+// archive via isActive (#51).
+model MembershipPlan {
+  membershipPlanId     String         @id @default(cuid())
+  clubShortName        String
+  club                 Club           @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  membershipTypeId     String
+  membershipType       MembershipType @relation(fields: [membershipTypeId], references: [membershipTypeId])
+  description          String         @db.VarChar(500) // e.g., "$50/month, 12-month contract"
+  billingFrequency     String         @db.VarChar(20) // "monthly" | "quarterly" | "annually" | "custom"
+  billingInterval      Int // number of units (e.g., 1 for monthly, 3 for quarterly)
+  billingUnit          String         @db.VarChar(20) // "day" | "week" | "month" | "year"
+  billingCycles        Int? // how many times to bill per contract (null = indefinite)
+  feePerTermInCents    Int // recurring fee each billing cycle, in cents (#94: Int cents, never Decimal)
+  initiationFeeInCents Int            @default(0) // one-time fee at signup (future)
+  maxVisits            Int? // null = unlimited (future)
+  // DEFAULT auto-renew for new sales of this plan. Inert in 10a (no generator).
+  // Per-sale override lives on MemberMembership.autoRenew. See Auto-Renew Toggle §.
+  autoRenew            Boolean        @default(false)
+  sellOnline           Boolean        @default(false) // (future)
+  isActive             Boolean        @default(true)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  memberMemberships MemberMembership[]
+
+  @@index([clubShortName])
+  @@index([membershipTypeId])
+}
+
+// MemberMembership — an instance of a MembershipPlan sold to a specific member.
+// A member may hold MULTIPLE concurrent/overlapping memberships (no one-active
+// limit) — "current membership" is always a plural query. Stored status is the
+// lifecycle (active/cancelled/suspended/frozen/voided); upcoming/active/expired
+// are DERIVED from startDate/endDate on read (no cron, #27). Never hard-deleted —
+// void is a soft-delete. Payer is NOT stored here; it lives on the Invoice
+// (billedToUserId). Beneficiary = userId (#110/#116).
+model MemberMembership {
+  memberMembershipId     String         @id @default(cuid())
+  clubShortName          String
+  club                   Club           @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  userId                 String // the beneficiary / consumer
+  user                   User           @relation("MemberMembershipOwner", fields: [userId], references: [userId])
+  membershipPlanId       String
+  membershipPlan         MembershipPlan @relation(fields: [membershipPlanId], references: [membershipPlanId])
+  // OPTIONAL facility where sold / member's home location (attribution + reporting;
+  // mirrors Invoice.facilityId). null = club-wide/unattributed. Validity is
+  // club-wide regardless; facility-RESTRICTED memberships are future.
+  facilityId             String?
+  facility               ClubFacility?  @relation(fields: [facilityId], references: [facilityId])
+  membershipNumber       String? // auto-generated or manual (future)
+  // STORED lifecycle: "active" | "cancelled" | "suspended" | "frozen" | "voided".
+  // "upcoming"/"active"/"expired" are DERIVED from startDate/endDate on read.
+  status                 String         @db.VarChar(20)
+  startDate              DateTime // today or FUTURE (>= today; future -> derived "upcoming"). Backdating disallowed in 10a.
+  endDate                DateTime? // calendar term end (Feb 15 -> Mar 14); null = indefinite. Expiry computed-on-read (#27).
+  nextBillingDate        DateTime? // unused in 10a (no auto-renew); set only when the generator runs (future).
+  // Per-membership override of MembershipPlan.autoRenew; null = inherit plan.
+  // Inert in 10a (see Auto-Renew Toggle §).
+  autoRenew              Boolean?
+  billingCyclesCompleted Int            @default(0)
+  freezeStartDate        DateTime? // when freeze began
+  freezeEndDate          DateTime? // when freeze ends (extends endDate)
+  freezeReason           String?        @db.Text
+  suspendReason          String?        @db.Text
+  cancelReason           String?        @db.Text
+  cancelDate             DateTime?
+  // Soft-delete for mistakes (wrong member/duplicate). Hides the row + voids the
+  // UNPAID fee line item. If already paid -> refund + cancel instead. Admin only.
+  // Never a hard DELETE.
+  voidedAt               DateTime?
+  voidedBy               String?
+  voidReason             String?        @db.Text
+  soldBy                 String // staff userId
+  soldByUser             User           @relation("MemberMembershipSeller", fields: [soldBy], references: [userId])
+  soldAt                 DateTime       @default(now())
+  notes                  String?        @db.Text
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  invoiceLineItems InvoiceLineItem[]
+
+  @@index([clubShortName])
+  @@index([userId])
+  @@index([membershipPlanId])
+  @@index([facilityId])
+  @@index([status])
+  @@index([endDate])
+  @@index([soldBy])
 }
 
 // ============================================================

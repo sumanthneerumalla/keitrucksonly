@@ -198,6 +198,44 @@ export const navItems: NavItem[] = [
 				],
 			},
 			{
+				label: "Memberships",
+				href: "/admin/memberships",
+				userTypes: [
+					UserType.PLATFORM_ADMIN,
+					UserType.CLUB_ADMIN,
+					UserType.FACILITY,
+				],
+				children: [
+					{
+						label: "Plans",
+						href: "/admin/memberships/plans",
+						userTypes: [
+							UserType.PLATFORM_ADMIN,
+							UserType.CLUB_ADMIN,
+							UserType.FACILITY,
+						],
+					},
+					{
+						label: "Types",
+						href: "/admin/memberships/types",
+						userTypes: [
+							UserType.PLATFORM_ADMIN,
+							UserType.CLUB_ADMIN,
+							UserType.FACILITY,
+						],
+					},
+					{
+						label: "Preferences",
+						href: "/admin/memberships/preferences",
+						userTypes: [
+							UserType.PLATFORM_ADMIN,
+							UserType.CLUB_ADMIN,
+							UserType.FACILITY,
+						],
+					},
+				],
+			},
+			{
 				label: "Check-in",
 				href: "/admin/checkin",
 				userTypes: [

@@ -16,11 +16,17 @@ export function assertLineItemKindConsistency(d: {
 	kind: string;
 	packagePlanId?: string | null;
 	creditFromInvoiceId?: string | null;
+	memberMembershipId?: string | null;
 }): void {
 	if (d.kind === "PACKAGE_SALE" && !d.packagePlanId) {
 		throw new Error("InvoiceLineItem kind=PACKAGE_SALE requires packagePlanId");
 	}
 	if (d.kind === "CREDIT" && !d.creditFromInvoiceId) {
 		throw new Error("InvoiceLineItem kind=CREDIT requires creditFromInvoiceId");
+	}
+	if (d.kind === "MEMBERSHIP_FEE" && !d.memberMembershipId) {
+		throw new Error(
+			"InvoiceLineItem kind=MEMBERSHIP_FEE requires memberMembershipId",
+		);
 	}
 }
