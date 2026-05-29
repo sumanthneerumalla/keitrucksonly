@@ -53,25 +53,52 @@ function SectionCard({
 	description,
 	icon: Icon,
 	id,
+	href,
 }: {
 	title: string;
 	description: string;
 	icon: React.ComponentType<{ size?: number }>;
 	id: string;
+	/**
+	 * Optional destination. When set, the card renders as a clickable `<Link>`
+	 * (no "Coming soon" footer). When omitted, the card is a placeholder for
+	 * a future feature.
+	 */
+	href?: string;
 }) {
-	return (
-		<div
-			id={id}
-			className="scroll-mt-20 rounded-lg border border-gray-200 bg-white p-6 transition-colors hover:border-gray-300"
-		>
+	const body = (
+		<>
 			<div className="mb-3 text-[var(--muted-foreground)]">
 				<Icon size={24} />
 			</div>
 			<h3 className="mb-1 font-medium text-[var(--foreground)]">{title}</h3>
 			<p className="text-[var(--muted-foreground)] text-sm">{description}</p>
-			<p className="mt-3 text-[var(--muted-foreground)] text-xs italic">
-				Coming soon
-			</p>
+			{!href && (
+				<p className="mt-3 text-[var(--muted-foreground)] text-xs italic">
+					Coming soon
+				</p>
+			)}
+		</>
+	);
+
+	if (href) {
+		return (
+			<Link
+				id={id}
+				href={href}
+				className="group scroll-mt-20 rounded-lg border border-gray-200 bg-white p-6 transition-colors hover:border-[var(--primary)] hover:shadow-sm"
+			>
+				{body}
+			</Link>
+		);
+	}
+
+	return (
+		<div
+			id={id}
+			className="scroll-mt-20 rounded-lg border border-gray-200 bg-white p-6 transition-colors hover:border-gray-300"
+		>
+			{body}
 		</div>
 	);
 }
@@ -162,10 +189,11 @@ export default async function AdminPage() {
 						icon={Receipt}
 					/>
 					<SectionCard
-						id="review-post-billing"
-						title="Review Post Billing"
-						description="View, reprint, and email invoices for the last batch of post-billed packages."
+						id="billed-invoices"
+						title="Billed Invoices"
+						description="View, search, and manage every invoice issued across the club."
 						icon={Search}
+						href="/admin/invoices"
 					/>
 				</div>
 			</section>

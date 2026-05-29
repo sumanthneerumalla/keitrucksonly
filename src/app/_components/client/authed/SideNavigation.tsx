@@ -322,8 +322,11 @@ export const navItems: NavItem[] = [
 						],
 					},
 					{
-						label: "Review Post Billing",
-						href: "/admin#review-post-billing",
+						// Renamed from "Review Post Billing" + anchor link; now points at
+						// the real /admin/invoices list page (which the matching SectionCard
+						// on the admin index also links to).
+						label: "Billed Invoices",
+						href: "/admin/invoices",
 						userTypes: [
 							UserType.PLATFORM_ADMIN,
 							UserType.CLUB_ADMIN,
