@@ -17,6 +17,8 @@ export function assertLineItemKindConsistency(d: {
 	packagePlanId?: string | null;
 	creditFromInvoiceId?: string | null;
 	memberMembershipId?: string | null;
+	productId?: string | null;
+	eventRegistrationId?: string | null;
 }): void {
 	if (d.kind === "PACKAGE_SALE" && !d.packagePlanId) {
 		throw new Error("InvoiceLineItem kind=PACKAGE_SALE requires packagePlanId");
@@ -27,6 +29,14 @@ export function assertLineItemKindConsistency(d: {
 	if (d.kind === "MEMBERSHIP_FEE" && !d.memberMembershipId) {
 		throw new Error(
 			"InvoiceLineItem kind=MEMBERSHIP_FEE requires memberMembershipId",
+		);
+	}
+	if (d.kind === "PRODUCT_SALE" && !d.productId) {
+		throw new Error("InvoiceLineItem kind=PRODUCT_SALE requires productId");
+	}
+	if (d.kind === "EVENT_REGISTRATION" && !d.eventRegistrationId) {
+		throw new Error(
+			"InvoiceLineItem kind=EVENT_REGISTRATION requires eventRegistrationId",
 		);
 	}
 }

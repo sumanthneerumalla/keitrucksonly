@@ -14,6 +14,7 @@ import {
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
 import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
+import { getOrCreateOpenInvoice } from "~/server/utils/invoiceTab";
 
 // ============================================================
 // HELPERS
@@ -202,14 +203,6 @@ async function getFacilityTimezoneForUser(
 		null
 	);
 }
-
-// Phase 9a — auto credit carry-forward toggle. OFF: the club owner wants to
-// control WHEN overpayment credit is applied (manually, via Record Payment →
-// "Account credit"), NOT have it silently pulled onto the next new invoice.
-// When false, sellPackage opens a new invoice without auto-applying credit;
-// the credit stays available for a deliberate Account-Credit application.
-// (Global for now — promote to a per-club Club setting if clubs ever differ.)
-const AUTO_APPLY_CREDIT_ON_NEW_INVOICE = false;
 
 // ============================================================
 // ROUTER
@@ -559,185 +552,20 @@ export const packagesRouter = createTRPCRouter({
 					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
 					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
 
-					// Find the running tab for THIS (consumer, payer) pair — Option 3
-					// (HANDOFF #112 + #116). Each (consumer, payer) pair gets its OWN
-					// running tab, so ONE invoice = exactly ONE consumer. The consumer
-					// is always `input.userId`; the payer is the effective payer (the
-					// bill-to user, or the consumer themselves for self-pay).
-					//
-					// Excludes void/paid/overdue — only `draft`/`open`/`partially_paid`
-					// absorb new charges. `closedAt: null` excludes closed tabs (manual
-					// close, or auto-close on full payment — Round 4 / HANDOFF #103/#108).
-					//
-					// We match `billedToUserId` PRECISELY (this is the Option-3 change
-					// from Round 5's payer-keyed OR clause):
-					//   - self-pay (effective payer === consumer) → billedToUserId: null
-					//   - bill-to  (effective payer !== consumer) → billedToUserId: payer
-					// So charges for Mary-billed-to-John land on the (Mary, John) tab and
-					// never co-mingle with John's own self-pay tab or a (Tim, John) tab.
-					// The credit-source query below stays PAYER-scoped (A1, HANDOFF #111)
-					// — credit still follows the payer across consumers.
-					const runningTabBilledToUserId =
-						effectivePayerUserId === input.userId ? null : effectivePayerUserId;
-					let invoice = await tx.invoice.findFirst({
-						where: {
+					// Find/create the (consumer, payer) running tab and carry forward any
+					// available credit (gated OFF by AUTO_APPLY_CREDIT_ON_NEW_INVOICE).
+					// Shared with the ad-hoc + event-registration charge sources so every
+					// charge routes to the SAME tab with identical numbering, Option-3
+					// (consumer,payer) keying, and credit handling. The advisory lock
+					// acquired above is the required precondition (see getOrCreateOpenInvoice).
+					const { invoice, totalCreditPulledCents, creditLineCount } =
+						await getOrCreateOpenInvoice(tx, {
 							clubShortName: ctx.user.clubShortName,
-							userId: input.userId, // consumer
-							billedToUserId: runningTabBilledToUserId, // payer (null = self-pay)
-							status: { in: ["draft", "open", "partially_paid"] },
-							closedAt: null,
-						},
-						orderBy: { issueDate: "asc" }, // oldest first if ever multiple
-					});
-
-					// Track the credit lines we add when opening a NEW invoice. These
-					// only apply on the `!invoice` branch — appending to an existing
-					// running tab never pulls credit (credit lives on closed invoices
-					// and is consumed exactly once at new-invoice creation time).
-					let totalCreditPulledCents = 0;
-					let creditLineCount = 0;
-
-					if (!invoice) {
-						// No open tab — open a new invoice with the next sequential number.
-						// Atomic increment: post-bump value minus 1 is the number we just
-						// consumed. With @default(1), the first invoice is INV-000001.
-						const club = await tx.club.update({
-							where: { clubShortName: ctx.user.clubShortName },
-							data: { nextInvoiceNumber: { increment: 1 } },
-							select: { nextInvoiceNumber: true },
+							consumerUserId: input.userId,
+							effectivePayerUserId,
+							facilityId: member.activeFacilityId,
+							createdByUserId: ctx.user.userId,
 						});
-						const seq = club.nextInvoiceNumber - 1;
-						const invoiceNumber = `INV-${String(seq).padStart(6, "0")}`;
-
-						invoice = await tx.invoice.create({
-							data: {
-								clubShortName: ctx.user.clubShortName,
-								invoiceNumber,
-								userId: input.userId,
-								// Phase 9a Round 5 — only set `billedToUserId` when it
-								// genuinely differs from the consumer. Equal / null /
-								// undefined all collapse to NULL = "self-pay" semantics,
-								// matching the pre-Round-5 schema default.
-								billedToUserId:
-									input.billToUserId && input.billToUserId !== input.userId
-										? input.billToUserId
-										: null,
-								facilityId: member.activeFacilityId,
-								status: "open",
-								subtotalInCents: 0,
-								taxTotalInCents: 0,
-								totalInCents: 0,
-								amountPaidInCents: 0,
-								createdBy: ctx.user.userId,
-							},
-						});
-
-						// Phase 9a Round 4 — credit carry-forward.
-						// Find any auto-closed (paid + closedAt set) invoices for this
-						// member that have unconsumed overpayment credit. Prisma can't
-						// express the cross-column predicate `amountPaidInCents >
-						// totalInCents` directly, so we fetch closed+paid+unconsumed
-						// invoices and filter for actual credit (positive net) in JS.
-						// `orderBy closedAt asc` = oldest credit first (FIFO).
-						//
-						// Phase 9a Round 5 — credit follows the PAYER, not the
-						// consumer. A parent who overpays gets credit on their own
-						// future invoices regardless of which kid the next charge
-						// is for. Same OR-clause shape as the running-tab find:
-						// match invoices where `effectivePayerUserId` is the payer
-						// (either implicitly as the consumer-with-no-override, or
-						// explicitly via the billedToUserId column).
-						const creditSources = await tx.invoice.findMany({
-							where: {
-								clubShortName: ctx.user.clubShortName,
-								status: "paid",
-								closedAt: { not: null },
-								creditConsumedAt: null,
-								OR: [
-									{ userId: effectivePayerUserId, billedToUserId: null },
-									{ billedToUserId: effectivePayerUserId },
-								],
-							},
-							orderBy: { closedAt: "asc" },
-							select: {
-								invoiceId: true,
-								invoiceNumber: true,
-								totalInCents: true,
-								amountPaidInCents: true,
-								// Phase 9a line-item hardening — need the source payer to
-								// snapshot `creditFromUserId` on the credit line below.
-								creditConsumedInCents: true,
-								userId: true,
-								billedToUserId: true,
-							},
-						});
-
-						// Auto carry-forward is gated by AUTO_APPLY_CREDIT_ON_NEW_INVOICE
-						// (OFF by default — the owner applies credit manually). When off we
-						// select NO sources, so the loop below is a no-op and the new
-						// invoice carries no auto-applied credit lines (credit stays
-						// available). The query above still runs but its result is ignored —
-						// negligible, and keeps the diff minimal vs re-nesting the block.
-						const sourcesWithCredit = AUTO_APPLY_CREDIT_ON_NEW_INVOICE
-							? creditSources.filter(
-									(s) =>
-										s.amountPaidInCents -
-											s.totalInCents -
-											s.creditConsumedInCents >
-										0,
-								)
-							: [];
-
-						// Add a negative line item per credit source + stamp each source's
-						// `creditConsumedAt`. Empty `sourcesWithCredit` case: this loop
-						// is a no-op (totals stay 0, no DB writes), so the rest of the
-						// transaction behaves exactly like pre-Round-4 new-invoice flow.
-						let sortIndex = 0;
-						for (const s of sourcesWithCredit) {
-							// Remaining (not gross) credit — an Account-Credit application
-							// may have already spent part of this source.
-							const creditCents =
-								s.amountPaidInCents - s.totalInCents - s.creditConsumedInCents;
-
-							assertLineItemKindConsistency({
-								kind: "CREDIT",
-								creditFromInvoiceId: s.invoiceId,
-							});
-							await tx.invoiceLineItem.create({
-								data: {
-									invoiceId: invoice.invoiceId,
-									kind: "CREDIT",
-									description: `Credit from ${s.invoiceNumber}`,
-									quantity: 1,
-									unitPriceInCents: -creditCents,
-									discountInCents: 0,
-									taxRateBps: 0,
-									taxAmountInCents: 0,
-									totalInCents: -creditCents,
-									sortOrder: sortIndex, // credits sort before package line
-									creditFromInvoiceId: s.invoiceId,
-									// Snapshot the source's payer (whose credit this is).
-									creditFromUserId: s.billedToUserId ?? s.userId,
-								},
-							});
-
-							await tx.invoice.update({
-								where: { invoiceId: s.invoiceId },
-								// Carry-forward consumes the source's ENTIRE remaining credit, so
-								// it's now fully spent: bump the counter to the full overpayment
-								// and stamp `creditConsumedAt`.
-								data: {
-									creditConsumedInCents: s.amountPaidInCents - s.totalInCents,
-									creditConsumedAt: new Date(),
-								},
-							});
-
-							totalCreditPulledCents += creditCents;
-							sortIndex += 1;
-						}
-
-						creditLineCount = sourcesWithCredit.length;
-					}
 
 					const memberPackage = await tx.memberPackage.create({
 						data: {

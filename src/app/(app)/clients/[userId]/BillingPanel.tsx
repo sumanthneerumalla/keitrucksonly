@@ -12,6 +12,7 @@ import {
 } from "~/lib/invoiceStatus";
 import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
+import AddChargeModal from "./AddChargeModal";
 import RecordPaymentModal from "./RecordPaymentModal";
 
 /**
@@ -172,6 +173,7 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 	const [closeTarget, setCloseTarget] = useState<{
 		invoice: InvoiceRow;
 	} | null>(null);
+	const [addChargeOpen, setAddChargeOpen] = useState(false);
 
 	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
 		onSuccess: async (result) => {
@@ -192,10 +194,19 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 
 	return (
 		<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
-			<h4 className="mb-3 flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
-				<Receipt size={14} />
-				Billing
-			</h4>
+			<div className="mb-3 flex items-center justify-between gap-2">
+				<h4 className="flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
+					<Receipt size={14} />
+					Billing
+				</h4>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => setAddChargeOpen(true)}
+				>
+					Add charge
+				</Button>
+			</div>
 
 			{isLoading && (
 				<div className="space-y-3">
@@ -394,6 +405,12 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 				}}
 				userId={userId}
 				invoice={paymentInvoice}
+			/>
+
+			<AddChargeModal
+				open={addChargeOpen}
+				onOpenChange={setAddChargeOpen}
+				userId={userId}
 			/>
 
 			<AlertDialog

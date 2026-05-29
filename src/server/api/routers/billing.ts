@@ -16,6 +16,7 @@ import {
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
 import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
+import { getOrCreateOpenInvoice } from "~/server/utils/invoiceTab";
 import {
 	getCurrentUser,
 	isFacilityOrAbove,
@@ -1820,6 +1821,221 @@ export const billingRouter = createTRPCRouter({
 								paymentId: input.paymentId,
 								invoiceId: payment.invoiceId,
 								reason,
+							},
+						}),
+					};
+				},
+			);
+		}),
+
+	/**
+	 * Phase 9a — add an ad-hoc / one-off charge to a member's running tab
+	 * (drinks, equipment, fees, or any catalog Product sold directly). Mirrors
+	 * the package-sale path: routes through `getOrCreateOpenInvoice` (same
+	 * advisory lock, numbering, Option-3 keying, recompute + auto-close) and
+	 * appends ONE line item — `PRODUCT_SALE` when a catalog product is chosen
+	 * (snapshots its revenue category), else a free-text `FEE`. No tax/discount
+	 * in v1. `facilityProcedure` (front-desk action, like recordPayment).
+	 * Optional `billToUserId` bills a different payer (keyed to that payer's tab);
+	 * omitted = self-pay.
+	 */
+	addAdHocCharge: facilityProcedure
+		.input(
+			z.object({
+				userId: z.string().min(1),
+				billToUserId: z.string().min(1).optional(),
+				// null = custom free-text fee; set = a catalog product sold directly.
+				productId: z.string().min(1).nullable(),
+				description: z.string().trim().min(1).max(500),
+				quantity: z.number().int().positive().max(1000),
+				// Cents; editable by staff even for a catalog product. $1M per-unit
+				// cap protects against gibberish input; the multiplied line total
+				// (price × qty) has its own cap in the handler below to stay within
+				// the Int32 column range on Invoice/InvoiceLineItem.
+				unitPriceInCents: z.number().int().positive().max(100_000_000),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const member = await ctx.db.user.findFirst({
+				where: { userId: input.userId, clubShortName: ctx.user.clubShortName },
+				select: { userId: true, activeFacilityId: true },
+			});
+			if (!member) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found in this club",
+				});
+			}
+
+			// Validate bill-to (when provided and not the consumer); derive the
+			// effective payer used for tab routing + the advisory lock.
+			if (input.billToUserId && input.billToUserId !== input.userId) {
+				const billTo = await ctx.db.user.findFirst({
+					where: {
+						userId: input.billToUserId,
+						clubShortName: ctx.user.clubShortName,
+					},
+					select: { userId: true },
+				});
+				if (!billTo) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Bill-to user not found in this club",
+					});
+				}
+			}
+			const effectivePayerUserId =
+				input.billToUserId && input.billToUserId !== input.userId
+					? input.billToUserId
+					: input.userId;
+
+			// Catalog product → snapshot its revenue category onto the line. Matches
+			// `sellPackage`'s guardrail: only ACTIVE products can be sold (staff can
+			// reactivate an archived product first if they really need to bill it).
+			let revenueCategoryId: string | null = null;
+			if (input.productId) {
+				const product = await ctx.db.product.findFirst({
+					where: {
+						productId: input.productId,
+						clubShortName: ctx.user.clubShortName,
+						isActive: true,
+					},
+					select: { productId: true, revenueCategoryId: true },
+				});
+				if (!product) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Product not found in this club",
+					});
+				}
+				revenueCategoryId = product.revenueCategoryId;
+			}
+
+			const kind = input.productId ? "PRODUCT_SALE" : "FEE";
+			const lineSubtotalInCents = input.unitPriceInCents * input.quantity;
+			const lineTotalInCents = lineSubtotalInCents; // no tax/discount in v1
+
+			// Invoice.totalInCents / InvoiceLineItem.totalInCents are Postgres Int4
+			// (~$21.47M max). Per-unit + quantity bounds individually allow a line
+			// total up to $1B in cents — cap the multiplied total here so a
+			// pathological pair never overflows the column at insert time. Same
+			// $1M ceiling as the per-unit cap, applied to the line as a whole.
+			if (lineTotalInCents > 100_000_000) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Line total cannot exceed $1,000,000",
+				});
+			}
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Advisory lock FIRST — the precondition getOrCreateOpenInvoice
+					// documents; shared `invoice-payer-` key serializes all charge +
+					// payment activity on this payer's tab.
+					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+
+					const { invoice, totalCreditPulledCents } =
+						await getOrCreateOpenInvoice(tx, {
+							clubShortName: ctx.user.clubShortName,
+							consumerUserId: input.userId,
+							effectivePayerUserId,
+							facilityId: member.activeFacilityId,
+							createdByUserId: ctx.user.userId,
+						});
+
+					// Append AFTER existing lines (and after any credit lines on a fresh
+					// invoice): next sortOrder = current max + 1.
+					const lastLine = await tx.invoiceLineItem.findFirst({
+						where: { invoiceId: invoice.invoiceId },
+						orderBy: { sortOrder: "desc" },
+						select: { sortOrder: true },
+					});
+					const sortOrder = (lastLine?.sortOrder ?? -1) + 1;
+
+					assertLineItemKindConsistency({ kind, productId: input.productId });
+					await tx.invoiceLineItem.create({
+						data: {
+							invoiceId: invoice.invoiceId,
+							kind,
+							productId: input.productId,
+							description: input.description,
+							quantity: input.quantity,
+							unitPriceInCents: input.unitPriceInCents,
+							discountInCents: 0,
+							taxRateBps: 0,
+							taxAmountInCents: 0,
+							totalInCents: lineTotalInCents,
+							revenueCategoryId,
+							sortOrder,
+						},
+					});
+
+					// Recompute subtotal/total + status (mirrors sellPackage). On a fresh
+					// tab `totalCreditPulledCents` is 0 (auto-apply off) → "old + charge".
+					const subtotalDelta = lineSubtotalInCents - totalCreditPulledCents;
+					const totalDelta = lineTotalInCents - totalCreditPulledCents;
+					const newSubtotal = invoice.subtotalInCents + subtotalDelta;
+					const newTotal = invoice.totalInCents + totalDelta;
+					const amountPaid = invoice.amountPaidInCents;
+					let newStatus: string;
+					if (amountPaid >= newTotal) {
+						newStatus = "paid";
+					} else if (amountPaid <= 0) {
+						newStatus = "open";
+					} else {
+						newStatus = "partially_paid";
+					}
+					const shouldAutoClose = newStatus === "paid";
+
+					const updatedInvoice = await tx.invoice.update({
+						where: { invoiceId: invoice.invoiceId },
+						data: {
+							subtotalInCents: newSubtotal,
+							totalInCents: newTotal,
+							status: newStatus,
+							...(shouldAutoClose
+								? { closedAt: new Date(), closedBy: ctx.user.userId }
+								: {}),
+						},
+						select: {
+							invoiceId: true,
+							invoiceNumber: true,
+							status: true,
+							totalInCents: true,
+							amountPaidInCents: true,
+						},
+					});
+
+					return {
+						result: { invoice: updatedInvoice },
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.ADHOC_CHARGE_ADDED,
+							consumerUserId: input.userId,
+							// Single source of truth — `effectivePayerUserId` already
+							// collapses to the consumer for self-pay; null it back here so
+							// the audit emits ONE row for self-pay and the consumer+payer
+							// pair for bill-to (the `buildPartyAuditEntries` convention).
+							payerUserId:
+								effectivePayerUserId === input.userId
+									? null
+									: effectivePayerUserId,
+							entityType: "Invoice",
+							entityId: updatedInvoice.invoiceId,
+							metadata: {
+								kind,
+								productId: input.productId,
+								description: input.description,
+								quantity: input.quantity,
+								unitPriceInCents: input.unitPriceInCents,
+								lineTotalInCents,
+								invoiceId: updatedInvoice.invoiceId,
 							},
 						}),
 					};
