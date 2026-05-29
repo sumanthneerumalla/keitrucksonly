@@ -24,7 +24,7 @@ export default async function MyInvoicesPage() {
 	return (
 		<div className="mx-auto max-w-4xl p-4 sm:p-6">
 			<h1 className="mb-4 font-semibold text-[var(--foreground)] text-xl">
-				Invoices
+				My Invoices
 			</h1>
 			<BillingPanel userId={user.userId} audience="member" />
 		</div>

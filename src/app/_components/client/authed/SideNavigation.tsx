@@ -82,7 +82,12 @@ export const navItems: NavItem[] = [
 		userTypes: ALL_TYPES,
 	},
 	{
-		label: "Invoices",
+		// "My Invoices" (not just "Invoices") signals this is the user's PERSONAL
+		// billing — distinct from staff's /admin/invoices and the per-member
+		// /clients/[userId] panel. Visible to ALL_TYPES because staff/coaches/
+		// admins can themselves be members of the club they work at and may need
+		// to see their own charges.
+		label: "My Invoices",
 		href: "/invoices",
 		icon: <Receipt size={20} />,
 		userTypes: ALL_TYPES,
