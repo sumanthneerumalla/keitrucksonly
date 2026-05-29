@@ -266,73 +266,16 @@ export const navItems: NavItem[] = [
 				],
 			},
 			{
-				label: "Documents",
-				href: "/admin#documents",
+				// Promoted out of the old "Billing" placeholder grouping (whose
+				// other children — Uninvoiced: User, Uninvoiced: Location — were
+				// unwired stubs). The matching SectionCard on the admin index
+				// points at the same destination.
+				label: "Billed Invoices",
+				href: "/admin/invoices",
 				userTypes: [
 					UserType.PLATFORM_ADMIN,
 					UserType.CLUB_ADMIN,
 					UserType.FACILITY,
-				],
-				children: [
-					{
-						label: "Document History",
-						href: "/admin#document-history",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-					{
-						label: "Templates",
-						href: "/admin#document-templates",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-				],
-			},
-			{
-				label: "Billing",
-				href: "/admin#billing",
-				userTypes: [
-					UserType.PLATFORM_ADMIN,
-					UserType.CLUB_ADMIN,
-					UserType.FACILITY,
-				],
-				children: [
-					{
-						label: "Uninvoiced: User",
-						href: "/admin#uninvoiced-user",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-					{
-						label: "Uninvoiced: Location",
-						href: "/admin#uninvoiced-location",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-					{
-						// Renamed from "Review Post Billing" + anchor link; now points at
-						// the real /admin/invoices list page (which the matching SectionCard
-						// on the admin index also links to).
-						label: "Billed Invoices",
-						href: "/admin/invoices",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
 				],
 			},
 			{
@@ -500,7 +443,6 @@ export default function SideNavigation({
 																							>
 																								<SidebarMenuSubButton
 																									asChild
-																									className="text-xs"
 																									isActive={
 																										pathname ===
 																										(gc.href?.split("#")[0] ||
