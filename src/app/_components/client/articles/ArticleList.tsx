@@ -198,12 +198,11 @@ export default function ArticleList({
 										{(() => {
 											// Phase 15 fixup F2: unauthorized callers (per Q9
 											// per-author rule) must NOT land on the editor page —
-											// link them to the public reading surface where one
-											// exists. Club public pages don't exist yet (Step 4),
-											// so unauthorized club-published rows render as plain
-											// text for now. Drafts likewise render as plain text
-											// (Q11 hides other authors' drafts from the list, but
-											// this is defense-in-depth).
+											// link them to the public reading surface. Both
+											// platform and club public surfaces exist (Step 4),
+											// so PUBLISHED rows always link out. Drafts render as
+											// plain text (Q11 hides other authors' drafts from the
+											// list, but this is defense-in-depth).
 											const titleClass = "font-medium text-[var(--foreground)]";
 											if (article.canEdit) {
 												return (
@@ -228,17 +227,21 @@ export default function ArticleList({
 													</Link>
 												);
 											}
+											if (
+												article.status === ArticleStatus.PUBLISHED &&
+												article.clubShortName !== null
+											) {
+												return (
+													<Link
+														href={`/${article.clubShortName}/articles/${article.slug}`}
+														className={`${titleClass} hover:text-primary`}
+													>
+														{article.title}
+													</Link>
+												);
+											}
 											return (
-												<span
-													className={titleClass}
-													title={
-														article.status === ArticleStatus.PUBLISHED
-															? "View on club's public page coming soon"
-															: undefined
-													}
-												>
-													{article.title}
-												</span>
+												<span className={titleClass}>{article.title}</span>
 											);
 										})()}
 										<div className="text-[var(--muted-foreground)] text-xs">

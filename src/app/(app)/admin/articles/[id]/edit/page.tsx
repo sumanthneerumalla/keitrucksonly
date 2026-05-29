@@ -39,10 +39,7 @@ export default async function EditArticlePage({
 			redirect(`/articles/${initial.slug}`);
 		}
 		if (initial.status === "PUBLISHED" && initial.clubShortName !== null) {
-			// TODO: replace with `/<short>/articles/<slug>` once Step 4 (club
-			// public pages) ships. For now, defer to the admin list with a
-			// notice indicating the public surface isn't built yet.
-			redirect("/admin/articles?notice=read-via-public");
+			redirect(`/${initial.clubShortName}/articles/${initial.slug}`);
 		}
 		// DRAFT — should be rare since Q11 hides other authors' drafts from
 		// the list; this is defense-in-depth for direct-URL access.

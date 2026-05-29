@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { CONTENT_IMAGE_URL } from "~/lib/article";
+import {
+	ALLOWED_CONTENT_IMAGE_MIME_TYPES,
+	CONTENT_IMAGE_URL,
+} from "~/lib/article";
 import { createTRPCRouter, staffProcedure } from "~/server/api/trpc";
 import { processBase64Image } from "~/server/utils/utils";
 
@@ -20,8 +23,15 @@ export const contentImageRouter = createTRPCRouter({
 	upload: staffProcedure
 		.input(
 			z.object({
-				base64: z.string(),
-				mimeType: z.string(),
+				// F29: bound body size pre-parse (~3MB binary after base64 inflation
+				// — base64 ≈ 4/3 the binary length). Friendly zod error before
+				// Next's body-parser limit.
+				base64: z.string().max(4_500_000),
+				// F21: whitelist mimeTypes. SVG deliberately excluded — it can
+				// embed executable JS via <script>, which is itself an XSS vector
+				// when served back through /api/content-image/[id]. Allowlist
+				// shared with the client via ~/lib/article.ts so both sides agree.
+				mimeType: z.enum(ALLOWED_CONTENT_IMAGE_MIME_TYPES),
 				alt: z.string().max(300).optional(),
 			}),
 		)

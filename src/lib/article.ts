@@ -13,6 +13,34 @@ import type { RouterOutputs } from "~/trpc/react";
 export const CONTENT_IMAGE_URL = (imageId: string) =>
 	`/api/content-image/${imageId}`;
 
+/**
+ * F21: client/server-shared allowlist for ContentImage uploads. SVG is
+ * deliberately excluded — it can embed executable JS via <script>, which is
+ * itself an XSS vector when served back through /api/content-image/[id].
+ *
+ * The server (`~/server/api/routers/contentImage.ts`) defines the same set as
+ * a zod enum (the tRPC contract). This array lets the client narrow
+ * `file.type` to the typed mimeType before calling the mutation, so a
+ * disallowed format surfaces a friendly UI error instead of a zod 400.
+ */
+export const ALLOWED_CONTENT_IMAGE_MIME_TYPES = [
+	"image/jpeg",
+	"image/png",
+	"image/webp",
+	"image/gif",
+] as const;
+
+export type AllowedContentImageMimeType =
+	(typeof ALLOWED_CONTENT_IMAGE_MIME_TYPES)[number];
+
+export function isAllowedContentImageMimeType(
+	mimeType: string,
+): mimeType is AllowedContentImageMimeType {
+	return (ALLOWED_CONTENT_IMAGE_MIME_TYPES as readonly string[]).includes(
+		mimeType,
+	);
+}
+
 // ─── Return-shape type contracts (imported by UI agents) ─────────────────────
 
 export type ArticleInput = {

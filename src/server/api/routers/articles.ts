@@ -304,14 +304,16 @@ export const articlesRouter = createTRPCRouter({
 				...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
 			});
 
-			let nextCursor: string | undefined;
-			if (rows.length > limit) {
-				const next = rows.pop();
-				nextCursor = next?.id;
-			}
+			// Cursor pattern (matches checkin.ts:737-741): take limit+1 to peek
+			// ahead, then slice off the extra row. nextCursor is the LAST
+			// DISPLAYED id — the next call uses `cursor: { id: cursor }, skip: 1`
+			// to skip past that id and resume with the next row.
+			const hasMore = rows.length > limit;
+			const page = hasMore ? rows.slice(0, limit) : rows;
+			const nextCursor = hasMore ? page[page.length - 1]?.id : undefined;
 
 			return {
-				items: rows.map(toArticleCard),
+				items: page.map(toArticleCard),
 				nextCursor,
 			};
 		}),
@@ -450,14 +452,16 @@ export const articlesRouter = createTRPCRouter({
 				...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
 			});
 
-			let nextCursor: string | undefined;
-			if (rows.length > limit) {
-				const next = rows.pop();
-				nextCursor = next?.id;
-			}
+			// Cursor pattern (matches checkin.ts:737-741): take limit+1 to peek
+			// ahead, then slice off the extra row. nextCursor is the LAST
+			// DISPLAYED id — the next call uses `cursor: { id: cursor }, skip: 1`
+			// to skip past that id and resume with the next row.
+			const hasMore = rows.length > limit;
+			const page = hasMore ? rows.slice(0, limit) : rows;
+			const nextCursor = hasMore ? page[page.length - 1]?.id : undefined;
 
 			return {
-				items: rows.map(toArticleCard),
+				items: page.map(toArticleCard),
 				nextCursor,
 			};
 		}),

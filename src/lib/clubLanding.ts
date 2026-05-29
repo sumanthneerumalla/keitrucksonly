@@ -131,32 +131,3 @@ export function matchClubShortUrlPathname(
 	// Any other deeper path (e.g. /<short>/dashboard) is NOT a club short URL.
 	return null;
 }
-
-/**
- * Legacy adapter — keep the original single-string return for callers that
- * only need the shortname. Currently unused externally; preserved for any
- * future caller that wants the bare-landing-only behavior.
- *
- * Returns the shortname if `pathname` is a bare /<short> or /<short>/, else
- * null. Does NOT match deeper paths like /<short>/articles — use
- * matchClubShortUrlPathname for the full pattern set.
- */
-export function getClubShortnameFromShortUrlPathname(
-	pathname: string,
-): string | null {
-	const topLevel = pathnameToTopLevelSegment(pathname);
-	return isClubLandingShortUrlPathname(pathname) ? topLevel : null;
-}
-
-export function isClubLandingInternalPathname(pathname: string): boolean {
-	const normalized = normalizePathname(pathname);
-
-	if (!normalized.startsWith("/club/")) {
-		return false;
-	}
-
-	const clubShortname = normalized.slice("/club/".length);
-	return CLUB_LANDING_SHORTNAMES.includes(
-		clubShortname as (typeof CLUB_LANDING_SHORTNAMES)[number],
-	);
-}

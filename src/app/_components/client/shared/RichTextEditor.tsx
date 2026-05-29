@@ -16,6 +16,10 @@ import {
 	Loader2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import {
+	ALLOWED_CONTENT_IMAGE_MIME_TYPES,
+	isAllowedContentImageMimeType,
+} from "~/lib/article";
 import { api } from "~/trpc/react";
 
 interface RichTextEditorProps {
@@ -95,6 +99,17 @@ export default function RichTextEditor({
 		if (e.target) e.target.value = "";
 		if (!file || !editor) return;
 
+		// F21: surface a friendly error when the browser hands us an
+		// unsupported image type (e.g. an .svg or .heic the user picked despite
+		// `accept="image/*"`), instead of failing on the server's zod check.
+		if (!isAllowedContentImageMimeType(file.type)) {
+			setUploadError(
+				`Unsupported image type. Allowed: ${ALLOWED_CONTENT_IMAGE_MIME_TYPES.join(", ")}.`,
+			);
+			return;
+		}
+		const mimeType = file.type;
+
 		setUploading(true);
 		setUploadError(null);
 		try {
@@ -111,7 +126,7 @@ export default function RichTextEditor({
 
 			const result = await uploadImageMutation.mutateAsync({
 				base64,
-				mimeType: file.type,
+				mimeType,
 				alt: "",
 			});
 

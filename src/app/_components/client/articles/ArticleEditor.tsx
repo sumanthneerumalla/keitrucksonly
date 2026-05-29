@@ -17,7 +17,12 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import RichTextEditor from "~/app/_components/client/shared/RichTextEditor";
 import { useToast } from "~/app/_components/shared/Toast";
-import { type AdminArticleDetail, CONTENT_IMAGE_URL } from "~/lib/article";
+import {
+	ALLOWED_CONTENT_IMAGE_MIME_TYPES,
+	type AdminArticleDetail,
+	CONTENT_IMAGE_URL,
+	isAllowedContentImageMimeType,
+} from "~/lib/article";
 import { slugify } from "~/lib/slug";
 import { api } from "~/trpc/react";
 import TagPicker from "./TagPicker";
@@ -159,6 +164,16 @@ export default function ArticleEditor({
 		if (e.target) e.target.value = "";
 		if (!file) return;
 
+		// F21: surface a friendly error when the browser hands us an
+		// unsupported image type, instead of failing on the server's zod check.
+		if (!isAllowedContentImageMimeType(file.type)) {
+			setCoverUploadError(
+				`Unsupported image type. Allowed: ${ALLOWED_CONTENT_IMAGE_MIME_TYPES.join(", ")}.`,
+			);
+			return;
+		}
+		const mimeType = file.type;
+
 		setCoverUploading(true);
 		setCoverUploadError(null);
 		try {
@@ -173,7 +188,7 @@ export default function ArticleEditor({
 
 			const result = await uploadImageMutation.mutateAsync({
 				base64,
-				mimeType: file.type,
+				mimeType,
 				alt: coverImageAlt || "",
 			});
 

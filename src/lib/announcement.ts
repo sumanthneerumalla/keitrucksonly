@@ -58,9 +58,6 @@ export type AdminAnnouncementRow = {
 export type AdminAnnouncementDetail =
 	RouterOutputs["announcements"]["adminGetById"];
 
-// Older alias retained as documented type name in the brief.
-export type AnnouncementDetail = AdminAnnouncementDetail;
-
 /**
  * Client-side mirror of the server `canModifyAnnouncement` helper (Q10).
  * The server still enforces (defense in depth) — this exists purely to hide

@@ -86,7 +86,7 @@ function coverImageUrl(coverImageId: string | null): string | null {
 
 const announcementCreateSchema = z.object({
 	clubShortName: z.string(),
-	title: z.string().max(200).optional(),
+	title: z.string().max(200).nullable().optional(),
 	bodyHtml: z.string(),
 	status: z.nativeEnum(AnnouncementStatus),
 	publishedAt: z.date().optional(),
@@ -98,7 +98,10 @@ const announcementUpdateSchema = z.object({
 	title: z.string().max(200).nullable().optional(),
 	bodyHtml: z.string().optional(),
 	status: z.nativeEnum(AnnouncementStatus).optional(),
-	publishedAt: z.date().nullable().optional(),
+	// F25: parity with articles router. null is unreachable from the UI today
+	// (Q-style clearing of publishedAt isn't a flow we expose), so keep the
+	// schema tight.
+	publishedAt: z.date().optional(),
 	coverImageId: z.string().nullable().optional(),
 	// Q8 — Even if clients send this, the server strips it. Accepted in the
 	// schema so older payloads don't fail the parse.
@@ -171,14 +174,16 @@ export const announcementsRouter = createTRPCRouter({
 				...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
 			});
 
-			let nextCursor: string | undefined;
-			if (rows.length > limit) {
-				const next = rows.pop();
-				nextCursor = next?.id;
-			}
+			// Cursor pattern (matches checkin.ts:737-741): take limit+1 to peek
+			// ahead, then slice off the extra row. nextCursor is the LAST
+			// DISPLAYED id — the next call uses `cursor: { id: cursor }, skip: 1`
+			// to skip past that id and resume with the next row.
+			const hasMore = rows.length > limit;
+			const page = hasMore ? rows.slice(0, limit) : rows;
+			const nextCursor = hasMore ? page[page.length - 1]?.id : undefined;
 
 			return {
-				items: rows.map(toAnnouncementCard),
+				items: page.map(toAnnouncementCard),
 				nextCursor,
 			};
 		}),

@@ -8,7 +8,11 @@ import { useMemo, useState } from "react";
 import RichTextEditor from "~/app/_components/client/shared/RichTextEditor";
 import { useToast } from "~/app/_components/shared/Toast";
 import type { AdminAnnouncementDetail } from "~/lib/announcement";
-import { CONTENT_IMAGE_URL } from "~/lib/article";
+import {
+	ALLOWED_CONTENT_IMAGE_MIME_TYPES,
+	CONTENT_IMAGE_URL,
+	isAllowedContentImageMimeType,
+} from "~/lib/article";
 import { api } from "~/trpc/react";
 
 const TITLE_MAX = 200;
@@ -103,6 +107,16 @@ export default function AnnouncementEditor({
 		if (e.target) e.target.value = "";
 		if (!file) return;
 
+		// F21: surface a friendly error when the browser hands us an
+		// unsupported image type, instead of failing on the server's zod check.
+		if (!isAllowedContentImageMimeType(file.type)) {
+			setCoverUploadError(
+				`Unsupported image type. Allowed: ${ALLOWED_CONTENT_IMAGE_MIME_TYPES.join(", ")}.`,
+			);
+			return;
+		}
+		const mimeType = file.type;
+
 		setCoverUploading(true);
 		setCoverUploadError(null);
 		try {
@@ -117,7 +131,7 @@ export default function AnnouncementEditor({
 
 			const result = await uploadImageMutation.mutateAsync({
 				base64,
-				mimeType: file.type,
+				mimeType,
 				alt: coverImageAlt || "",
 			});
 
@@ -143,7 +157,7 @@ export default function AnnouncementEditor({
 		| {
 				ok: true;
 				value: {
-					title?: string;
+					title: string | null;
 					bodyHtml: string;
 					status: AnnouncementStatus;
 					publishedAt?: Date;
@@ -166,7 +180,11 @@ export default function AnnouncementEditor({
 		return {
 			ok: true,
 			value: {
-				title: title.trim() || undefined,
+				// F19: send explicit null when the user clears the title so the
+				// router's update logic actually persists the change. Undefined
+				// would be treated as "don't touch" (announcementUpdateSchema
+				// accepts nullable().optional()).
+				title: title.trim() || null,
 				bodyHtml,
 				status: nextStatus,
 				publishedAt: publishedAtDate,
@@ -397,6 +415,39 @@ export default function AnnouncementEditor({
 				{coverUploadError && (
 					<p className="mt-1 text-destructive text-sm">{coverUploadError}</p>
 				)}
+
+				{/* Cover image alt text (F20) — mirrors ArticleEditor pattern. F3
+				    logic: disabled when coverImageId is set because alt is stamped
+				    on the ContentImage at upload time; user must re-upload to change
+				    it. The state value is still used as the `alt:` argument to the
+				    next upload mutation. */}
+				<div className="mt-3">
+					<label
+						htmlFor="announcement-cover-alt"
+						className="mb-1.5 block font-medium text-sm"
+					>
+						Cover image alt text
+					</label>
+					<input
+						id="announcement-cover-alt"
+						type="text"
+						value={coverImageAlt}
+						onChange={(e) => setCoverImageAlt(e.target.value)}
+						disabled={coverImageId !== null}
+						title={
+							coverImageId !== null
+								? "Alt text is set on the image when uploaded. To change it, remove the cover and re-upload."
+								: undefined
+						}
+						placeholder="Describe the cover image for accessibility"
+						className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:bg-muted"
+						maxLength={300}
+					/>
+					<p className="mt-1 text-muted-foreground text-xs">
+						Describe the image for screen readers. Set once at upload —
+						re-upload to change.
+					</p>
+				</div>
 			</div>
 
 			{/* Body */}

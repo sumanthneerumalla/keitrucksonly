@@ -170,27 +170,53 @@ async function fetchClubAnnouncementEntries(): Promise<MetadataRoute.Sitemap> {
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 	try {
-		const [articles, tags, clubEntries, announcementEntries] =
+		// F27: each fetch is independently guarded so one transient failure
+		// doesn't wipe out the dynamic sections from the other three. The outer
+		// try/catch below remains the catastrophic-failure fallback (e.g. if
+		// even building the static routes throws).
+		const [articleEntries, tagEntries, clubEntries, announcementEntries] =
 			await Promise.all([
-				fetchAllPlatformArticles(),
-				api.articles.listTags(),
-				fetchClubArticleEntries(),
-				fetchClubAnnouncementEntries(),
+				(async (): Promise<MetadataRoute.Sitemap> => {
+					try {
+						const articles = await fetchAllPlatformArticles();
+						return articles.map((p) => ({
+							url: `${SITE_URL}/articles/${p.slug}`,
+							lastModified: p.publishedAt,
+							changeFrequency: "monthly",
+							priority: 0.7,
+						}));
+					} catch {
+						return [];
+					}
+				})(),
+				(async (): Promise<MetadataRoute.Sitemap> => {
+					try {
+						const tags = await api.articles.listTags();
+						return tags.map((t) => ({
+							url: `${SITE_URL}/articles/tag/${t.slug}`,
+							lastModified: new Date(),
+							changeFrequency: "weekly",
+							priority: 0.5,
+						}));
+					} catch {
+						return [];
+					}
+				})(),
+				(async (): Promise<MetadataRoute.Sitemap> => {
+					try {
+						return await fetchClubArticleEntries();
+					} catch {
+						return [];
+					}
+				})(),
+				(async (): Promise<MetadataRoute.Sitemap> => {
+					try {
+						return await fetchClubAnnouncementEntries();
+					} catch {
+						return [];
+					}
+				})(),
 			]);
-
-		const articleEntries: MetadataRoute.Sitemap = articles.map((p) => ({
-			url: `${SITE_URL}/articles/${p.slug}`,
-			lastModified: p.publishedAt,
-			changeFrequency: "monthly",
-			priority: 0.7,
-		}));
-
-		const tagEntries: MetadataRoute.Sitemap = tags.map((t) => ({
-			url: `${SITE_URL}/articles/tag/${t.slug}`,
-			lastModified: new Date(),
-			changeFrequency: "weekly",
-			priority: 0.5,
-		}));
 
 		return [
 			...STATIC_ROUTES,
