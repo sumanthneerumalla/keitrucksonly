@@ -2042,4 +2042,375 @@ export const billingRouter = createTRPCRouter({
 				},
 			);
 		}),
+
+	/**
+	 * Phase 9a (E18 detection) — list a member's UNCOVERED billable event
+	 * registrations. A row is returned when:
+	 *  - the registration is for an event with a productId + creditCost > 0
+	 *    (billable per decision #9),
+	 *  - the registration's status is billable per #9 (CHECKED_IN / NO_SHOW /
+	 *    LATE_CANCEL — Attended / No-show / Late-cancel),
+	 *  - NO PackageCreditUsage row links this registration (credit didn't cover
+	 *    it — consumeCredit returned no_match/insufficient at registration/check-in),
+	 *  - NO InvoiceLineItem already points at this registration (not yet billed —
+	 *    the new eventRegistrationId FK is the idempotency key).
+	 * Powers the "Needs billing" 1-click list on the member's client page.
+	 */
+	listUncoveredEvents: facilityProcedure
+		.input(z.object({ userId: z.string().min(1) }))
+		.query(async ({ ctx, input }) => {
+			const member = await ctx.db.user.findFirst({
+				where: { userId: input.userId, clubShortName: ctx.user.clubShortName },
+				select: { userId: true },
+			});
+			if (!member) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found in this club",
+				});
+			}
+			const rows = await ctx.db.eventRegistration.findMany({
+				where: {
+					userId: input.userId,
+					status: { in: ["CHECKED_IN", "NO_SHOW", "LATE_CANCEL"] },
+					event: {
+						clubShortName: ctx.user.clubShortName,
+						isDeleted: false,
+						productId: { not: null },
+						creditCost: { gt: 0 },
+					},
+					// No credit was consumed AND no invoice line has billed it yet.
+					creditUsages: { none: {} },
+					invoiceLineItems: { none: {} },
+				},
+				select: {
+					registrationId: true,
+					status: true,
+					event: {
+						select: {
+							eventId: true,
+							title: true,
+							start: true,
+							creditCost: true,
+							product: {
+								select: {
+									productId: true,
+									name: true,
+									priceInCents: true,
+									isActive: true,
+								},
+							},
+						},
+					},
+				},
+				orderBy: { event: { start: "desc" } },
+				take: 100,
+			});
+			return {
+				rows: rows.map((r) => ({
+					registrationId: r.registrationId,
+					status: r.status,
+					eventId: r.event.eventId,
+					eventTitle: r.event.title,
+					eventStart: r.event.start,
+					creditCost: r.event.creditCost ?? 1,
+					productName: r.event.product?.name ?? null,
+					productId: r.event.product?.productId ?? null,
+					priceInCents: r.event.product?.priceInCents ?? 0,
+					productIsActive: r.event.product?.isActive ?? false,
+				})),
+			};
+		}),
+
+	/**
+	 * Phase 9a (E18 1-click bill) — bill an uncovered billable event registration.
+	 * Creates an EVENT_REGISTRATION line item linked to the registration via
+	 * `eventRegistrationId` (the idempotency key). Routes through
+	 * `getOrCreateOpenInvoice` (same advisory lock + Option-3 (consumer,payer)
+	 * tab keying + recompute + auto-close as sellPackage / addAdHocCharge).
+	 *
+	 * Guards (the second three re-checked INSIDE the per-payer advisory lock):
+	 *  - registration belongs to caller's club, event not deleted, has a product,
+	 *    product is active (matches sellPackage's guardrail),
+	 *  - status is billable per #9 (CHECKED_IN / NO_SHOW / LATE_CANCEL),
+	 *  - IDEMPOTENCY: no InvoiceLineItem with this eventRegistrationId — CONFLICT
+	 *    otherwise (a concurrent staff click would otherwise double-bill since
+	 *    eventRegistrationId has no DB-level unique constraint yet),
+	 *  - no PackageCreditUsage row for this registration (a concurrent staff
+	 *    check-in could have just consumed credit — CONFLICT, "covered by package").
+	 *
+	 * Optional `billToUserId` bills a different payer (parent etc.); omitted =
+	 * self-pay (the consumer is the payer).
+	 */
+	chargeEventRegistration: facilityProcedure
+		.input(
+			z.object({
+				registrationId: z.string().min(1),
+				billToUserId: z.string().min(1).optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const reg = await ctx.db.eventRegistration.findFirst({
+				where: { registrationId: input.registrationId },
+				select: {
+					registrationId: true,
+					userId: true,
+					status: true,
+					user: {
+						select: {
+							userId: true,
+							activeFacilityId: true,
+							clubShortName: true,
+						},
+					},
+					event: {
+						select: {
+							eventId: true,
+							title: true,
+							start: true,
+							productId: true,
+							isDeleted: true,
+							clubShortName: true,
+							product: {
+								select: {
+									productId: true,
+									priceInCents: true,
+									revenueCategoryId: true,
+									isActive: true,
+								},
+							},
+						},
+					},
+				},
+			});
+			if (
+				!reg ||
+				reg.user.clubShortName !== ctx.user.clubShortName ||
+				reg.event.clubShortName !== ctx.user.clubShortName
+			) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Registration not found in this club",
+				});
+			}
+			if (reg.event.isDeleted) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "Cannot bill a deleted event",
+				});
+			}
+			if (!reg.event.productId || !reg.event.product) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						"Event has no linked product — not billable as an event charge",
+				});
+			}
+			if (!reg.event.product.isActive) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						"The event's product is inactive — reactivate or use Add charge with a custom amount",
+				});
+			}
+			// Local non-null alias so TS narrowing carries into the tx callback
+			// below (the closure otherwise loses the narrowing on
+			// `reg.event.product` across the async boundary).
+			const product = reg.event.product;
+			const BILLABLE_STATUSES = new Set([
+				"CHECKED_IN",
+				"NO_SHOW",
+				"LATE_CANCEL",
+			]);
+			if (!BILLABLE_STATUSES.has(reg.status)) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: `Registration status ${reg.status} is not billable`,
+				});
+			}
+
+			// Bill-to validation (when provided and not the consumer).
+			if (input.billToUserId && input.billToUserId !== reg.userId) {
+				const billTo = await ctx.db.user.findFirst({
+					where: {
+						userId: input.billToUserId,
+						clubShortName: ctx.user.clubShortName,
+					},
+					select: { userId: true },
+				});
+				if (!billTo) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Bill-to user not found in this club",
+					});
+				}
+			}
+			const effectivePayerUserId =
+				input.billToUserId && input.billToUserId !== reg.userId
+					? input.billToUserId
+					: reg.userId;
+
+			const unitPriceInCents = product.priceInCents;
+			if (unitPriceInCents <= 0) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						"Event product has no price — use Add charge with a custom amount",
+				});
+			}
+			// Same Int4 ceiling as addAdHocCharge — defensive guard for absurd prices.
+			if (unitPriceInCents > 100_000_000) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Event price cannot exceed $1,000,000",
+				});
+			}
+			const lineTotalInCents = unitPriceInCents; // qty 1, no tax/discount in v1
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Advisory lock FIRST — shared `invoice-payer-` key serializes all
+					// charge + payment activity on this payer's tab (the precondition
+					// documented on getOrCreateOpenInvoice).
+					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+
+					// Idempotency re-check INSIDE the lock: another concurrent click
+					// (or a stale-list submission) must not double-bill the same
+					// session. The eventRegistrationId FK lacks a DB-level unique
+					// constraint (additive nullable column, no @@unique migration yet),
+					// so this app-level guard is what keeps the books honest.
+					const existingLine = await tx.invoiceLineItem.findFirst({
+						where: { eventRegistrationId: reg.registrationId },
+						select: { lineItemId: true, invoiceId: true },
+					});
+					if (existingLine) {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: "This session has already been billed",
+						});
+					}
+					// Re-check credit-coverage too: a concurrent staff check-in could
+					// have consumed credit AFTER we listed the row, in which case the
+					// session is now covered and shouldn't be billed.
+					const usage = await tx.packageCreditUsage.findFirst({
+						where: { registrationId: reg.registrationId },
+						select: { usageId: true },
+					});
+					if (usage) {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message:
+								"This session was just covered by a package — no charge needed",
+						});
+					}
+
+					const { invoice, totalCreditPulledCents } =
+						await getOrCreateOpenInvoice(tx, {
+							clubShortName: ctx.user.clubShortName,
+							consumerUserId: reg.userId,
+							effectivePayerUserId,
+							facilityId: reg.user.activeFacilityId,
+							createdByUserId: ctx.user.userId,
+						});
+
+					// Append AFTER any existing lines (and after credit lines on a
+					// fresh invoice): max sortOrder + 1.
+					const lastLine = await tx.invoiceLineItem.findFirst({
+						where: { invoiceId: invoice.invoiceId },
+						orderBy: { sortOrder: "desc" },
+						select: { sortOrder: true },
+					});
+					const sortOrder = (lastLine?.sortOrder ?? -1) + 1;
+
+					assertLineItemKindConsistency({
+						kind: "EVENT_REGISTRATION",
+						eventRegistrationId: reg.registrationId,
+					});
+					await tx.invoiceLineItem.create({
+						data: {
+							invoiceId: invoice.invoiceId,
+							kind: "EVENT_REGISTRATION",
+							productId: product.productId,
+							description: reg.event.title,
+							quantity: 1,
+							unitPriceInCents,
+							discountInCents: 0,
+							taxRateBps: 0,
+							taxAmountInCents: 0,
+							totalInCents: lineTotalInCents,
+							revenueCategoryId: product.revenueCategoryId,
+							sortOrder,
+							eventRegistrationId: reg.registrationId,
+						},
+					});
+
+					// Recompute mirrors sellPackage / addAdHocCharge. With AUTO_APPLY off
+					// `totalCreditPulledCents` is 0 (the helper returns 0 unless a fresh
+					// tab opened and auto-apply is on); we still fold it in for parity.
+					const subtotalDelta = lineTotalInCents - totalCreditPulledCents;
+					const totalDelta = lineTotalInCents - totalCreditPulledCents;
+					const newSubtotal = invoice.subtotalInCents + subtotalDelta;
+					const newTotal = invoice.totalInCents + totalDelta;
+					const amountPaid = invoice.amountPaidInCents;
+					let newStatus: string;
+					if (amountPaid >= newTotal) {
+						newStatus = "paid";
+					} else if (amountPaid <= 0) {
+						newStatus = "open";
+					} else {
+						newStatus = "partially_paid";
+					}
+					const shouldAutoClose = newStatus === "paid";
+
+					const updatedInvoice = await tx.invoice.update({
+						where: { invoiceId: invoice.invoiceId },
+						data: {
+							subtotalInCents: newSubtotal,
+							totalInCents: newTotal,
+							status: newStatus,
+							...(shouldAutoClose
+								? { closedAt: new Date(), closedBy: ctx.user.userId }
+								: {}),
+						},
+						select: {
+							invoiceId: true,
+							invoiceNumber: true,
+							status: true,
+							totalInCents: true,
+							amountPaidInCents: true,
+						},
+					});
+
+					return {
+						result: { invoice: updatedInvoice },
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.EVENT_CHARGE_ADDED,
+							consumerUserId: reg.userId,
+							payerUserId:
+								effectivePayerUserId === reg.userId
+									? null
+									: effectivePayerUserId,
+							entityType: "Invoice",
+							entityId: updatedInvoice.invoiceId,
+							metadata: {
+								registrationId: reg.registrationId,
+								eventId: reg.event.eventId,
+								eventTitle: reg.event.title,
+								productId: product.productId,
+								unitPriceInCents,
+								lineTotalInCents,
+								invoiceId: updatedInvoice.invoiceId,
+							},
+						}),
+					};
+				},
+			);
+		}),
 });

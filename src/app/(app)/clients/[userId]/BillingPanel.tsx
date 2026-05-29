@@ -14,6 +14,7 @@ import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
 import AddChargeModal from "./AddChargeModal";
 import RecordPaymentModal from "./RecordPaymentModal";
+import UncoveredEventsCard from "./UncoveredEventsCard";
 
 /**
  * Phase 9-EOD billing panel (2026-05-02), extended for Phase 9a (C11 + signed
@@ -224,6 +225,8 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 			{data && (
 				<>
 					<BalanceSummary data={data} />
+
+					<UncoveredEventsCard userId={userId} />
 
 					{data.invoices.length === 0 ? (
 						<p className="text-[var(--muted-foreground)] text-xs">

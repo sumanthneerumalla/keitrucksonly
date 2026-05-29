@@ -69,8 +69,10 @@ export const AUDIT_ACTIONS = {
 	INVOICE_MARKED_DUE: "invoice.marked_due",
 	INVOICE_VOIDED: "invoice.voided",
 	REFUND_ISSUED: "refund.issued",
-	// Phase 9a — charge sources beyond package sales (ad-hoc / one-off charges)
+	// Phase 9a — charge sources beyond package sales (ad-hoc / one-off charges,
+	// event-registration charges for uncovered billable check-ins)
 	ADHOC_CHARGE_ADDED: "charge.adhoc",
+	EVENT_CHARGE_ADDED: "charge.event_registration",
 	// Phase 10a — memberships
 	MEMBERSHIP_SOLD: "membership.sold",
 	MEMBERSHIP_FROZEN: "membership.frozen",
