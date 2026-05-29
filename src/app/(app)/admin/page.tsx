@@ -1,13 +1,9 @@
 import {
 	Building2,
-	FileText,
 	FileVideo,
-	History,
-	LayoutTemplate,
 	Megaphone,
 	Newspaper,
 	Receipt,
-	ReceiptText,
 	Search,
 } from "lucide-react";
 import Link from "next/link";
@@ -143,30 +139,6 @@ export default async function AdminPage() {
 				})}
 			</div>
 
-			{/* Documents Section */}
-			<section id="documents" className="mb-10 scroll-mt-20">
-				<div className="mb-4 flex items-center gap-2">
-					<FileText size={20} className="text-[var(--muted-foreground)]" />
-					<h2 className="font-medium text-[var(--foreground)] text-lg">
-						Documents
-					</h2>
-				</div>
-				<div className="grid gap-4 sm:grid-cols-2">
-					<SectionCard
-						id="document-history"
-						title="Document History"
-						description="View history and status of all documents."
-						icon={History}
-					/>
-					<SectionCard
-						id="document-templates"
-						title="Document Templates"
-						description="Create and edit templates used when generating documents."
-						icon={LayoutTemplate}
-					/>
-				</div>
-			</section>
-
 			{/* Billing Section */}
 			<section id="billing" className="mb-10 scroll-mt-20">
 				<div className="mb-4 flex items-center gap-2">
@@ -176,18 +148,6 @@ export default async function AdminPage() {
 					</h2>
 				</div>
 				<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-					<SectionCard
-						id="uninvoiced-user"
-						title="Un-Invoiced Items: User"
-						description="The list of uninvoiced items for the logged-in user."
-						icon={ReceiptText}
-					/>
-					<SectionCard
-						id="uninvoiced-location"
-						title="Un-Invoiced Items: Location"
-						description="The list of uninvoiced items for this location."
-						icon={Receipt}
-					/>
 					<SectionCard
 						id="billed-invoices"
 						title="Billed Invoices"
