@@ -4,6 +4,8 @@ import {
 	FileVideo,
 	History,
 	LayoutTemplate,
+	Megaphone,
+	Newspaper,
 	Receipt,
 	ReceiptText,
 	Search,
@@ -11,7 +13,7 @@ import {
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getOnboardedUserOrRedirect } from "~/app/_components/server/OnboardedGuard";
-import { isFacilityOrAbove } from "~/server/utils/utils";
+import { isStaffOrAbove } from "~/server/utils/utils";
 
 const quickLinks = [
 	{
@@ -25,6 +27,18 @@ const quickLinks = [
 		description: "View and manage all video collections across the club.",
 		href: "/admin/collections",
 		icon: FileVideo,
+	},
+	{
+		title: "Articles",
+		description: "Write and manage articles.",
+		href: "/admin/articles",
+		icon: Newspaper,
+	},
+	{
+		title: "Announcements",
+		description: "Post and manage your club's announcements.",
+		href: "/admin/announcements",
+		icon: Megaphone,
 	},
 	{
 		title: "Database",
@@ -65,7 +79,10 @@ function SectionCard({
 export default async function AdminPage() {
 	const user = await getOnboardedUserOrRedirect();
 
-	if (!isFacilityOrAbove(user)) {
+	// Phase 15 Stage 2 (Q1): coaches can author articles, so the admin index
+	// needs to be reachable for them too. Other admin cards on this page (e.g.
+	// Facilities, Database) are still gated at their own route level if needed.
+	if (!isStaffOrAbove(user)) {
 		redirect("/dashboard");
 	}
 

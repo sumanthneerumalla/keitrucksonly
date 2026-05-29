@@ -58,6 +58,11 @@ model Club {
   membershipTypes   MembershipType[]
   membershipPlans   MembershipPlan[]
   memberMemberships MemberMembership[]
+  // Phase 15 Stage 2 — Articles scoped per-club (clubShortName=null is platform)
+  articles          Article[]               @relation("ClubArticles")
+  articleTags       ArticleTag[]            @relation("ClubArticleTags")
+  // Phase 15 Step 6 — Club-scoped short-form announcements feed.
+  announcements     ClubAnnouncement[]      @relation("ClubAnnouncements")
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -136,6 +141,12 @@ model User {
 
   // Date of birth — promoted from StudentProfile.profileData JSON blob for indexed age-range queries
   dateOfBirth DateTime?
+
+  // Articles (Facility Presence marketing articles) — author bio shown on article pages, plus authored articles
+  authorBio     String?            @db.Text
+  articles      Article[]          @relation("ArticleAuthor")
+  // Phase 15 Step 6 — Authored club announcements (collaborative edit within club; Q10).
+  announcements ClubAnnouncement[] @relation("AnnouncementAuthor")
 
   // Email groups
   emailGroupsCreated   EmailGroup[]          @relation("EmailGroupCreator")
@@ -687,9 +698,10 @@ model EventRegistration {
   updatedAt               DateTime           @updatedAt
 
   // Relations
-  attendances  Attendance[]
-  statusLogs   RegistrationStatusLog[]
-  creditUsages PackageCreditUsage[]
+  attendances      Attendance[]
+  statusLogs       RegistrationStatusLog[]
+  creditUsages     PackageCreditUsage[]
+  invoiceLineItems InvoiceLineItem[]
 
   @@index([eventId])
   @@index([productId])
@@ -1116,6 +1128,15 @@ model InvoiceLineItem {
   periodStart        DateTime?
   periodEnd          DateTime?
 
+  // Phase 9a — provenance FK for kind = EVENT_REGISTRATION (a billable event
+  // check-in with no covering package; parallels memberPackageId for
+  // PACKAGE_SALE). Links the charge to the exact registration so the same
+  // session can't be billed twice (idempotency) and the "needs billing"
+  // detection can exclude already-charged sessions. onDelete: SetNull preserves
+  // the financial line if a registration row is ever removed.
+  eventRegistrationId String?
+  eventRegistration   EventRegistration? @relation(fields: [eventRegistrationId], references: [registrationId], onDelete: SetNull)
+
   @@index([invoiceId])
   @@index([kind])
   @@index([productId])
@@ -1125,6 +1146,7 @@ model InvoiceLineItem {
   @@index([revenueCategoryId])
   @@index([creditFromUserId])
   @@index([memberMembershipId])
+  @@index([eventRegistrationId])
 }
 
 // InvoicePayment — a payment received against an invoice. Multi-processor by design:
@@ -1458,4 +1480,122 @@ model InvoicePdf {
   @@unique([invoiceId, version])
   @@index([invoiceId])
   @@index([generatedBy])
+}
+
+// ============================================================
+// ARTICLES (Facility Presence marketing articles, facilitypresence.com/articles)
+// Distinct from the existing `Post`/`Tag`/`UserTag` models — Article-prefixed
+// names avoid collisions. Images stored binary-in-Postgres (ContentImage),
+// same bytea pattern as User.profileImage / InvoicePdf.pdfData.
+// ============================================================
+
+enum ArticleStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model ContentImage {
+  id            String             @id @default(cuid())
+  data          Bytes
+  mimeType      String             @db.VarChar(100)
+  alt           String?            @db.VarChar(300)
+  createdAt     DateTime           @default(now())
+  // Phase 15 Step 6 — both back-relations must be NAMED because there are
+  // now two distinct relations to the same model (ContentImage→Article,
+  // ContentImage→ClubAnnouncement). Prisma would otherwise be ambiguous.
+  articles      Article[]          @relation("ContentImageArticles")
+  announcements ClubAnnouncement[] @relation("ContentImageAnnouncements")
+}
+
+model Article {
+  id                 String           @id @default(cuid())
+  // Phase 15 Stage 2 — null = platform article (FP brand, /articles).
+  // set  = club article (club brand, /<short>/articles).
+  // Scope is locked at creation (Q8): the router rejects mutation attempts.
+  clubShortName      String?
+  club               Club?            @relation("ClubArticles", fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  slug               String           @db.VarChar(200)
+  title              String           @db.VarChar(200)
+  excerpt            String?          @db.VarChar(500)
+  bodyHtml           String           @db.Text
+  coverImageId       String?
+  coverImage         ContentImage?    @relation("ContentImageArticles", fields: [coverImageId], references: [id])
+  status             ArticleStatus    @default(DRAFT)
+  publishedAt        DateTime?
+  metaTitle          String?          @db.VarChar(200)
+  metaDescription    String?          @db.VarChar(500)
+  // Phase 15 Step 5 polish (F8) — precomputed reading-time estimate, recomputed
+  // by the router on every create/update that changes bodyHtml. Stored so card
+  // queries don't have to ship `bodyHtml` over the wire just to display
+  // "N min read". Min value 1.
+  readingTimeMinutes Int              @default(1)
+  authorId           String
+  author             User             @relation("ArticleAuthor", fields: [authorId], references: [userId])
+  tags               ArticleTagJoin[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  // Slug uniqueness is per-scope: platform-null slugs and per-club slugs live
+  // in separate namespaces, so two clubs can both have /<short>/articles/<slug>.
+  @@unique([clubShortName, slug])
+  @@index([clubShortName, status, publishedAt])
+  @@index([authorId])
+}
+
+model ArticleTag {
+  id            String           @id @default(cuid())
+  // Phase 15 Stage 2 — tag taxonomy is per-scope (platform OR per-club).
+  // Decision Q5: per-club tags, no cross-club tag pool.
+  clubShortName String?
+  club          Club?            @relation("ClubArticleTags", fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  name          String           @db.VarChar(100)
+  slug          String           @db.VarChar(100)
+  articles      ArticleTagJoin[]
+  createdAt     DateTime         @default(now())
+
+  @@unique([clubShortName, slug])
+  @@unique([clubShortName, name])
+}
+
+model ArticleTagJoin {
+  articleId String
+  tagId     String
+  article   Article    @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  tag       ArticleTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, tagId])
+  @@index([tagId])
+}
+
+// ============================================================
+// Phase 15 Step 6 — ClubAnnouncements
+// Per-club, short-form posts surfaced as a single scrollable feed at
+// /<short>/announcements. No slug, no tags, no detail URL. Authoring rules
+// (collaborative edit within club — Q10) and draft visibility (Q11) live in
+// ~/server/api/routers/announcements.ts.
+// ============================================================
+
+enum AnnouncementStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model ClubAnnouncement {
+  id            String             @id @default(cuid())
+  // Phase 15 Step 6 — announcements are ALWAYS per-club (no platform scope,
+  // unlike articles). clubShortName REQUIRED at create, locked on update (Q8).
+  clubShortName String
+  club          Club               @relation("ClubAnnouncements", fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  title         String?            @db.VarChar(200) // optional — short posts may not need one
+  bodyHtml      String             @db.Text
+  coverImageId  String?
+  coverImage    ContentImage?      @relation("ContentImageAnnouncements", fields: [coverImageId], references: [id])
+  status        AnnouncementStatus @default(DRAFT)
+  publishedAt   DateTime?
+  authorId      String
+  author        User               @relation("AnnouncementAuthor", fields: [authorId], references: [userId])
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([clubShortName, status, publishedAt])
 }
