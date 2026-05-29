@@ -520,6 +520,7 @@ export default function SideNavigation({
 			{user && (
 				<SidebarFooter className="border-gray-200 border-t">
 					<button
+						type="button"
 						onClick={() => setFacilityModalOpen(true)}
 						className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-gray-700 text-sm transition-colors hover:bg-[var(--accent)]"
 					>

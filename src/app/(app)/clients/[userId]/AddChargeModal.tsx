@@ -304,6 +304,11 @@ export default function AddChargeModal({
 										<CommandInput placeholder="Search products…" />
 										<CommandList>
 											<CommandEmpty>No products found.</CommandEmpty>
+											{productsQuery.isError && (
+												<div className="px-3 py-2 text-red-700 text-xs">
+													Couldn't load products — try again.
+												</div>
+											)}
 											<CommandGroup>
 												<CommandItem
 													value="custom charge"
@@ -331,6 +336,15 @@ export default function AddChargeModal({
 													</CommandItem>
 												))}
 											</CommandGroup>
+											{productsQuery.data &&
+												productsQuery.data.pagination.total >
+													PICKER_PAGE_SIZE && (
+													<div className="border-[var(--border)] border-t px-3 py-2 text-[var(--muted-foreground)] text-xs italic">
+														Showing first {PICKER_PAGE_SIZE} of{" "}
+														{productsQuery.data.pagination.total} — refine your
+														search or pick "Custom charge".
+													</div>
+												)}
 										</CommandList>
 									</Command>
 								</PopoverContent>
