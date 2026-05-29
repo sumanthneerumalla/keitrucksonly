@@ -64,28 +64,46 @@ export const billingRouter = createTRPCRouter({
 	 * row also returns `consumer` + `billedTo` user shapes so the UI can
 	 * label rows like "Billed to: John" or "Billed for: Jane".
 	 */
-	getMemberBilling: facilityProcedure
+	getMemberBilling: protectedProcedure
 		.input(z.object({ userId: z.string() }))
 		.query(async ({ ctx, input }) => {
-			// Cross-tenant guard (matches packages.getMemberPackages pattern)
-			const member = await ctx.db.user.findFirst({
-				where: {
-					userId: input.userId,
-					clubShortName: ctx.user.clubShortName,
-				},
-				select: { userId: true },
+			// Phase 9a member-view widening — viewer is EITHER the target
+			// member (self) OR same-club staff. Mirrors getInvoice's
+			// protectedProcedure + in-handler auth pattern (~line 377) and
+			// replaces the previous facilityProcedure-only cross-tenant
+			// guard so the member-facing /invoices page can reuse this
+			// query as-is (same shape, same Round-5 widening to
+			// consumer-OR-payer invoices).
+			const viewer = await getCurrentUser(ctx);
+			const member = await ctx.db.user.findUnique({
+				where: { userId: input.userId },
+				select: { userId: true, clubShortName: true },
 			});
 
 			if (!member) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
-					message: "Member not found in this club",
+					message: "Member not found",
 				});
 			}
 
+			const isSelf = viewer.userId === input.userId;
+			const isStaffViewer =
+				isPlatformAdmin(viewer) ||
+				(isFacilityOrAbove(viewer) &&
+					viewer.clubShortName === member.clubShortName);
+			if (!(isSelf || isStaffViewer)) {
+				// 404 (not 403) so cross-club probes can't enumerate userIds.
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found",
+				});
+			}
+			const clubShortName = member.clubShortName;
+
 			const invoices = await ctx.db.invoice.findMany({
 				where: {
-					clubShortName: ctx.user.clubShortName,
+					clubShortName,
 					// Phase 9a Round 5 — match invoices where `input.userId` is
 					// either the consumer (today's invoices + legacy self-pay)
 					// OR the explicit bill-to target. The OR is a union, not a

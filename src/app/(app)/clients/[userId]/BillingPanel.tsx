@@ -54,6 +54,16 @@ import UncoveredEventsCard from "./UncoveredEventsCard";
 
 interface BillingPanelProps {
 	userId: string;
+	/**
+	 * Who's looking at the panel — controls which actions + sections render.
+	 * `"staff"` (default) is the full client-profile view (Add charge, Needs
+	 * billing card, Record Payment / Mark as due actions). `"member"` is the
+	 * read-only self-service view rendered on the member's own /invoices page
+	 * (rollups + invoice list + click-into-detail only; no staff actions,
+	 * void rows hidden, invoice-detail links route to /invoices/[id] instead
+	 * of /clients/[userId]/invoices/[id]).
+	 */
+	audience?: "staff" | "member";
 }
 
 type InvoiceRow = {
@@ -158,7 +168,11 @@ function StatusPill({
 	);
 }
 
-export default function BillingPanel({ userId }: BillingPanelProps) {
+export default function BillingPanel({
+	userId,
+	audience = "staff",
+}: BillingPanelProps) {
+	const isStaff = audience === "staff";
 	const { toast } = useToast();
 	const utils = api.useUtils();
 
@@ -198,15 +212,17 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 			<div className="mb-3 flex items-center justify-between gap-2">
 				<h4 className="flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
 					<Receipt size={14} />
-					Billing
+					{isStaff ? "Billing" : "Your invoices"}
 				</h4>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => setAddChargeOpen(true)}
-				>
-					Add charge
-				</Button>
+				{isStaff && (
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => setAddChargeOpen(true)}
+					>
+						Add charge
+					</Button>
+				)}
 			</div>
 
 			{isLoading && (
@@ -226,11 +242,13 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 				<>
 					<BalanceSummary data={data} />
 
-					<UncoveredEventsCard userId={userId} />
+					{isStaff && <UncoveredEventsCard userId={userId} />}
 
 					{data.invoices.length === 0 ? (
 						<p className="text-[var(--muted-foreground)] text-xs">
-							No invoices yet. Selling a package will create one.
+							{isStaff
+								? "No invoices yet. Selling a package will create one."
+								: "You don't have any invoices yet."}
 						</p>
 					) : (
 						<div className="overflow-hidden rounded-md border border-[var(--border)]">
@@ -245,9 +263,11 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 										<th className="px-3 py-2 text-right font-medium">
 											Balance
 										</th>
-										<th className="px-3 py-2 text-right font-medium">
-											Actions
-										</th>
+										{isStaff && (
+											<th className="px-3 py-2 text-right font-medium">
+												Actions
+											</th>
+										)}
 									</tr>
 								</thead>
 								<tbody>
@@ -265,8 +285,13 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 												dueDate: inv.dueDate,
 												balanceInCents: inv.balanceInCents,
 											},
-											"staff",
+											audience,
 										);
+										// Members never see voided invoices (per
+										// invoiceStatusDisplay's `hiddenFromMember` contract).
+										if (!isStaff && statusDisplay.hiddenFromMember) {
+											return null;
+										}
 										// Round 4 "mark as due" gating mirrors the backend
 										// contract: not void / paid / draft, and not already
 										// marked due. Paid invoices auto-settle server-side on
@@ -290,7 +315,11 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 											>
 												<td className="px-3 py-2 font-mono text-[var(--foreground)] text-xs">
 													<Link
-														href={`/clients/${userId}/invoices/${inv.invoiceId}`}
+														href={
+															isStaff
+																? `/clients/${userId}/invoices/${inv.invoiceId}`
+																: `/invoices/${inv.invoiceId}`
+														}
 														className="text-[var(--primary)] underline-offset-2 hover:underline"
 													>
 														{inv.invoiceNumber}
@@ -351,46 +380,49 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 														formatCents(inv.balanceInCents)
 													)}
 												</td>
-												<td className="px-3 py-2 text-right">
-													<div className="flex flex-col items-end gap-1">
-														{canRecordPayment ? (
-															<Button
-																variant="outline"
-																size="sm"
-																onClick={() =>
-																	setPaymentInvoice({
-																		invoiceId: inv.invoiceId,
-																		invoiceNumber: inv.invoiceNumber,
-																		totalInCents: inv.totalInCents,
-																		amountPaidInCents: inv.amountPaidInCents,
-																		balanceInCents: inv.balanceInCents,
-																	})
-																}
-															>
-																Record Payment
-															</Button>
-														) : null}
-														{canMarkDue ? (
-															<Button
-																variant="outline"
-																size="sm"
-																onClick={() =>
-																	setCloseTarget({
-																		invoice: {
+												{isStaff && (
+													<td className="px-3 py-2 text-right">
+														<div className="flex flex-col items-end gap-1">
+															{canRecordPayment ? (
+																<Button
+																	variant="outline"
+																	size="sm"
+																	onClick={() =>
+																		setPaymentInvoice({
 																			invoiceId: inv.invoiceId,
 																			invoiceNumber: inv.invoiceNumber,
 																			totalInCents: inv.totalInCents,
 																			amountPaidInCents: inv.amountPaidInCents,
 																			balanceInCents: inv.balanceInCents,
-																		},
-																	})
-																}
-															>
-																Mark as due
-															</Button>
-														) : null}
-													</div>
-												</td>
+																		})
+																	}
+																>
+																	Record Payment
+																</Button>
+															) : null}
+															{canMarkDue ? (
+																<Button
+																	variant="outline"
+																	size="sm"
+																	onClick={() =>
+																		setCloseTarget({
+																			invoice: {
+																				invoiceId: inv.invoiceId,
+																				invoiceNumber: inv.invoiceNumber,
+																				totalInCents: inv.totalInCents,
+																				amountPaidInCents:
+																					inv.amountPaidInCents,
+																				balanceInCents: inv.balanceInCents,
+																			},
+																		})
+																	}
+																>
+																	Mark as due
+																</Button>
+															) : null}
+														</div>
+													</td>
+												)}
 											</tr>
 										);
 									})}
@@ -401,48 +433,52 @@ export default function BillingPanel({ userId }: BillingPanelProps) {
 				</>
 			)}
 
-			<RecordPaymentModal
-				open={paymentInvoice !== null}
-				onOpenChange={(o) => {
-					if (!o) setPaymentInvoice(null);
-				}}
-				userId={userId}
-				invoice={paymentInvoice}
-			/>
+			{isStaff && (
+				<>
+					<RecordPaymentModal
+						open={paymentInvoice !== null}
+						onOpenChange={(o) => {
+							if (!o) setPaymentInvoice(null);
+						}}
+						userId={userId}
+						invoice={paymentInvoice}
+					/>
 
-			<AddChargeModal
-				open={addChargeOpen}
-				onOpenChange={setAddChargeOpen}
-				userId={userId}
-			/>
+					<AddChargeModal
+						open={addChargeOpen}
+						onOpenChange={setAddChargeOpen}
+						userId={userId}
+					/>
 
-			<AlertDialog
-				open={closeTarget !== null}
-				title={
-					closeTarget
-						? `Mark as due — Invoice ${closeTarget.invoice.invoiceNumber}`
-						: ""
-				}
-				description={
-					closeTarget
-						? closeTarget.invoice.balanceInCents > 0
-							? `Member still owes ${formatCents(closeTarget.invoice.balanceInCents)}. Mark this invoice as due? They can still pay the balance later, but new charges will start a fresh invoice.`
-							: "Mark this invoice as due? No new charges will be added, and any account credit carries forward to the next invoice."
-						: ""
-				}
-				confirmLabel={closing ? "Marking…" : "Mark as due"}
-				cancelLabel="Cancel"
-				onConfirm={() => {
-					if (!closeTarget || closing) return;
-					closeInvoiceMutation.mutate({
-						invoiceId: closeTarget.invoice.invoiceId,
-					});
-				}}
-				onCancel={() => {
-					if (closing) return;
-					setCloseTarget(null);
-				}}
-			/>
+					<AlertDialog
+						open={closeTarget !== null}
+						title={
+							closeTarget
+								? `Mark as due — Invoice ${closeTarget.invoice.invoiceNumber}`
+								: ""
+						}
+						description={
+							closeTarget
+								? closeTarget.invoice.balanceInCents > 0
+									? `Member still owes ${formatCents(closeTarget.invoice.balanceInCents)}. Mark this invoice as due? They can still pay the balance later, but new charges will start a fresh invoice.`
+									: "Mark this invoice as due? No new charges will be added, and any account credit carries forward to the next invoice."
+								: ""
+						}
+						confirmLabel={closing ? "Marking…" : "Mark as due"}
+						cancelLabel="Cancel"
+						onConfirm={() => {
+							if (!closeTarget || closing) return;
+							closeInvoiceMutation.mutate({
+								invoiceId: closeTarget.invoice.invoiceId,
+							});
+						}}
+						onCancel={() => {
+							if (closing) return;
+							setCloseTarget(null);
+						}}
+					/>
+				</>
+			)}
 		</div>
 	);
 }

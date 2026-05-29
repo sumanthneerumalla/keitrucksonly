@@ -13,6 +13,7 @@ import {
 	ChevronDown,
 	LayoutDashboard,
 	Mail,
+	Receipt,
 	Settings,
 	ShoppingCart,
 	User,
@@ -78,6 +79,12 @@ export const navItems: NavItem[] = [
 		label: "Book a Court",
 		href: "/rentals",
 		icon: <CalendarClock size={20} />,
+		userTypes: ALL_TYPES,
+	},
+	{
+		label: "Invoices",
+		href: "/invoices",
+		icon: <Receipt size={20} />,
 		userTypes: ALL_TYPES,
 	},
 	{
