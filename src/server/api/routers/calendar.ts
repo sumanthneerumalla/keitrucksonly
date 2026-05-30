@@ -2794,4 +2794,67 @@ export const calendarRouter = createTRPCRouter({
 				})),
 			};
 		}),
+
+	/**
+	 * Phase 9a (Event Activity tab) — registration status-log timeline for a
+	 * single event. Returns RegistrationStatusLog rows for every registration
+	 * on this event (status changes: REGISTERED / CHECKED_IN / NO_SHOW /
+	 * LATE_CANCEL / RESCHEDULED), newest first, with the affected member and
+	 * the staff/system actor who made the change.
+	 *
+	 * Audience: staffProcedure (facility / club_admin / platform_admin AND
+	 * coach) — coaches teaching an event can review what happened. Students
+	 * are NOT in scope; they have their own self-service surfaces.
+	 *
+	 * No pagination in v1 — typical event has well under the 200 cap; we'll
+	 * paginate when a class produces long historical chains (rescheduling
+	 * loops, repeat bookings).
+	 */
+	listEventStatusLog: staffProcedure
+		.input(
+			z.object({
+				eventId: z.string().min(1),
+				limit: z.number().int().min(1).max(200).default(100),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const event = await ctx.db.calendarEvent.findFirst({
+				where: {
+					eventId: input.eventId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { eventId: true },
+			});
+			if (!event) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Event not found in this club",
+				});
+			}
+
+			const rows = await ctx.db.registrationStatusLog.findMany({
+				where: {
+					clubShortName: ctx.user.clubShortName,
+					registration: { eventId: input.eventId },
+				},
+				orderBy: { createdAt: "desc" },
+				take: input.limit,
+				select: {
+					logId: true,
+					oldStatus: true,
+					newStatus: true,
+					source: true,
+					reason: true,
+					createdAt: true,
+					user: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
+					changedByUser: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
+				},
+			});
+
+			return { items: rows };
+		}),
 });

@@ -13,6 +13,7 @@ import {
 import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
 import AddChargeModal from "./AddChargeModal";
+import MemberActivityTimeline from "./MemberActivityTimeline";
 import RecordPaymentModal from "./RecordPaymentModal";
 import UncoveredEventsCard from "./UncoveredEventsCard";
 
@@ -189,6 +190,10 @@ export default function BillingPanel({
 		invoice: InvoiceRow;
 	} | null>(null);
 	const [addChargeOpen, setAddChargeOpen] = useState(false);
+	// Top-of-panel tab. Members in v1 only see Invoices (no Activity tab).
+	const [activeTab, setActiveTab] = useState<"invoices" | "activity">(
+		"invoices",
+	);
 
 	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
 		onSuccess: async (result) => {
@@ -209,228 +214,271 @@ export default function BillingPanel({
 
 	return (
 		<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
-			<div className="mb-3 flex items-center justify-between gap-2">
-				<h4 className="flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
-					<Receipt size={14} />
-					{isStaff ? "Billing" : "Your invoices"}
-				</h4>
-				{isStaff && (
+			<div className="mb-4 flex items-end justify-between gap-2 border-[var(--border)] border-b">
+				<div className="flex">
+					<button
+						type="button"
+						onClick={() => setActiveTab("invoices")}
+						className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 font-medium text-sm transition-colors ${
+							activeTab === "invoices"
+								? "border-[var(--primary)] text-[var(--foreground)]"
+								: "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+						}`}
+					>
+						<Receipt size={14} />
+						{isStaff ? "Invoices" : "Your invoices"}
+					</button>
+					{isStaff && (
+						<button
+							type="button"
+							onClick={() => setActiveTab("activity")}
+							className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 font-medium text-sm transition-colors ${
+								activeTab === "activity"
+									? "border-[var(--primary)] text-[var(--foreground)]"
+									: "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+							}`}
+						>
+							Activity
+						</button>
+					)}
+				</div>
+				{isStaff && activeTab === "invoices" && (
 					<Button
 						variant="outline"
 						size="sm"
 						onClick={() => setAddChargeOpen(true)}
+						className="mb-2"
 					>
 						Add charge
 					</Button>
 				)}
 			</div>
 
-			{isLoading && (
-				<div className="space-y-3">
-					<div className="h-16 animate-pulse rounded bg-[var(--muted)]" />
-					<div className="h-12 animate-pulse rounded bg-[var(--muted)]" />
-				</div>
-			)}
-
-			{error && (
-				<p className="text-[var(--muted-foreground)] text-xs">
-					{error.message}
-				</p>
-			)}
-
-			{data && (
+			{activeTab === "invoices" && (
 				<>
-					<BalanceSummary data={data} />
-
-					{isStaff && <UncoveredEventsCard userId={userId} />}
-
-					{data.invoices.length === 0 ? (
-						<p className="text-[var(--muted-foreground)] text-xs">
-							{isStaff
-								? "No invoices yet. Selling a package will create one."
-								: "You don't have any invoices yet."}
-						</p>
-					) : (
-						<div className="overflow-hidden rounded-md border border-[var(--border)]">
-							<table className="w-full text-sm">
-								<thead className="bg-[var(--muted)] text-[var(--muted-foreground)] text-xs">
-									<tr>
-										<th className="px-3 py-2 text-left font-medium">Invoice</th>
-										<th className="px-3 py-2 text-left font-medium">Date</th>
-										<th className="px-3 py-2 text-left font-medium">Status</th>
-										<th className="px-3 py-2 text-right font-medium">Total</th>
-										<th className="px-3 py-2 text-right font-medium">Paid</th>
-										<th className="px-3 py-2 text-right font-medium">
-											Balance
-										</th>
-										{isStaff && (
-											<th className="px-3 py-2 text-right font-medium">
-												Actions
-											</th>
-										)}
-									</tr>
-								</thead>
-								<tbody>
-									{data.invoices.map((inv) => {
-										const canRecordPayment = PAYMENT_ELIGIBLE_STATUSES.has(
-											inv.status,
-										);
-										// Single source of truth for the status label + tone
-										// (src/lib/invoiceStatus.ts). Staff audience, so a voided
-										// invoice reads "Voided" rather than being hidden.
-										const statusDisplay = invoiceStatusDisplay(
-											{
-												status: inv.status,
-												closedAt: inv.closedAt,
-												dueDate: inv.dueDate,
-												balanceInCents: inv.balanceInCents,
-											},
-											audience,
-										);
-										// Members never see voided invoices (per
-										// invoiceStatusDisplay's `hiddenFromMember` contract).
-										if (!isStaff && statusDisplay.hiddenFromMember) {
-											return null;
-										}
-										// Round 4 "mark as due" gating mirrors the backend
-										// contract: not void / paid / draft, and not already
-										// marked due. Paid invoices auto-settle server-side on
-										// full payment, so the button never appears on them.
-										const canMarkDue =
-											inv.status !== "void" &&
-											inv.status !== "paid" &&
-											inv.status !== "draft" &&
-											inv.closedAt === null;
-										// Surface the marked-due date only while a balance is
-										// still owed (i.e. the pill reads "Due").
-										const showDueDate =
-											inv.closedAt !== null &&
-											inv.balanceInCents > 0 &&
-											inv.status !== "void";
-										const annotation = annotationFor(userId, inv);
-										return (
-											<tr
-												key={inv.invoiceId}
-												className="border-[var(--border)] border-t"
-											>
-												<td className="px-3 py-2 font-mono text-[var(--foreground)] text-xs">
-													<Link
-														href={
-															isStaff
-																? `/clients/${userId}/invoices/${inv.invoiceId}`
-																: `/invoices/${inv.invoiceId}`
-														}
-														className="text-[var(--primary)] underline-offset-2 hover:underline"
-													>
-														{inv.invoiceNumber}
-													</Link>
-													{annotation && (
-														<div className="mt-0.5 font-sans text-[var(--muted-foreground)] text-xs italic">
-															{annotation}
-														</div>
-													)}
-												</td>
-												<td className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-													{formatDate(inv.issueDate)}
-												</td>
-												<td className="px-3 py-2">
-													<div className="flex flex-col gap-1">
-														<StatusPill
-															label={statusDisplay.label}
-															tone={statusDisplay.tone}
-														/>
-														{showDueDate && inv.dueDate !== null && (
-															<span className="text-[var(--muted-foreground)] text-xs">
-																due {formatDate(inv.dueDate)}
-															</span>
-														)}
-													</div>
-												</td>
-												<td className="px-3 py-2 text-right font-mono text-[var(--foreground)] text-xs">
-													{formatCents(inv.totalInCents)}
-												</td>
-												<td className="px-3 py-2 text-right font-mono text-[var(--muted-foreground)] text-xs">
-													{formatCents(inv.amountPaidInCents)}
-												</td>
-												<td
-													className={`px-3 py-2 text-right font-mono text-xs ${
-														inv.balanceInCents > 0
-															? "font-semibold text-[var(--foreground)]"
-															: "text-[var(--muted-foreground)]"
-													}`}
-												>
-													{inv.balanceInCents < 0 ? (
-														<div className="flex flex-col items-end">
-															<span>
-																{formatCents(Math.abs(inv.balanceInCents))}{" "}
-																<span className="text-[var(--muted-foreground)]">
-																	(credit)
-																</span>
-															</span>
-															{inv.availableCreditInCents <
-																Math.abs(inv.balanceInCents) && (
-																<span className="text-[11px] text-[var(--muted-foreground)] italic">
-																	{inv.availableCreditInCents > 0
-																		? `${formatCents(inv.availableCreditInCents)} available`
-																		: "fully applied"}
-																</span>
-															)}
-														</div>
-													) : (
-														formatCents(inv.balanceInCents)
-													)}
-												</td>
-												{isStaff && (
-													<td className="px-3 py-2 text-right">
-														<div className="flex flex-col items-end gap-1">
-															{canRecordPayment ? (
-																<Button
-																	variant="outline"
-																	size="sm"
-																	onClick={() =>
-																		setPaymentInvoice({
-																			invoiceId: inv.invoiceId,
-																			invoiceNumber: inv.invoiceNumber,
-																			totalInCents: inv.totalInCents,
-																			amountPaidInCents: inv.amountPaidInCents,
-																			balanceInCents: inv.balanceInCents,
-																		})
-																	}
-																>
-																	Record Payment
-																</Button>
-															) : null}
-															{canMarkDue ? (
-																<Button
-																	variant="outline"
-																	size="sm"
-																	onClick={() =>
-																		setCloseTarget({
-																			invoice: {
-																				invoiceId: inv.invoiceId,
-																				invoiceNumber: inv.invoiceNumber,
-																				totalInCents: inv.totalInCents,
-																				amountPaidInCents:
-																					inv.amountPaidInCents,
-																				balanceInCents: inv.balanceInCents,
-																			},
-																		})
-																	}
-																>
-																	Mark as due
-																</Button>
-															) : null}
-														</div>
-													</td>
-												)}
-											</tr>
-										);
-									})}
-								</tbody>
-							</table>
+					{isLoading && (
+						<div className="space-y-3">
+							<div className="h-16 animate-pulse rounded bg-[var(--muted)]" />
+							<div className="h-12 animate-pulse rounded bg-[var(--muted)]" />
 						</div>
 					)}
+
+					{error && (
+						<p className="text-[var(--muted-foreground)] text-xs">
+							{error.message}
+						</p>
+					)}
+
+					{data && (
+						<>
+							<BalanceSummary data={data} />
+
+							{isStaff && <UncoveredEventsCard userId={userId} />}
+
+							{data.invoices.length === 0 ? (
+								<p className="text-[var(--muted-foreground)] text-xs">
+									{isStaff
+										? "No invoices yet. Selling a package will create one."
+										: "You don't have any invoices yet."}
+								</p>
+							) : (
+								<div className="overflow-hidden rounded-md border border-[var(--border)]">
+									<table className="w-full text-sm">
+										<thead className="bg-[var(--muted)] text-[var(--muted-foreground)] text-xs">
+											<tr>
+												<th className="px-3 py-2 text-left font-medium">
+													Invoice
+												</th>
+												<th className="px-3 py-2 text-left font-medium">
+													Date
+												</th>
+												<th className="px-3 py-2 text-left font-medium">
+													Status
+												</th>
+												<th className="px-3 py-2 text-right font-medium">
+													Total
+												</th>
+												<th className="px-3 py-2 text-right font-medium">
+													Paid
+												</th>
+												<th className="px-3 py-2 text-right font-medium">
+													Balance
+												</th>
+												{isStaff && (
+													<th className="px-3 py-2 text-right font-medium">
+														Actions
+													</th>
+												)}
+											</tr>
+										</thead>
+										<tbody>
+											{data.invoices.map((inv) => {
+												const canRecordPayment = PAYMENT_ELIGIBLE_STATUSES.has(
+													inv.status,
+												);
+												// Single source of truth for the status label + tone
+												// (src/lib/invoiceStatus.ts). Staff audience, so a voided
+												// invoice reads "Voided" rather than being hidden.
+												const statusDisplay = invoiceStatusDisplay(
+													{
+														status: inv.status,
+														closedAt: inv.closedAt,
+														dueDate: inv.dueDate,
+														balanceInCents: inv.balanceInCents,
+													},
+													audience,
+												);
+												// Members never see voided invoices (per
+												// invoiceStatusDisplay's `hiddenFromMember` contract).
+												if (!isStaff && statusDisplay.hiddenFromMember) {
+													return null;
+												}
+												// Round 4 "mark as due" gating mirrors the backend
+												// contract: not void / paid / draft, and not already
+												// marked due. Paid invoices auto-settle server-side on
+												// full payment, so the button never appears on them.
+												const canMarkDue =
+													inv.status !== "void" &&
+													inv.status !== "paid" &&
+													inv.status !== "draft" &&
+													inv.closedAt === null;
+												// Surface the marked-due date only while a balance is
+												// still owed (i.e. the pill reads "Due").
+												const showDueDate =
+													inv.closedAt !== null &&
+													inv.balanceInCents > 0 &&
+													inv.status !== "void";
+												const annotation = annotationFor(userId, inv);
+												return (
+													<tr
+														key={inv.invoiceId}
+														className="border-[var(--border)] border-t"
+													>
+														<td className="px-3 py-2 font-mono text-[var(--foreground)] text-xs">
+															<Link
+																href={
+																	isStaff
+																		? `/clients/${userId}/invoices/${inv.invoiceId}`
+																		: `/invoices/${inv.invoiceId}`
+																}
+																className="text-[var(--primary)] underline-offset-2 hover:underline"
+															>
+																{inv.invoiceNumber}
+															</Link>
+															{annotation && (
+																<div className="mt-0.5 font-sans text-[var(--muted-foreground)] text-xs italic">
+																	{annotation}
+																</div>
+															)}
+														</td>
+														<td className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
+															{formatDate(inv.issueDate)}
+														</td>
+														<td className="px-3 py-2">
+															<div className="flex flex-col gap-1">
+																<StatusPill
+																	label={statusDisplay.label}
+																	tone={statusDisplay.tone}
+																/>
+																{showDueDate && inv.dueDate !== null && (
+																	<span className="text-[var(--muted-foreground)] text-xs">
+																		due {formatDate(inv.dueDate)}
+																	</span>
+																)}
+															</div>
+														</td>
+														<td className="px-3 py-2 text-right font-mono text-[var(--foreground)] text-xs">
+															{formatCents(inv.totalInCents)}
+														</td>
+														<td className="px-3 py-2 text-right font-mono text-[var(--muted-foreground)] text-xs">
+															{formatCents(inv.amountPaidInCents)}
+														</td>
+														<td
+															className={`px-3 py-2 text-right font-mono text-xs ${
+																inv.balanceInCents > 0
+																	? "font-semibold text-[var(--foreground)]"
+																	: "text-[var(--muted-foreground)]"
+															}`}
+														>
+															{inv.balanceInCents < 0 ? (
+																<div className="flex flex-col items-end">
+																	<span>
+																		{formatCents(Math.abs(inv.balanceInCents))}{" "}
+																		<span className="text-[var(--muted-foreground)]">
+																			(credit)
+																		</span>
+																	</span>
+																	{inv.availableCreditInCents <
+																		Math.abs(inv.balanceInCents) && (
+																		<span className="text-[11px] text-[var(--muted-foreground)] italic">
+																			{inv.availableCreditInCents > 0
+																				? `${formatCents(inv.availableCreditInCents)} available`
+																				: "fully applied"}
+																		</span>
+																	)}
+																</div>
+															) : (
+																formatCents(inv.balanceInCents)
+															)}
+														</td>
+														{isStaff && (
+															<td className="px-3 py-2 text-right">
+																<div className="flex flex-col items-end gap-1">
+																	{canRecordPayment ? (
+																		<Button
+																			variant="outline"
+																			size="sm"
+																			onClick={() =>
+																				setPaymentInvoice({
+																					invoiceId: inv.invoiceId,
+																					invoiceNumber: inv.invoiceNumber,
+																					totalInCents: inv.totalInCents,
+																					amountPaidInCents:
+																						inv.amountPaidInCents,
+																					balanceInCents: inv.balanceInCents,
+																				})
+																			}
+																		>
+																			Record Payment
+																		</Button>
+																	) : null}
+																	{canMarkDue ? (
+																		<Button
+																			variant="outline"
+																			size="sm"
+																			onClick={() =>
+																				setCloseTarget({
+																					invoice: {
+																						invoiceId: inv.invoiceId,
+																						invoiceNumber: inv.invoiceNumber,
+																						totalInCents: inv.totalInCents,
+																						amountPaidInCents:
+																							inv.amountPaidInCents,
+																						balanceInCents: inv.balanceInCents,
+																					},
+																				})
+																			}
+																		>
+																			Mark as due
+																		</Button>
+																	) : null}
+																</div>
+															</td>
+														)}
+													</tr>
+												);
+											})}
+										</tbody>
+									</table>
+								</div>
+							)}
+						</>
+					)}
 				</>
+			)}
+
+			{activeTab === "activity" && isStaff && (
+				<MemberActivityTimeline userId={userId} />
 			)}
 
 			{isStaff && (

@@ -2142,4 +2142,96 @@ export const billingRouter = createTRPCRouter({
 				},
 			);
 		}),
+
+	/**
+	 * Phase 9a (D17 Activity tab) — paginated audit log for a member's Activity
+	 * tab inside the BillingPanel. Returns AuditLog rows where this member is
+	 * the target (consumer OR payer side), newest first. Cursor: (createdAt, logId)
+	 * — strict-less-than-or-equal on createdAt with logId tiebreaker, matching
+	 * the listInvoices pattern.
+	 *
+	 * Auth: facilityProcedure (Club admins + facility staff per Q1). Member
+	 * self-view is gated UI-side via the audience prop today; flip to
+	 * `protectedProcedure + self-or-staff` (see getMemberBilling) when members
+	 * are allowed to read their own activity.
+	 *
+	 * Bill-to actions write 2 audit rows (consumer + payer); each has a
+	 * different `targetUserId`, so filtering by this member's userId returns
+	 * EXACTLY ONE row per logical action that involved them — no client-side
+	 * collapsing needed.
+	 */
+	listMemberActivity: facilityProcedure
+		.input(
+			z.object({
+				userId: z.string().min(1),
+				limit: z.number().int().min(1).max(100).default(50),
+				cursor: z
+					.object({ logId: z.string(), createdAt: z.string() })
+					.optional(),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const member = await ctx.db.user.findFirst({
+				where: {
+					userId: input.userId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { userId: true },
+			});
+			if (!member) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found in this club",
+				});
+			}
+
+			const rows = await ctx.db.auditLog.findMany({
+				where: {
+					clubShortName: ctx.user.clubShortName,
+					targetUserId: input.userId,
+					...(input.cursor && {
+						OR: [
+							{ createdAt: { lt: new Date(input.cursor.createdAt) } },
+							{
+								createdAt: new Date(input.cursor.createdAt),
+								logId: { lt: input.cursor.logId },
+							},
+						],
+					}),
+				},
+				orderBy: [{ createdAt: "desc" }, { logId: "desc" }],
+				take: input.limit + 1,
+				select: {
+					logId: true,
+					action: true,
+					source: true,
+					targetRole: true,
+					correlationId: true,
+					entityType: true,
+					entityId: true,
+					metadata: true,
+					createdAt: true,
+					actorUser: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+						},
+					},
+				},
+			});
+
+			const hasMore = rows.length > input.limit;
+			const items = hasMore ? rows.slice(0, input.limit) : rows;
+			const lastItem = items.at(-1);
+			const nextCursor =
+				hasMore && lastItem
+					? {
+							logId: lastItem.logId,
+							createdAt: lastItem.createdAt.toISOString(),
+						}
+					: null;
+
+			return { items, nextCursor };
+		}),
 });
