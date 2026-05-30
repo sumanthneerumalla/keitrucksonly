@@ -7,6 +7,7 @@ import {
 } from "~/server/api/trpc";
 import { AUDIT_SOURCES } from "~/server/utils/auditedMutation";
 import { sellPackageInternal } from "~/server/utils/sellPackage";
+import { assertFound, assertSameClub } from "~/server/utils/utils";
 
 // ============================================================
 // HELPERS
@@ -259,12 +260,7 @@ export const packagesRouter = createTRPCRouter({
 				},
 			});
 
-			if (!existing) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Package plan not found",
-				});
-			}
+			assertFound(existing, "Package plan not found");
 
 			// If productId is being changed, verify it belongs to this club (mirrors createPackagePlan check)
 			if (rest.productId !== undefined && rest.productId !== null) {
@@ -337,12 +333,7 @@ export const packagesRouter = createTRPCRouter({
 				},
 			});
 
-			if (!existing) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Package plan not found",
-				});
-			}
+			assertFound(existing, "Package plan not found");
 
 			await ctx.db.packagePlan.update({
 				where: { packagePlanId: input.packagePlanId },
@@ -434,12 +425,7 @@ export const packagesRouter = createTRPCRouter({
 				},
 			});
 
-			if (!member) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Member not found",
-				});
-			}
+			assertFound(member, "Member not found");
 
 			// Build the (userId → name) lookup. Always seed with the input user so
 			// `ownedBy` resolves cleanly for the single-user path too.
@@ -570,19 +556,10 @@ export const packagesRouter = createTRPCRouter({
 				},
 			});
 
-			if (!usage) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Credit usage not found",
-				});
-			}
-
-			if (usage.memberPackage.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({
-					code: "FORBIDDEN",
-					message: "Not in your club",
-				});
-			}
+			assertFound(usage, "Credit usage not found");
+			assertSameClub(ctx.user, usage.memberPackage.clubShortName, {
+				message: "Not in your club",
+			});
 
 			await ctx.db.$transaction(async (tx) => {
 				// Decrement creditsUsed and delete usage record

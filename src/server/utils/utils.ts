@@ -41,6 +41,26 @@ export async function getCurrentUser(ctx: ContextWithAuth): Promise<User> {
 }
 
 /**
+ * Narrowing guard for "fetched X or 404". Replaces the
+ * `const x = await db...; if (!x) throw new TRPCError({ code: "NOT_FOUND" })`
+ * boilerplate. Takes an already-fetched value (not a promise) so it works with
+ * any query shape — `findUnique`, `findFirst`, includes, etc. — and narrows the
+ * value to NonNullable for the rest of the handler.
+ *
+ * NOTE: this is deliberately NOT used for the security-conscious "exists but
+ * not in your club" checks that return NOT_FOUND to prevent cross-tenant
+ * enumeration. Those keep their bespoke messages and live in-handler.
+ */
+export function assertFound<T>(
+	value: T | null | undefined,
+	message = "Resource not found",
+): asserts value is NonNullable<T> {
+	if (value === null || value === undefined) {
+		throw new TRPCError({ code: "NOT_FOUND", message });
+	}
+}
+
+/**
  * Helper function to check if user is admin
  * @param user The user object to check
  * @returns Boolean indicating if user has admin role
@@ -259,6 +279,37 @@ export function isSameClub(
 	other: { clubShortName?: string | null },
 ): boolean {
 	return !!other.clubShortName && user.clubShortName === other.clubShortName;
+}
+
+/**
+ * Throwing counterpart to {@link isSameClub} for the "you may only touch your
+ * own club's resources" authorization guard. By default a PLATFORM_ADMIN is
+ * allowed through (the common case for owner-or-admin writes) and a mismatch
+ * raises FORBIDDEN.
+ *
+ * `code`/`message` are overridable because some call sites deliberately use
+ * NOT_FOUND to avoid leaking cross-tenant existence. This helper only covers
+ * the case where the resource's club is already known; FK-validation checks
+ * (e.g. "does this facility belong to my club") that fold a null-check into the
+ * same branch are left in-handler on purpose.
+ */
+export function assertSameClub(
+	user: { clubShortName: string; userType: UserType },
+	resourceClub: string | null | undefined,
+	opts?: {
+		allowPlatformAdmin?: boolean;
+		code?: "FORBIDDEN" | "NOT_FOUND" | "BAD_REQUEST";
+		message?: string;
+	},
+): void {
+	const allowPlatformAdmin = opts?.allowPlatformAdmin ?? true;
+	if (allowPlatformAdmin && isPlatformAdmin(user)) return;
+	if (resourceClub !== user.clubShortName) {
+		throw new TRPCError({
+			code: opts?.code ?? "FORBIDDEN",
+			message: opts?.message ?? "You can only access your own club's resources",
+		});
+	}
 }
 
 // ---------------------------------------------------------------------------

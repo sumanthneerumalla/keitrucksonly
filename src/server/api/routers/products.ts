@@ -5,7 +5,11 @@ import {
 	facilityProcedure,
 	protectedProcedure,
 } from "~/server/api/trpc";
-import { getCurrentUser, isPlatformAdmin } from "~/server/utils/utils";
+import {
+	assertFound,
+	assertSameClub,
+	getCurrentUser,
+} from "~/server/utils/utils";
 
 // ============================================================
 // HELPERS
@@ -228,22 +232,10 @@ export const productsRouter = createTRPCRouter({
 				where: { productId },
 			});
 
-			if (!existing) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Product not found",
-				});
-			}
-
-			if (
-				ctx.user.clubShortName !== existing.clubShortName &&
-				!isPlatformAdmin(ctx.user)
-			) {
-				throw new TRPCError({
-					code: "FORBIDDEN",
-					message: "You can only access your own club's products",
-				});
-			}
+			assertFound(existing, "Product not found");
+			assertSameClub(ctx.user, existing.clubShortName, {
+				message: "You can only access your own club's products",
+			});
 
 			// If changing category, verify it's a leaf in the same club
 			if (rest.categoryId) {
@@ -311,22 +303,10 @@ export const productsRouter = createTRPCRouter({
 				},
 			});
 
-			if (!existing) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Product not found",
-				});
-			}
-
-			if (
-				ctx.user.clubShortName !== existing.clubShortName &&
-				!isPlatformAdmin(ctx.user)
-			) {
-				throw new TRPCError({
-					code: "FORBIDDEN",
-					message: "You can only access your own club's products",
-				});
-			}
+			assertFound(existing, "Product not found");
+			assertSameClub(ctx.user, existing.clubShortName, {
+				message: "You can only access your own club's products",
+			});
 
 			if (existing._count.calendarEvents > 0) {
 				throw new TRPCError({
