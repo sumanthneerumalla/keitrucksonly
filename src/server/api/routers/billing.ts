@@ -1,4 +1,4 @@
-import { Prisma, UserType } from "@prisma/client";
+import { type Prisma, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import dayjs from "~/lib/dayjs-config";
@@ -16,6 +16,10 @@ import {
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
 import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
+import {
+	recordPaymentInternal,
+	recordRefundInternal,
+} from "~/server/utils/invoicePayments";
 import { getOrCreateOpenInvoice } from "~/server/utils/invoiceTab";
 import {
 	getCurrentUser,
@@ -426,6 +430,10 @@ export const billingRouter = createTRPCRouter({
 			return {
 				invoiceId: invoice.invoiceId,
 				invoiceNumber: invoice.invoiceNumber,
+				// Phase 12a — surfaced so the member-facing pay-now button can
+				// resolve the right ClubStripeAccount via `getProviderForClub`
+				// (Stream 2 + Stream 6). Already part of the row; pure select add.
+				clubShortName: invoice.clubShortName,
 				status: invoice.status,
 				// UI gate for the Void button (see above) — NOT security; the
 				// voidInvoice mutation re-checks via clubAdminProcedure.
@@ -806,189 +814,25 @@ export const billingRouter = createTRPCRouter({
 				});
 			}
 
-			// Phase 9a Round 5 — derive the effective payer for the advisory
-			// lock (matches sellPackage's effective-payer logic). When the
-			// invoice has billedToUserId set, the payer is the bill-to user;
-			// otherwise the consumer (self-pay).
-			const effectivePayerUserId = invoice.billedToUserId ?? invoice.userId;
-
-			return await writeAuditedMutation(
-				{
-					db: ctx.db,
-					actorUserId: ctx.user.userId,
-					clubShortName: ctx.user.clubShortName,
-					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+			// Phase 12a — body extracted to `recordPaymentInternal` so the future
+			// Stripe webhook can record payments via the same path (Round 2).
+			// The pre-lock cross-tenant + void/draft guards above stay in this
+			// wrapper; the helper owns the advisory lock + FOR UPDATE + recompute
+			// + status mutation + `writeAuditedMutation` (phase12 §23 #6 / §9.3.1
+			// Choice B).
+			return await recordPaymentInternal({
+				db: ctx.db,
+				clubShortName: ctx.user.clubShortName,
+				actorUserId: ctx.user.userId,
+				source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				invoice: {
+					invoiceId: invoice.invoiceId,
+					userId: invoice.userId,
+					billedToUserId: invoice.billedToUserId,
 				},
-				async (tx) => {
-					// Phase 9a Round 5 — advisory lock first, BEFORE any reads or
-					// writes inside the tx. Shares the `invoice-payer-` prefix with
-					// `sellPackage` and `closeInvoice` so all three invoice
-					// mutations serialize per `(payer, club)`. Closes the
-					// cross-class race where a concurrent sale on John's tab could
-					// append a line and recompute status from a snapshot that
-					// doesn't see this payment (the "$50 paid + concurrent $30
-					// sale → invoice lands at `open` instead of `partially_paid`"
-					// bug flagged in the Round 5 review).
-					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
-					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
-
-					// Row lock just this invoice for the transaction duration. Holding
-					// the lock means a concurrent `recordPayment` on the same invoice
-					// waits here rather than racing the aggregate-then-update sequence
-					// below and clobbering each other's `amountPaidInCents`.
-					//
-					// CONTRACT FOR FUTURE A2 (recordRefund): the refund mutation MUST take
-					// this same row lock at the same point in its transaction. Without it
-					// a concurrent refund + payment can both read pre-write aggregates and
-					// each write a stale `amountPaidInCents`. The recompute formula
-					// (Σ payments − Σ refunds) is correct; what keeps it correct under
-					// concurrency is BOTH sides holding the Invoice row lock.
-					//
-					// CONTRACT FOR FUTURE A2 (account credit reconciliation): a refund
-					// returns paid dollars, but some of this invoice's overpayment may
-					// already have been redistributed as account credit to OTHER invoices
-					// (tracked by `creditConsumedInCents`, or fully-consumed when
-					// `creditConsumedAt != null`). Those dollars are spent — refunding them
-					// here too is a double-payout. recordRefund MUST NOT let net
-					// `amountPaidInCents` fall below the credit already consumed from this
-					// invoice. Simplest safe rule (mirrors `voidInvoice`, decision #121,
-					// which PRECONDITION_FAILs on a consumed/credit-bearing invoice): BLOCK
-					// refunding any invoice that has consumed credit and require the applied
-					// credit to be reversed first; a precise partial cap is deferred until a
-					// real case appears. See phase9-invoicing.md "Refunds vs. overpayment
-					// credit".
-					//
-					// Raw SQL uses the same `$executeRaw` template-literal style as the
-					// advisory-lock call in `rentals.ts` — Prisma parameterizes
-					// `invoiceId` safely (no string interpolation into the SQL text).
-					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${input.invoiceId} FOR UPDATE`;
-
-					// Re-read totalInCents AFTER acquiring the lock. The pre-transaction
-					// read (used for the cross-tenant + void/draft guards) can be STALE:
-					// a concurrent `sellPackage` for the same payer may have appended a
-					// line item and raised the total in the window before we got the
-					// lock. Status MUST be judged against the current total — otherwise a
-					// $50 payment on a now-$80 invoice would wrongly mark it `paid` +
-					// auto-close, hiding a real $30 balance. (Round 5 review must-fix:
-					// the advisory lock serializes the tx bodies, but the total was
-					// captured before the lock; this closes that residual window.)
-					const locked = await tx.invoice.findUniqueOrThrow({
-						where: { invoiceId: input.invoiceId },
-						select: { totalInCents: true },
-					});
-					const totalInCents = locked.totalInCents;
-
-					// Insert the payment row. Status defaults to "succeeded" via the
-					// Prisma schema default. P2002 here would mean a (processor, txId)
-					// collision — webhook idempotency triggered. Manual cash/check
-					// payments have both nulls, which Postgres treats as distinct, so
-					// they can't collide with each other.
-					let payment: Awaited<ReturnType<typeof tx.invoicePayment.create>>;
-					try {
-						payment = await tx.invoicePayment.create({
-							data: {
-								invoiceId: input.invoiceId,
-								amountInCents: input.amountInCents,
-								paymentMethod: input.paymentMethod,
-								processor: input.processor,
-								processorTransactionId: input.processorTransactionId,
-								processorChargeId: input.processorChargeId,
-								processorFeeInCents: input.processorFeeInCents,
-								reference: input.reference,
-								notes: input.notes,
-								receivedBy: ctx.user.userId,
-							},
-						});
-					} catch (error) {
-						if (
-							error instanceof Prisma.PrismaClientKnownRequestError &&
-							error.code === "P2002"
-						) {
-							throw new TRPCError({
-								code: "CONFLICT",
-								message:
-									"This transaction has already been recorded for this processor",
-							});
-						}
-						throw error;
-					}
-
-					// Authoritative recompute (HANDOFF #102, decision: never a blind
-					// `increment`). Σ payments − Σ refunds, against the locked invoice.
-					const paymentsSum = await tx.invoicePayment.aggregate({
-						_sum: { amountInCents: true },
-						where: { invoiceId: input.invoiceId },
-					});
-					// Use the denormalized `InvoiceRefund.invoiceId` column directly
-					// (schema.prisma:962 — "denormalized for invoice-level queries").
-					// Going through payment → refunds would be slower and the
-					// denormalized column is the canonical lookup path.
-					const refundsSum = await tx.invoiceRefund.aggregate({
-						_sum: { amountInCents: true },
-						where: { invoiceId: input.invoiceId },
-					});
-					const newAmountPaid =
-						(paymentsSum._sum.amountInCents ?? 0) -
-						(refundsSum._sum.amountInCents ?? 0);
-
-					// Status mapping (status-transitions diagram + HANDOFF #102/#104):
-					//   newAmountPaid <= 0           → "open"           (no net payment yet, or fully refunded)
-					//   0 < newAmountPaid < total    → "partially_paid"
-					//   newAmountPaid >= total       → "paid"           (overpaid stays "paid" — negative balance = credit)
-					// `overdue` is auto-derived from dueDate by a future scheduled job;
-					// we don't preserve it across a payment because there's no automation
-					// yet to re-derive it after the payment lands.
-					//
-					// Phase 9a Round 4 (HANDOFF #103): when status flips to "paid", we
-					// ALSO stamp `closedAt`/`closedBy` in the SAME update. This is the
-					// auto-close half of the close-tab feature — full payment terminates
-					// the running tab so the next `sellPackage` opens a fresh invoice.
-					// See designFiles/roadmap/phase9-invoicing.md.
-					let newStatus: string;
-					if (newAmountPaid <= 0) {
-						newStatus = "open";
-					} else if (newAmountPaid < totalInCents) {
-						newStatus = "partially_paid";
-					} else {
-						newStatus = "paid";
-					}
-
-					await tx.invoice.update({
-						where: { invoiceId: input.invoiceId },
-						data: {
-							amountPaidInCents: newAmountPaid,
-							status: newStatus,
-							...(newStatus === "paid"
-								? { closedAt: new Date(), closedBy: ctx.user.userId }
-								: {}),
-						},
-					});
-
-					return {
-						result: {
-							payment,
-							invoice: {
-								invoiceId: input.invoiceId,
-								amountPaidInCents: newAmountPaid,
-								totalInCents,
-								status: newStatus,
-							},
-						},
-						audit: buildPartyAuditEntries({
-							action: AUDIT_ACTIONS.PAYMENT_RECORDED,
-							consumerUserId: invoice.userId,
-							payerUserId: invoice.billedToUserId,
-							entityType: "InvoicePayment",
-							entityId: payment.paymentId,
-							metadata: {
-								amountInCents: input.amountInCents,
-								paymentMethod: input.paymentMethod,
-								invoiceId: input.invoiceId,
-							},
-						}),
-					};
-				},
-			);
+				receivedByUserId: ctx.user.userId,
+				input,
+			});
 		}),
 
 	/**
@@ -1680,170 +1524,37 @@ export const billingRouter = createTRPCRouter({
 				});
 			}
 
-			const effectivePayerUserId =
-				payment.invoice.billedToUserId ?? payment.invoice.userId;
-
-			return await writeAuditedMutation(
-				{
-					db: ctx.db,
-					actorUserId: ctx.user.userId,
-					clubShortName: ctx.user.clubShortName,
-					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+			// Phase 12a — body extracted to `recordRefundInternal` so the future
+			// Stripe Connect webhook (Path B) can sync dashboard-initiated refunds
+			// through the same helper. Pre-lock D1 + void guards above stay in
+			// this wrapper for the fast 404/CONFLICT fail; the helper owns the
+			// advisory lock + FOR UPDATE + re-checked D1/void + recompute +
+			// `writeAuditedMutation` (phase12 §23 #6 / §9.3.1 Choice B).
+			return await recordRefundInternal({
+				db: ctx.db,
+				clubShortName: ctx.user.clubShortName,
+				actorUserId: ctx.user.userId,
+				source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				payment: {
+					paymentId: input.paymentId,
+					amountInCents: payment.amountInCents,
+					processor: payment.processor,
+					invoiceId: payment.invoiceId,
+					invoice: {
+						userId: payment.invoice.userId,
+						billedToUserId: payment.invoice.billedToUserId,
+					},
 				},
-				async (tx) => {
-					// Shared per-payer advisory lock (#113) + invoice row lock —
-					// serializes against concurrent payment / sale / credit / void.
-					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
-					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
-					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${payment.invoiceId} FOR UPDATE`;
-
-					// Re-read inside the lock: re-check the credit/void guards (a
-					// concurrent applyAccountCredit could have consumed credit after
-					// the pre-lock read) and get the current total for the recompute.
-					const locked = await tx.invoice.findUniqueOrThrow({
-						where: { invoiceId: payment.invoiceId },
-						select: {
-							totalInCents: true,
-							status: true,
-							creditConsumedInCents: true,
-							creditConsumedAt: true,
-						},
-					});
-					if (locked.status === "void") {
-						throw new TRPCError({
-							code: "CONFLICT",
-							message: "Cannot refund a payment on a void invoice",
-						});
-					}
-					if (
-						locked.creditConsumedInCents > 0 ||
-						locked.creditConsumedAt !== null
-					) {
-						throw new TRPCError({
-							code: "PRECONDITION_FAILED",
-							message:
-								"This invoice's overpayment was applied as account credit to other invoices, so it can't be refunded here.",
-						});
-					}
-
-					// No over-refund: cap at the payment's not-yet-refunded balance.
-					const priorRefunds = await tx.invoiceRefund.aggregate({
-						_sum: { amountInCents: true },
-						where: { paymentId: input.paymentId },
-					});
-					const alreadyRefunded = priorRefunds._sum.amountInCents ?? 0;
-					const refundableRemaining = payment.amountInCents - alreadyRefunded;
-					if (input.amountInCents > refundableRemaining) {
-						throw new TRPCError({
-							code: "PRECONDITION_FAILED",
-							message: `Refund exceeds the payment's refundable balance ($${(refundableRemaining / 100).toFixed(2)}).`,
-						});
-					}
-
-					// Insert the refund (never delete/mutate the payment). processor
-					// inherits the payment's; (processor, processorRefundId) is unique
-					// for webhook idempotency (nulls distinct → manual refunds don't
-					// collide).
-					let refund: Awaited<ReturnType<typeof tx.invoiceRefund.create>>;
-					try {
-						refund = await tx.invoiceRefund.create({
-							data: {
-								paymentId: input.paymentId,
-								invoiceId: payment.invoiceId,
-								amountInCents: input.amountInCents,
-								reason,
-								refundedBy: ctx.user.userId,
-								processor: payment.processor,
-								processorRefundId: input.processorRefundId,
-								processorFeeInCents: input.processorFeeInCents,
-								notes: input.notes,
-							},
-						});
-					} catch (error) {
-						if (
-							error instanceof Prisma.PrismaClientKnownRequestError &&
-							error.code === "P2002"
-						) {
-							throw new TRPCError({
-								code: "CONFLICT",
-								message:
-									"This refund has already been recorded for this processor",
-							});
-						}
-						throw error;
-					}
-
-					// Payment status from cumulative refunds against it.
-					const totalRefundedForPayment = alreadyRefunded + input.amountInCents;
-					const newPaymentStatus =
-						totalRefundedForPayment >= payment.amountInCents
-							? "refunded"
-							: "partially_refunded";
-					await tx.invoicePayment.update({
-						where: { paymentId: input.paymentId },
-						data: { status: newPaymentStatus },
-					});
-
-					// Authoritative invoice recompute (Σ payments − Σ refunds), same
-					// formula as recordPayment. D2: leave `closedAt` UNTOUCHED — a
-					// refund that re-opens a balance does NOT resurrect the tab.
-					const paymentsSum = await tx.invoicePayment.aggregate({
-						_sum: { amountInCents: true },
-						where: { invoiceId: payment.invoiceId },
-					});
-					const refundsSum = await tx.invoiceRefund.aggregate({
-						_sum: { amountInCents: true },
-						where: { invoiceId: payment.invoiceId },
-					});
-					const newAmountPaid =
-						(paymentsSum._sum.amountInCents ?? 0) -
-						(refundsSum._sum.amountInCents ?? 0);
-					const total = locked.totalInCents;
-					let newStatus: string;
-					if (newAmountPaid <= 0) {
-						newStatus = "open";
-					} else if (newAmountPaid < total) {
-						newStatus = "partially_paid";
-					} else {
-						newStatus = "paid";
-					}
-					await tx.invoice.update({
-						where: { invoiceId: payment.invoiceId },
-						data: { amountPaidInCents: newAmountPaid, status: newStatus },
-					});
-
-					return {
-						result: {
-							refund,
-							payment: {
-								paymentId: input.paymentId,
-								status: newPaymentStatus,
-								amountInCents: payment.amountInCents,
-								refundedTotalInCents: totalRefundedForPayment,
-							},
-							invoice: {
-								invoiceId: payment.invoiceId,
-								amountPaidInCents: newAmountPaid,
-								totalInCents: total,
-								status: newStatus,
-							},
-						},
-						audit: buildPartyAuditEntries({
-							action: AUDIT_ACTIONS.REFUND_ISSUED,
-							consumerUserId: payment.invoice.userId,
-							payerUserId: payment.invoice.billedToUserId,
-							entityType: "InvoiceRefund",
-							entityId: refund.refundId,
-							metadata: {
-								amountInCents: input.amountInCents,
-								paymentId: input.paymentId,
-								invoiceId: payment.invoiceId,
-								reason,
-							},
-						}),
-					};
+				refundedByUserId: ctx.user.userId,
+				input: {
+					paymentId: input.paymentId,
+					amountInCents: input.amountInCents,
+					reason,
+					processorRefundId: input.processorRefundId,
+					processorFeeInCents: input.processorFeeInCents,
+					notes: input.notes,
 				},
-			);
+			});
 		}),
 
 	/**

@@ -1,7 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import dayjs from "~/lib/dayjs-config";
 import {
 	clubAdminProcedure,
 	createTRPCRouter,
@@ -13,8 +12,7 @@ import {
 	buildPartyAuditEntries,
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
-import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
-import { computeMembershipTerm } from "~/server/utils/membershipTerm";
+import { sellMembershipInternal } from "~/server/utils/sellMembership";
 
 // ============================================================
 // Phase 10a — Memberships router (WP3 + WP4 + WP5).
@@ -193,51 +191,12 @@ const cancelSchema = z.object({
 // ============================================================
 // HELPERS
 // ============================================================
-
-/**
- * Member's facility timezone for calendar-term math (mirrors packages.ts
- * `getFacilityTimezoneForUser` / #49). Falls back to the active facility, then
- * any club-membership facility, then null (the term helper defaults sanely).
- */
-async function getFacilityTimezoneForUser(
-	db: PrismaClient | Prisma.TransactionClient,
-	userId: string,
-): Promise<string | null> {
-	const user = await db.user.findUnique({
-		where: { userId },
-		select: {
-			activeFacility: { select: { timezone: true } },
-			clubMemberships: {
-				take: 1,
-				include: { facility: { select: { timezone: true } } },
-			},
-		},
-	});
-	return (
-		user?.activeFacility?.timezone ??
-		user?.clubMemberships[0]?.facility.timezone ??
-		null
-	);
-}
-
-/**
- * Parse a yyyy-mm-dd input into a Date anchored at the START of that calendar day
- * in the given timezone. Start-of-day (not noon) so a membership sold with
- * `startDate = today` reads as Active immediately — `membershipStatus.ts` derives
- * "upcoming" only while `now < startDate`, and now is always ≥ the day's start.
- * The resulting Date is the term's anchor (periodStart); periodEnd stays
- * end-of-day via `computeMembershipTerm`.
- */
-function parseStartDate(startISO: string, timezone: string | null): Date {
-	const tz = timezone ?? "America/New_York";
-	return dayjs.tz(startISO, tz).startOf("day").toDate();
-}
-
-/** Today (calendar day) at 00:00 in the given tz — the backdating floor. */
-function startOfTodayInTz(timezone: string | null): dayjs.Dayjs {
-	const tz = timezone ?? "America/New_York";
-	return dayjs().tz(tz).startOf("day");
-}
+//
+// Phase 12a — the sell-flow helpers (`getFacilityTimezoneForUser`,
+// `parseStartDate`, `startOfTodayInTz`) were moved into
+// `src/server/utils/sellMembership.ts` (mirrored privately there) so the
+// webhook path doesn't reach back into a tRPC router file. The mutation now
+// calls `sellMembershipInternal`; no other code in this router needs them.
 
 // ============================================================
 // ROUTER
@@ -522,235 +481,28 @@ export const membershipsRouter = createTRPCRouter({
 	 * (future start → derived "Upcoming"). Backdating disallowed (start ≥ today).
 	 */
 	sell: facilityProcedure.input(sellSchema).mutation(async ({ ctx, input }) => {
-		// Verify the beneficiary is in this club.
-		const member = await ctx.db.user.findFirst({
-			where: { userId: input.userId, clubShortName: ctx.user.clubShortName },
-			select: { userId: true, activeFacilityId: true },
-		});
-		if (!member) {
-			throw new TRPCError({
-				code: "NOT_FOUND",
-				message: "Member not found in this club",
-			});
-		}
-
-		// Validate bill-to (when provided + different from the consumer). Same
-		// club; the userId === billToUserId case is accepted as self-pay.
-		if (input.billToUserId && input.billToUserId !== input.userId) {
-			const billTo = await ctx.db.user.findFirst({
-				where: {
-					userId: input.billToUserId,
-					clubShortName: ctx.user.clubShortName,
-				},
-				select: { userId: true },
-			});
-			if (!billTo) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Bill-to user not found in this club",
-				});
-			}
-		}
-
-		const effectivePayerUserId =
-			input.billToUserId && input.billToUserId !== input.userId
-				? input.billToUserId
-				: input.userId;
-
-		// Verify the plan is active + in this club; pull the type's revenue
-		// category to snapshot onto the fee line.
-		const plan = await ctx.db.membershipPlan.findFirst({
-			where: {
+		// Phase 12a — body extracted to `sellMembershipInternal` so the future
+		// Stripe webhook (Round 2) can mint MemberMembership rows + the
+		// MEMBERSHIP_FEE line via the same path. Choice B composition
+		// (phase12 §9.3.1): the helper OWNS its `writeAuditedMutation` + the
+		// FULL pre-validation chain (member / plan / bill-to FK / start-date
+		// parse / backdating check / computeMembershipTerm). The Zod input +
+		// tRPC signature are UNCHANGED. The shipped procedure stays named
+		// `memberships.sell` (#129).
+		return await sellMembershipInternal({
+			db: ctx.db,
+			clubShortName: ctx.user.clubShortName,
+			actorUserId: ctx.user.userId,
+			source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+			soldByUserId: ctx.user.userId,
+			input: {
+				userId: input.userId,
 				membershipPlanId: input.membershipPlanId,
-				clubShortName: ctx.user.clubShortName,
-				isActive: true,
-			},
-			include: {
-				membershipType: { select: { revenueCategoryId: true, name: true } },
+				startDate: input.startDate,
+				notes: input.notes,
+				billToUserId: input.billToUserId,
 			},
 		});
-		if (!plan) {
-			throw new TRPCError({
-				code: "NOT_FOUND",
-				message: "Membership plan not found or inactive",
-			});
-		}
-
-		// Compute the calendar term in the member's facility tz. Backdating is
-		// disallowed (start ≥ today, decision 10a) — compare on calendar day.
-		const timezone = await getFacilityTimezoneForUser(ctx.db, input.userId);
-		const startDate = parseStartDate(input.startDate, timezone);
-		const startDay = dayjs(startDate)
-			.tz(timezone ?? "America/New_York")
-			.startOf("day");
-		if (startDay.isBefore(startOfTodayInTz(timezone))) {
-			throw new TRPCError({
-				code: "BAD_REQUEST",
-				message: "Start date can't be in the past",
-			});
-		}
-		const { periodStart, periodEnd } = computeMembershipTerm(
-			startDate,
-			plan.billingUnit,
-			plan.billingInterval,
-			timezone,
-		);
-
-		// Snapshot the full-term fee at sale time.
-		const unitPriceInCents = plan.feePerTermInCents;
-		const lineTotalInCents = unitPriceInCents; // qty 1, no discount/tax in 10a
-
-		const result = await writeAuditedMutation(
-			{
-				db: ctx.db,
-				actorUserId: ctx.user.userId,
-				clubShortName: ctx.user.clubShortName,
-				source: AUDIT_SOURCES.ADMIN_DASHBOARD,
-			},
-			async (tx) => {
-				// Advisory lock FIRST (mirrors sellPackage). Serializes invoice
-				// mutations for this (effectivePayer, club) so concurrent sales land
-				// on the same running tab instead of each opening a fresh invoice.
-				const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
-				await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
-
-				// Find the running tab for THIS (consumer, payer) pair — self-pay =
-				// billedToUserId null; bill-to = the payer. (Option-3, mirrors
-				// sellPackage.) Credit carry-forward is OFF for new invoices here,
-				// matching sellPackage's AUTO_APPLY_CREDIT_ON_NEW_INVOICE = false.
-				const runningTabBilledToUserId =
-					effectivePayerUserId === input.userId ? null : effectivePayerUserId;
-				let invoice = await tx.invoice.findFirst({
-					where: {
-						clubShortName: ctx.user.clubShortName,
-						userId: input.userId,
-						billedToUserId: runningTabBilledToUserId,
-						status: { in: ["draft", "open", "partially_paid"] },
-						closedAt: null,
-					},
-					orderBy: { issueDate: "asc" },
-				});
-
-				if (!invoice) {
-					const club = await tx.club.update({
-						where: { clubShortName: ctx.user.clubShortName },
-						data: { nextInvoiceNumber: { increment: 1 } },
-						select: { nextInvoiceNumber: true },
-					});
-					const seq = club.nextInvoiceNumber - 1;
-					const invoiceNumber = `INV-${String(seq).padStart(6, "0")}`;
-					invoice = await tx.invoice.create({
-						data: {
-							clubShortName: ctx.user.clubShortName,
-							invoiceNumber,
-							userId: input.userId,
-							billedToUserId:
-								input.billToUserId && input.billToUserId !== input.userId
-									? input.billToUserId
-									: null,
-							facilityId: member.activeFacilityId,
-							status: "open",
-							subtotalInCents: 0,
-							taxTotalInCents: 0,
-							totalInCents: 0,
-							amountPaidInCents: 0,
-							createdBy: ctx.user.userId,
-						},
-					});
-				}
-
-				// Determine the next sort order on this invoice (append last).
-				const existingLineCount = await tx.invoiceLineItem.count({
-					where: { invoiceId: invoice.invoiceId },
-				});
-
-				const membership = await tx.memberMembership.create({
-					data: {
-						clubShortName: ctx.user.clubShortName,
-						userId: input.userId,
-						membershipPlanId: plan.membershipPlanId,
-						facilityId: member.activeFacilityId,
-						status: "active",
-						startDate: periodStart,
-						endDate: periodEnd,
-						soldBy: ctx.user.userId,
-						notes: input.notes ?? null,
-					},
-				});
-
-				// Append the full-term MEMBERSHIP_FEE line, stamping the provenance
-				// FK + the calendar period it covers. Guarded for kind consistency.
-				assertLineItemKindConsistency({
-					kind: "MEMBERSHIP_FEE",
-					memberMembershipId: membership.memberMembershipId,
-				});
-				await tx.invoiceLineItem.create({
-					data: {
-						invoiceId: invoice.invoiceId,
-						kind: "MEMBERSHIP_FEE",
-						memberMembershipId: membership.memberMembershipId,
-						revenueCategoryId: plan.membershipType?.revenueCategoryId ?? null,
-						description: plan.description,
-						quantity: 1,
-						unitPriceInCents,
-						discountInCents: 0,
-						taxRateBps: 0,
-						taxAmountInCents: 0,
-						totalInCents: lineTotalInCents,
-						sortOrder: existingLineCount,
-						periodStart,
-						periodEnd,
-					},
-				});
-
-				// Recompute the invoice totals + status (a positive line can flip
-				// open → partially_paid, or partially_paid → paid if already paid up).
-				const newSubtotal = invoice.subtotalInCents + unitPriceInCents;
-				const newTotal = invoice.totalInCents + lineTotalInCents;
-				const amountPaid = invoice.amountPaidInCents;
-				let newStatus: string;
-				if (amountPaid >= newTotal) {
-					newStatus = "paid";
-				} else if (amountPaid <= 0) {
-					newStatus = "open";
-				} else {
-					newStatus = "partially_paid";
-				}
-				const shouldAutoClose = newStatus === "paid";
-				const updatedInvoice = await tx.invoice.update({
-					where: { invoiceId: invoice.invoiceId },
-					data: {
-						subtotalInCents: newSubtotal,
-						totalInCents: newTotal,
-						status: newStatus,
-						...(shouldAutoClose
-							? { closedAt: new Date(), closedBy: ctx.user.userId }
-							: {}),
-					},
-				});
-
-				return {
-					result: { membership, invoice: updatedInvoice },
-					audit: buildPartyAuditEntries({
-						action: AUDIT_ACTIONS.MEMBERSHIP_SOLD,
-						consumerUserId: input.userId,
-						payerUserId:
-							input.billToUserId && input.billToUserId !== input.userId
-								? input.billToUserId
-								: null,
-						entityType: "MemberMembership",
-						entityId: membership.memberMembershipId,
-						metadata: {
-							membershipPlanId: plan.membershipPlanId,
-							invoiceId: updatedInvoice.invoiceId,
-							amountInCents: lineTotalInCents,
-						},
-					}),
-				};
-			},
-		);
-
-		return result;
 	}),
 
 	// ------------------------------------------------------------------

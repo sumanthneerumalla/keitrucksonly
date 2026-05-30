@@ -81,6 +81,13 @@ export const AUDIT_ACTIONS = {
 	MEMBERSHIP_REINSTATED: "membership.reinstated",
 	MEMBERSHIP_CANCELLED: "membership.cancelled",
 	MEMBERSHIP_VOIDED: "membership.voided",
+	// Phase 12a — Stripe Connect lifecycle + checkout + orphan resolution
+	STRIPE_ACCOUNT_CONNECTED: "stripe_account.connected",
+	STRIPE_ACCOUNT_DISCONNECTED: "stripe_account.disconnected",
+	STRIPE_ACCOUNT_UPDATED: "stripe_account.updated",
+	CHECKOUT_STARTED: "checkout.started",
+	CHECKOUT_COMPLETED: "checkout.completed",
+	ORPHAN_RESOLVED: "orphan.resolved",
 } as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
 

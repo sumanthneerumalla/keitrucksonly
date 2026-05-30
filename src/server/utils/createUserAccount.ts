@@ -28,6 +28,24 @@ import { TRPCError } from "@trpc/server";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
+/**
+ * Phase 12a — webhook-friendly persistent failure marker (phase12 §23 #5).
+ * Thrown when Clerk's `getUserList({ emailAddress })` returns `data.length > 1`
+ * (multiple Clerk users share the email — usually a misconfigured Clerk app /
+ * dev key used in prod). Silently taking `[0]` could attach a paid purchase to
+ * the wrong account; the orphan queue gives a human a chance to triage instead.
+ *
+ * The webhook handler catches this and writes an `OrphanedPurchase` row with
+ * `reason: 'clerk_create_failed'` (or a more specific reason), returning 200
+ * to Stripe so retries stop.
+ */
+export class ClerkPersistentError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ClerkPersistentError";
+	}
+}
+
 // ============================================================
 // findOrCreateClerkUserId — pure Clerk, NO database access
 // ============================================================
@@ -73,10 +91,23 @@ export async function findOrCreateClerkUserId({
 			errors?: Array<{ code?: string }>;
 			status?: number;
 		};
-		if (e?.errors?.[0]?.code === "form_identifier_exists" || e?.status === 422) {
+		if (
+			e?.errors?.[0]?.code === "form_identifier_exists" ||
+			e?.status === 422
+		) {
 			const existingClerkUsers = await clerk.users.getUserList({
 				emailAddress: [email],
 			});
+			// Phase 12a (phase12 §23 #5) — multi-Clerk-user guard. Silent
+			// misattachment of paid purchases would be unrecoverable; route to the
+			// orphan queue instead by throwing a `ClerkPersistentError` the webhook
+			// handler explicitly handles. Indicates a misconfigured Clerk app
+			// (e.g. dev/staging key used in prod).
+			if (existingClerkUsers.data.length > 1) {
+				throw new ClerkPersistentError(
+					"Multiple Clerk users found for email — refusing to attach",
+				);
+			}
 			const existingClerk = existingClerkUsers.data[0];
 			if (!existingClerk) {
 				throw new TRPCError({

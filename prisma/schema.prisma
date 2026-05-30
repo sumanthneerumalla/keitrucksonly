@@ -63,6 +63,14 @@ model Club {
   articleTags       ArticleTag[]            @relation("ClubArticleTags")
   // Phase 15 Step 6 — Club-scoped short-form announcements feed.
   announcements     ClubAnnouncement[]      @relation("ClubAnnouncements")
+  // Phase 12a — Stripe Connect (per-processor connection state). 1:1; club may
+  // hold at most one ClubStripeAccount row. Future processors (Paysafe, Valor)
+  // get their own tables — `getProviderForClub` resolves the active one.
+  stripeAccount     ClubStripeAccount?
+  // Phase 12a — local mirror of provider checkout sessions opened against this club.
+  checkoutSessions  CheckoutSession[]
+  // Phase 12a — dead-letter queue for webhook failures scoped to this club.
+  orphanedPurchases OrphanedPurchase[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -154,6 +162,11 @@ model User {
   emailGroupExclusions EmailGroupExclusion[] @relation("EmailGroupExclusions")
   emailsSent           EmailSendLog[]        @relation("EmailSender")
   emailsReceived       EmailSendRecipient[]  @relation("EmailRecipient")
+
+  // Phase 12a — per-processor Customer mapping rows for this user (one row per
+  // (processor, connected-account) combo). Populated by the webhook on first
+  // checkout; 12b SetupIntents hang saved cards off these rows.
+  processorCustomers ProcessorCustomerLink[] @relation("UserProcessorCustomers")
 
   @@index([clerkUserId])
   @@index([clubShortName])
@@ -649,27 +662,31 @@ enum RentalBookingStatus {
 }
 
 model RentalBooking {
-  bookingId           String              @id @default(cuid())
-  clubShortName       String
-  club                Club                @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  facilityId          String
-  facility            ClubFacility        @relation(fields: [facilityId], references: [facilityId])
-  rentalWindowEventId String
-  rentalWindowEvent   CalendarEvent       @relation("RentalWindow", fields: [rentalWindowEventId], references: [eventId])
-  userId              String
-  user                User                @relation(fields: [userId], references: [userId])
-  resourceId          String
-  resource            ClubResource        @relation(fields: [resourceId], references: [resourceId])
-  startTime           DateTime
-  endTime             DateTime
-  blockingEventId     String?             @unique // @unique required for 1:1 relation (decision #69)
-  blockingEvent       CalendarEvent?      @relation("BookingBlock", fields: [blockingEventId], references: [eventId])
-  productId           String?
-  product             Product?            @relation(fields: [productId], references: [productId])
-  status              RentalBookingStatus @default(CONFIRMED)
-  notes               String?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  bookingId               String              @id @default(cuid())
+  clubShortName           String
+  club                    Club                @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  facilityId              String
+  facility                ClubFacility        @relation(fields: [facilityId], references: [facilityId])
+  rentalWindowEventId     String
+  rentalWindowEvent       CalendarEvent       @relation("RentalWindow", fields: [rentalWindowEventId], references: [eventId])
+  userId                  String
+  user                    User                @relation(fields: [userId], references: [userId])
+  resourceId              String
+  resource                ClubResource        @relation(fields: [resourceId], references: [resourceId])
+  startTime               DateTime
+  endTime                 DateTime
+  blockingEventId         String?             @unique // @unique required for 1:1 relation (decision #69)
+  blockingEvent           CalendarEvent?      @relation("BookingBlock", fields: [blockingEventId], references: [eventId])
+  productId               String?
+  product                 Product?            @relation(fields: [productId], references: [productId])
+  status                  RentalBookingStatus @default(CONFIRMED)
+  notes                   String?
+  // Phase 12a — Stripe Connect traceability for paid rental bookings (CR-b).
+  // Null for staff-booked / cash-at-desk bookings.
+  stripeCheckoutSessionId String?             @unique
+  stripePaymentIntentId   String?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
 
   @@index([clubShortName])
   @@index([rentalWindowEventId])
@@ -677,6 +694,7 @@ model RentalBooking {
   @@index([resourceId])
   @@index([startTime, endTime])
   @@index([status])
+  @@index([stripePaymentIntentId])
 }
 
 // EventRegistration — tracks who signed up for what; created when Stripe webhook confirms payment
@@ -691,7 +709,9 @@ model EventRegistration {
   userId                  String
   user                    User               @relation("EventRegistrations", fields: [userId], references: [userId])
   instanceDate            DateTime? // For PER_INSTANCE (drop-in): the specific occurrence date
-  stripeCheckoutSessionId String? // Stripe Checkout session ID for traceability
+  // Phase 12a — `@unique` added (row-level idempotency for webhook attach).
+  // Pairs with `ProcessedProcessorEvent` (event-level idempotency).
+  stripeCheckoutSessionId String?            @unique // Stripe Checkout session ID for traceability
   stripePaymentIntentId   String? // Stripe PaymentIntent ID for traceability
   status                  RegistrationStatus @default(REGISTERED)
   createdAt               DateTime           @default(now())
@@ -840,10 +860,10 @@ model PackagePlan {
   publicDescription String?  @db.Text
   publicImageData   Bytes?
   publicImageType   String?
-  // Phase 12: add @unique here in the same migration that introduces ProcessedStripeEvent.
-  // Held off in v1 to keep the migration prompt-free; nothing populates these fields until Phase C.
-  stripeProductId   String?
-  stripePriceId     String?
+  // Phase 12a — `@unique` added (deferred from public-shop v1 / decision #17).
+  // Always null until Phase C populates them; no duplicate-value risk.
+  stripeProductId   String?  @unique
+  stripePriceId     String?  @unique
   sortOrder         Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -858,26 +878,30 @@ model PackagePlan {
 
 // MemberPackage — an instance of a PackagePlan sold to a specific member.
 model MemberPackage {
-  memberPackageId String      @id @default(cuid())
-  clubShortName   String
-  club            Club        @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  userId          String
-  user            User        @relation("MemberPackageOwner", fields: [userId], references: [userId])
-  packagePlanId   String
-  packagePlan     PackagePlan @relation(fields: [packagePlanId], references: [packagePlanId])
-  startDate       DateTime
-  endDate         DateTime? // calculated at sale time using facility timezone; null = no expiry
-  creditsTotal    Int? // null = unlimited (deferred to 8b)
-  creditsUsed     Int         @default(0)
-  status          String      @db.VarChar(20) // "active" | "depleted" | "expired" (cancelled deferred)
-  soldBy          String // staff userId who sold it
-  soldByUser      User        @relation("MemberPackageSeller", fields: [soldBy], references: [userId])
-  soldAt          DateTime    @default(now())
-  invoiceId       String? // Phase 9-EOD (2026-05-02): populated for new sales; null for historical rows.
-  invoice         Invoice?    @relation(fields: [invoiceId], references: [invoiceId])
-  notes           String?     @db.Text
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  memberPackageId         String      @id @default(cuid())
+  clubShortName           String
+  club                    Club        @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  userId                  String
+  user                    User        @relation("MemberPackageOwner", fields: [userId], references: [userId])
+  packagePlanId           String
+  packagePlan             PackagePlan @relation(fields: [packagePlanId], references: [packagePlanId])
+  startDate               DateTime
+  endDate                 DateTime? // calculated at sale time using facility timezone; null = no expiry
+  creditsTotal            Int? // null = unlimited (deferred to 8b)
+  creditsUsed             Int         @default(0)
+  status                  String      @db.VarChar(20) // "active" | "depleted" | "expired" (cancelled deferred)
+  soldBy                  String // staff userId who sold it
+  soldByUser              User        @relation("MemberPackageSeller", fields: [soldBy], references: [userId])
+  soldAt                  DateTime    @default(now())
+  invoiceId               String? // Phase 9-EOD (2026-05-02): populated for new sales; null for historical rows.
+  invoice                 Invoice?    @relation(fields: [invoiceId], references: [invoiceId])
+  // Phase 12a — Stripe Connect traceability. Populated when a package was sold
+  // via the embedded checkout / webhook path; null for staff-sold packages.
+  stripeCheckoutSessionId String?     @unique
+  stripePaymentIntentId   String?
+  notes                   String?     @db.Text
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
 
   creditUsages     PackageCreditUsage[]
   invoiceLineItems InvoiceLineItem[]
@@ -888,6 +912,7 @@ model MemberPackage {
   @@index([status])
   @@index([endDate])
   @@index([invoiceId])
+  @@index([stripePaymentIntentId])
 }
 
 // PackageCreditUsage — records a single credit deduction from a MemberPackage.
@@ -1020,6 +1045,12 @@ model Invoice {
   // When that hits 0, `creditConsumedAt` is stamped. Always 0 for invoices that
   // were never overpaid.
   creditConsumedInCents Int       @default(0)
+
+  // Phase 12a — set when the invoice-pay-now flow creates a checkout session
+  // targeting THIS specific invoice. `@unique` is the row-level idempotency
+  // lock during webhook attach (pairs with `ProcessedProcessorEvent` at the
+  // event level). Null for non-Stripe / manual invoices.
+  stripeCheckoutSessionId String? @unique
 
   lineItems                InvoiceLineItem[]
   payments                 InvoicePayment[]
@@ -1290,47 +1321,51 @@ model MembershipPlan {
 // void is a soft-delete. Payer is NOT stored here; it lives on the Invoice
 // (billedToUserId). Beneficiary = userId (#110/#116).
 model MemberMembership {
-  memberMembershipId     String         @id @default(cuid())
-  clubShortName          String
-  club                   Club           @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  userId                 String // the beneficiary / consumer
-  user                   User           @relation("MemberMembershipOwner", fields: [userId], references: [userId])
-  membershipPlanId       String
-  membershipPlan         MembershipPlan @relation(fields: [membershipPlanId], references: [membershipPlanId])
+  memberMembershipId      String         @id @default(cuid())
+  clubShortName           String
+  club                    Club           @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  userId                  String // the beneficiary / consumer
+  user                    User           @relation("MemberMembershipOwner", fields: [userId], references: [userId])
+  membershipPlanId        String
+  membershipPlan          MembershipPlan @relation(fields: [membershipPlanId], references: [membershipPlanId])
   // OPTIONAL facility where sold / member's home location (attribution + reporting;
   // mirrors Invoice.facilityId). null = club-wide/unattributed. Validity is
   // club-wide regardless; facility-RESTRICTED memberships are future.
-  facilityId             String?
-  facility               ClubFacility?  @relation(fields: [facilityId], references: [facilityId])
-  membershipNumber       String? // auto-generated or manual (future)
+  facilityId              String?
+  facility                ClubFacility?  @relation(fields: [facilityId], references: [facilityId])
+  membershipNumber        String? // auto-generated or manual (future)
   // STORED lifecycle: "active" | "cancelled" | "suspended" | "frozen" | "voided".
   // "upcoming"/"active"/"expired" are DERIVED from startDate/endDate on read.
-  status                 String         @db.VarChar(20)
-  startDate              DateTime // today or FUTURE (>= today; future -> derived "upcoming"). Backdating disallowed in 10a.
-  endDate                DateTime? // calendar term end (Feb 15 -> Mar 14); null = indefinite. Expiry computed-on-read (#27).
-  nextBillingDate        DateTime? // unused in 10a (no auto-renew); set only when the generator runs (future).
+  status                  String         @db.VarChar(20)
+  startDate               DateTime // today or FUTURE (>= today; future -> derived "upcoming"). Backdating disallowed in 10a.
+  endDate                 DateTime? // calendar term end (Feb 15 -> Mar 14); null = indefinite. Expiry computed-on-read (#27).
+  nextBillingDate         DateTime? // unused in 10a (no auto-renew); set only when the generator runs (future).
   // Per-membership override of MembershipPlan.autoRenew; null = inherit plan.
   // Inert in 10a (see Auto-Renew Toggle §).
-  autoRenew              Boolean?
-  billingCyclesCompleted Int            @default(0)
-  freezeStartDate        DateTime? // when freeze began
-  freezeEndDate          DateTime? // when freeze ends (extends endDate)
-  freezeReason           String?        @db.Text
-  suspendReason          String?        @db.Text
-  cancelReason           String?        @db.Text
-  cancelDate             DateTime?
+  autoRenew               Boolean?
+  billingCyclesCompleted  Int            @default(0)
+  freezeStartDate         DateTime? // when freeze began
+  freezeEndDate           DateTime? // when freeze ends (extends endDate)
+  freezeReason            String?        @db.Text
+  suspendReason           String?        @db.Text
+  cancelReason            String?        @db.Text
+  cancelDate              DateTime?
   // Soft-delete for mistakes (wrong member/duplicate). Hides the row + voids the
   // UNPAID fee line item. If already paid -> refund + cancel instead. Admin only.
   // Never a hard DELETE.
-  voidedAt               DateTime?
-  voidedBy               String?
-  voidReason             String?        @db.Text
-  soldBy                 String // staff userId
-  soldByUser             User           @relation("MemberMembershipSeller", fields: [soldBy], references: [userId])
-  soldAt                 DateTime       @default(now())
-  notes                  String?        @db.Text
-  createdAt              DateTime       @default(now())
-  updatedAt              DateTime       @updatedAt
+  voidedAt                DateTime?
+  voidedBy                String?
+  voidReason              String?        @db.Text
+  soldBy                  String // staff userId
+  soldByUser              User           @relation("MemberMembershipSeller", fields: [soldBy], references: [userId])
+  soldAt                  DateTime       @default(now())
+  notes                   String?        @db.Text
+  // Phase 12a — Stripe Connect traceability for the INITIAL purchase. 12b's
+  // recurring-billing generator will populate these for renewal charges too.
+  stripeCheckoutSessionId String?        @unique
+  stripePaymentIntentId   String?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 
   invoiceLineItems InvoiceLineItem[]
 
@@ -1341,6 +1376,7 @@ model MemberMembership {
   @@index([status])
   @@index([endDate])
   @@index([soldBy])
+  @@index([stripePaymentIntentId])
 }
 
 // ============================================================
@@ -1598,4 +1634,127 @@ model ClubAnnouncement {
   updatedAt     DateTime           @updatedAt
 
   @@index([clubShortName, status, publishedAt])
+}
+
+// ============================================================
+// PHASE 12a — STRIPE CONNECT + GENERIC PAYMENT-PROCESSOR PLUMBING
+// See designFiles/roadmap/phase12-stripe-connect.md (canonical design).
+// Per-processor connection state lives in its OWN table (ClubStripeAccount now;
+// ClubPaysafeAccount / ClubValorAccount later). Cross-cutting concerns
+// (idempotency, customer mapping, orphan queue, checkout sessions) live in
+// generic, processor-discriminated tables. A club has AT MOST one active
+// processor at a time — enforced in app code by `getProviderForClub`.
+// ============================================================
+
+// ClubStripeAccount — per-club Stripe connection state. 1:1 with Club. Never
+// hard-deleted; `disconnectedAt` is the soft-disconnect signal so reconnect can
+// re-resume the same Stripe acct_ relationship.
+model ClubStripeAccount {
+  id               String    @id @default(cuid())
+  clubShortName    String    @unique // 1:1 with Club in 12a
+  club             Club      @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  stripeAccountId  String    @unique // acct_xxx
+  livemode         Boolean // sanity-check vs incoming webhooks
+  chargesEnabled   Boolean   @default(false)
+  payoutsEnabled   Boolean   @default(false)
+  detailsSubmitted Boolean   @default(false)
+  accountEmail     String?
+  defaultCurrency  String?   @db.VarChar(3)
+  connectedAt      DateTime  @default(now())
+  lastSyncedAt     DateTime  @default(now())
+  disconnectedAt   DateTime?
+
+  @@index([stripeAccountId])
+}
+
+// ProcessedProcessorEvent — generic webhook idempotency table. INSERT-on-
+// first-touch as the FIRST DB op inside every webhook handler `$transaction`
+// (Invariant I6 — do NOT hoist out of the tx for performance). Unique-violation
+// = duplicate delivery → return 200 silently. Composite PK; no separate id.
+model ProcessedProcessorEvent {
+  processor   String   @db.VarChar(30) // 'stripe' | 'paysafe' | 'valor'
+  eventId     String   @db.VarChar(255)
+  processedAt DateTime @default(now())
+
+  @@id([processor, eventId])
+  @@index([processedAt])
+}
+
+// ProcessorCustomerLink — per-(user, processor, connected-account) Customer
+// mapping. Webhook populates on first checkout; future SetupIntents in 12b hang
+// saved cards off these rows. Multi-club person ends up with one row per
+// (club's connected account); single User row.
+model ProcessorCustomerLink {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation("UserProcessorCustomers", fields: [userId], references: [userId], onDelete: Cascade)
+  processor          String   @db.VarChar(30)
+  providerAccountId  String   @db.VarChar(255) // acct_xxx for Stripe
+  providerCustomerId String   @db.VarChar(255) // cus_xxx for Stripe
+  createdAt          DateTime @default(now())
+
+  @@unique([userId, processor, providerAccountId])
+  @@index([providerAccountId, providerCustomerId])
+}
+
+// OrphanedPurchaseStatus — lifecycle for the dead-letter queue.
+enum OrphanedPurchaseStatus {
+  PENDING
+  RECONCILED
+  REFUNDED
+  IGNORED
+}
+
+// OrphanedPurchase — generic dead-letter queue for webhook failures.
+// `reason` is String, not enum, intentionally — vocabulary is extensible
+// (e.g. 'no_email' | 'clerk_create_failed' | 'seat_filled_pre_webhook'
+//  | 'stripe_dashboard_refund_with_consumed_credit' | 'unknown_club'
+//  | 'unknown_metadata' | 'duplicate_attach').
+model OrphanedPurchase {
+  id                      String                 @id @default(cuid())
+  clubShortName           String
+  club                    Club                   @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  processor               String                 @db.VarChar(30)
+  providerSessionId       String?                @db.VarChar(255)
+  providerPaymentIntentId String?                @db.VarChar(255)
+  email                   String?
+  reason                  String                 @db.VarChar(60)
+  status                  OrphanedPurchaseStatus @default(PENDING)
+  rawEvent                Json
+  notes                   String?                @db.Text
+  resolvedAt              DateTime?
+  resolvedBy              String?
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  @@index([clubShortName, status])
+  @@index([processor, providerSessionId])
+}
+
+// CheckoutSession — local mirror of provider checkout sessions. Used to:
+//   (a) render `/checkout/[sessionId]` page from a stable cuid we control;
+//   (b) let the webhook look up the local `intent` via
+//       `metadata.checkoutSessionId = CheckoutSession.id` to dispatch by itemKind.
+// The Stripe payload is the canonical source of truth on amount/email/customer;
+// `intent` here is read-only audit/debug.
+model CheckoutSession {
+  id                String   @id @default(cuid()) // used in /checkout/[id]
+  clubShortName     String
+  club              Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  processor         String   @db.VarChar(30)
+  providerSessionId String   @unique // cs_xxx for Stripe
+  providerAccountId String // acct_xxx
+  clientSecret      String   @db.Text // Stripe Embedded Checkout client_secret
+  amountInCents     Int
+  description       String   @db.VarChar(500)
+  intent            Json // serialized CheckoutIntent — read-only audit/debug
+  status            String   @default("open") @db.VarChar(20)
+  // "open" | "completed" | "expired" | "voided"
+  consumerUserId    String?
+  invoiceId         String? // pay-now case
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([clubShortName, status])
+  @@index([providerSessionId])
 }
