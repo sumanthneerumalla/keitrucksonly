@@ -19,8 +19,10 @@
  */
 
 import { ClerkPersistentError } from "~/server/utils/createUserAccount";
+import type { FamilyGroupLinkOutcome } from "~/server/utils/familyGroups";
 
 export { ClerkPersistentError };
+export type { FamilyGroupLinkOutcome };
 
 // ============================================================
 // Processor identity
@@ -148,12 +150,35 @@ export type CheckoutItemKind =
 	| "membership";
 
 /**
+ * Two-identity capture block (§7.8.1). Both `beneficiary` and `payer` are
+ * normalized (lowercase + trim on email) BEFORE being stamped into intent.
+ */
+export interface CheckoutIdentityBlock {
+	firstName: string;
+	lastName: string;
+	/** Normalized: lowercase + trim. §7.8.3 STRICT match rules. */
+	email: string;
+}
+
+/**
  * What a checkout is "about". Mirrors the JSON written to
  * `CheckoutSession.intent` (read-only audit/debug) and the metadata.* fields
  * stamped on the Stripe session (§7.6 contract).
  *
  * `metadata.consumerUserId` is `''` (empty string) on guest checkouts —
  * Stripe's metadata column is string-typed and doesn't accept null.
+ *
+ * §7.8 two-identity extension (Round 2.7): when the pre-Stripe form
+ * captures both beneficiary + payer (parent-buying-for-kid case), the
+ * webhook reads them from `intent.beneficiary` and `intent.payer` to
+ * find-or-create both user rows. Backwards compatible: when either block
+ * is absent we fall back to single-identity behavior.
+ *
+ * The `familyGroupOutcome` slot is stamped by the webhook AFTER linking
+ * runs, so the confirmation page (§7.8.7) can render the right branch
+ * via `getCheckoutSessionStatus`. We store it inline on `intent` rather
+ * than adding a new column on CheckoutSession — Phase 12a Round 2.7 spec
+ * explicitly prefers JSON storage to avoid a migration.
  */
 export interface CheckoutIntent {
 	itemKind: CheckoutItemKind;
@@ -163,6 +188,11 @@ export interface CheckoutIntent {
 	consumerUserId?: string;
 	amountInCents: number;
 	description: string;
+	/** §7.8 — captured at the pre-Stripe form. Both optional for back-compat. */
+	beneficiary?: CheckoutIdentityBlock;
+	payer?: CheckoutIdentityBlock;
+	/** Stamped by the webhook after `linkFamilyGroup` runs. */
+	familyGroupOutcome?: FamilyGroupLinkOutcome;
 	metadata: {
 		checkoutSessionId: string;
 		clubShortName: string;
@@ -209,6 +239,14 @@ export interface PaymentProvider {
 		/** See §7.6 metadata contract. */
 		metadata: Record<string, string>;
 		returnUrl: string;
+		/**
+		 * Round 2.7.1 — when the provider-side session should expire. The
+		 * caller mirrors this onto `CheckoutSession.expiresAt` so the local
+		 * mirror and the provider stay in sync. StripeProvider passes this
+		 * as `expires_at` (Unix seconds). Optional only for provider
+		 * implementations that don't support session expiry; Stripe does.
+		 */
+		expiresAt?: Date;
 	}): Promise<{ sessionId: string; clientSecret: string }>;
 
 	// -------- Refund --------

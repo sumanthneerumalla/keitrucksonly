@@ -122,6 +122,7 @@ export class StripeProvider implements PaymentProvider {
 		applicationFeeInCents?: number;
 		metadata: Record<string, string>;
 		returnUrl: string;
+		expiresAt?: Date;
 	}): Promise<{ sessionId: string; clientSecret: string }> {
 		const stripe = getStripe();
 		const params: Stripe.Checkout.SessionCreateParams = {
@@ -150,6 +151,13 @@ export class StripeProvider implements PaymentProvider {
 
 		if (args.customerEmail) {
 			params.customer_email = args.customerEmail;
+		}
+
+		// Round 2.7.1 — pass our explicit expiry (default Stripe is 24h;
+		// we want 30 min to match `CheckoutSession.expiresAt` + the
+		// §7.8.13 banner cutoff). Stripe accepts Unix seconds.
+		if (args.expiresAt) {
+			params.expires_at = Math.floor(args.expiresAt.getTime() / 1000);
 		}
 
 		const session = await stripe.checkout.sessions.create(

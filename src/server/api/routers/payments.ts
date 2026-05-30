@@ -53,8 +53,10 @@ import {
 	getStripeProvider,
 } from "~/server/services/payments";
 import type {
+	CheckoutIdentityBlock,
 	CheckoutIntent,
 	CheckoutItemKind,
+	FamilyGroupLinkOutcome,
 } from "~/server/services/payments/types";
 import {
 	AUDIT_ACTIONS,
@@ -72,6 +74,35 @@ import {
 // ============================================================
 // Internal helpers
 // ============================================================
+
+/**
+ * §7.8 two-identity capture block. Optional on every `startCheckout.*`
+ * mutation — when present, the email is normalized server-side (lowercase
+ * + trim per §7.8.3 STRICT) BEFORE being stored in `CheckoutSession.intent`.
+ * Same shape for beneficiary and payer.
+ */
+const identityBlockSchema = z.object({
+	firstName: z.string().trim().min(1).max(100),
+	lastName: z.string().trim().max(100).default(""),
+	// Validate as email; normalize at the helper. Keep max length sane.
+	email: z.string().trim().email().max(255),
+});
+
+/**
+ * Apply §7.8.3 strict normalization (lowercase + trim) and produce the
+ * stored `CheckoutIdentityBlock` shape. Called from each startCheckout.*
+ * mutation. Returns `null` if the input was undefined.
+ */
+function normalizeIdentityBlock(
+	block: z.infer<typeof identityBlockSchema> | undefined,
+): CheckoutIdentityBlock | null {
+	if (!block) return null;
+	return {
+		firstName: block.firstName.trim(),
+		lastName: block.lastName.trim(),
+		email: block.email.trim().toLowerCase(),
+	};
+}
 
 /**
  * Embedded Checkout return URL. The literal `{CHECKOUT_SESSION_ID}` token is
@@ -142,10 +173,27 @@ async function createCheckoutSessionForIntent(
 		amountInCents: number;
 		description: string;
 		consumerUserId: string | null;
+		/**
+		 * Round 2.7.1 — the user who clicked "Pay" (the actor), distinct from
+		 * `consumerUserId` (the beneficiary). `null` for `publicProcedure`
+		 * guest paths; populated from `ctx.user.userId` on `protectedProcedure`
+		 * callers. Powers the §7.8.13 resume-checkout banner so a parent
+		 * paying for a kid sees their own in-flight row, not the kid's.
+		 */
+		initiatedByUserId: string | null;
 		billToUserId: string | null;
 		invoiceId: string | null;
 		customerEmail: string | undefined;
 		providerCustomerId: string | undefined;
+		/**
+		 * §7.8 — two-identity blocks from the pre-Stripe form. Caller has
+		 * already passed them through `normalizeIdentityBlock` so emails
+		 * are lowercased + trimmed. Same-email dedup runs in this helper:
+		 * if both emails match after normalization we collapse to a single
+		 * identity and skip the family-group plans (§7.8.5).
+		 */
+		beneficiary?: CheckoutIdentityBlock | null;
+		payer?: CheckoutIdentityBlock | null;
 	},
 ): Promise<{ checkoutSessionId: string; clientSecret: string }> {
 	const { providerAccountId } = await assertClubReadyForCharges(
@@ -158,6 +206,11 @@ async function createCheckoutSessionForIntent(
 	// and the CheckoutSession PK so the webhook lookup is one indexed read.
 	const checkoutSessionId = randomUUID();
 	const correlationId = randomUUID();
+
+	// Round 2.7.1 — compute once, store on the local row AND pass to Stripe
+	// (as Unix seconds) so the two sides agree on when this session goes
+	// stale. 30 min matches Stripe's default + §7.8.12 stage 2 + §7.8.13.
+	const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
 	const metadata: Record<string, string> = {
 		checkoutSessionId,
@@ -183,7 +236,18 @@ async function createCheckoutSessionForIntent(
 		applicationFeeInCents: 0, // §3: 0% in 12a; scaffolded for future
 		metadata,
 		returnUrl: SHOP_CONFIRMATION_RETURN_URL,
+		expiresAt,
 	});
+
+	// §7.8.5 same-email dedup: collapse to a single identity. When both
+	// blocks are present AND emails are identical after normalization we
+	// drop the payer block, so the webhook treats it as self-pay (no
+	// family group, billedToUserId left null).
+	const beneficiary = args.beneficiary ?? undefined;
+	let payer = args.payer ?? undefined;
+	if (beneficiary && payer && beneficiary.email === payer.email) {
+		payer = undefined;
+	}
 
 	const intent: CheckoutIntent = {
 		itemKind: args.itemKind,
@@ -191,6 +255,11 @@ async function createCheckoutSessionForIntent(
 		consumerUserId: args.consumerUserId ?? undefined,
 		amountInCents: args.amountInCents,
 		description: args.description,
+		// Two-identity blocks (optional). Both must be present together for
+		// the webhook to take the two-identity path; one alone falls back
+		// to single-identity behavior.
+		beneficiary: beneficiary ?? undefined,
+		payer: payer ?? undefined,
 		metadata: {
 			checkoutSessionId,
 			clubShortName: args.clubShortName,
@@ -216,7 +285,12 @@ async function createCheckoutSessionForIntent(
 			intent: intent as unknown as Prisma.InputJsonValue,
 			status: "open",
 			consumerUserId: args.consumerUserId ?? null,
+			// Round 2.7.1 — actor (who clicked Pay), distinct from
+			// consumerUserId (beneficiary). Null on guest paths.
+			initiatedByUserId: args.initiatedByUserId ?? null,
 			invoiceId: args.invoiceId ?? null,
+			// Round 2.7.1 — mirrors the Stripe session's expires_at.
+			expiresAt,
 		},
 	});
 
@@ -261,7 +335,17 @@ const startCheckoutRouter = createTRPCRouter({
 	 * Anyone else gets NOT_FOUND so cross-club probes cannot enumerate ids.
 	 */
 	invoice: protectedProcedure
-		.input(z.object({ invoiceId: z.string().min(1) }))
+		.input(
+			z.object({
+				invoiceId: z.string().min(1),
+				// §7.8 — optional two-identity blocks (parent-pays-for-kid via
+				// the pre-Stripe form). Invoice pay-now usually skips the form
+				// (the invoice already encodes consumer + billed-to), but we
+				// accept them here for symmetry with the other surfaces.
+				beneficiary: identityBlockSchema.optional(),
+				payer: identityBlockSchema.optional(),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
 			const viewer = await getCurrentUser(ctx);
 			return await ctx.db.$transaction(async (tx) => {
@@ -319,10 +403,13 @@ const startCheckoutRouter = createTRPCRouter({
 					amountInCents: balance,
 					description: `Invoice ${invoice.invoiceNumber}`,
 					consumerUserId: invoice.userId,
+					initiatedByUserId: viewer.userId,
 					billToUserId: invoice.billedToUserId,
 					invoiceId: invoice.invoiceId,
 					customerEmail: invoice.user.email ?? undefined,
 					providerCustomerId: undefined,
+					beneficiary: normalizeIdentityBlock(input.beneficiary),
+					payer: normalizeIdentityBlock(input.payer),
 				});
 			});
 		}),
@@ -338,6 +425,8 @@ const startCheckoutRouter = createTRPCRouter({
 				packagePlanId: z.string().min(1),
 				consumerUserId: z.string().min(1).optional(),
 				billToUserId: z.string().min(1).optional(),
+				beneficiary: identityBlockSchema.optional(),
+				payer: identityBlockSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -385,10 +474,13 @@ const startCheckoutRouter = createTRPCRouter({
 					amountInCents: plan.priceInCents,
 					description: plan.name,
 					consumerUserId,
+					initiatedByUserId: viewer.userId,
 					billToUserId: input.billToUserId ?? null,
 					invoiceId: null,
 					customerEmail: viewer.email ?? undefined,
 					providerCustomerId: undefined,
+					beneficiary: normalizeIdentityBlock(input.beneficiary),
+					payer: normalizeIdentityBlock(input.payer),
 				});
 			});
 		}),
@@ -404,6 +496,8 @@ const startCheckoutRouter = createTRPCRouter({
 			z.object({
 				clubShortName: z.string().min(1),
 				packagePlanId: z.string().min(1),
+				beneficiary: identityBlockSchema.optional(),
+				payer: identityBlockSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -444,10 +538,14 @@ const startCheckoutRouter = createTRPCRouter({
 					amountInCents: plan.priceInCents,
 					description: plan.name,
 					consumerUserId: null,
+					// Guest path — no logged-in actor to attribute.
+					initiatedByUserId: null,
 					billToUserId: null,
 					invoiceId: null,
 					customerEmail: undefined,
 					providerCustomerId: undefined,
+					beneficiary: normalizeIdentityBlock(input.beneficiary),
+					payer: normalizeIdentityBlock(input.payer),
 				});
 			});
 		}),
@@ -463,6 +561,8 @@ const startCheckoutRouter = createTRPCRouter({
 			z.object({
 				eventId: z.string().min(1),
 				consumerUserId: z.string().min(1).optional(),
+				beneficiary: identityBlockSchema.optional(),
+				payer: identityBlockSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -505,10 +605,13 @@ const startCheckoutRouter = createTRPCRouter({
 					amountInCents: price,
 					description: event.title,
 					consumerUserId,
+					initiatedByUserId: viewer.userId,
 					billToUserId: null,
 					invoiceId: null,
 					customerEmail: viewer.email ?? undefined,
 					providerCustomerId: undefined,
+					beneficiary: normalizeIdentityBlock(input.beneficiary),
+					payer: normalizeIdentityBlock(input.payer),
 				});
 			});
 		}),
@@ -522,6 +625,8 @@ const startCheckoutRouter = createTRPCRouter({
 			z.object({
 				clubShortName: z.string().min(1),
 				eventId: z.string().min(1),
+				beneficiary: identityBlockSchema.optional(),
+				payer: identityBlockSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -562,10 +667,14 @@ const startCheckoutRouter = createTRPCRouter({
 					amountInCents: price,
 					description: event.title,
 					consumerUserId: null,
+					// Guest path — no logged-in actor to attribute.
+					initiatedByUserId: null,
 					billToUserId: null,
 					invoiceId: null,
 					customerEmail: undefined,
 					providerCustomerId: undefined,
+					beneficiary: normalizeIdentityBlock(input.beneficiary),
+					payer: normalizeIdentityBlock(input.payer),
 				});
 			});
 		}),
@@ -576,7 +685,13 @@ const startCheckoutRouter = createTRPCRouter({
 	 * its slot. The amount comes from the booking's product price.
 	 */
 	rental: protectedProcedure
-		.input(z.object({ rentalBookingId: z.string().min(1) }))
+		.input(
+			z.object({
+				rentalBookingId: z.string().min(1),
+				beneficiary: identityBlockSchema.optional(),
+				payer: identityBlockSchema.optional(),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
 			const viewer = await getCurrentUser(ctx);
 			return await ctx.db.$transaction(async (tx) => {
@@ -621,10 +736,13 @@ const startCheckoutRouter = createTRPCRouter({
 					amountInCents: booking.product.priceInCents,
 					description: booking.product.name,
 					consumerUserId: viewer.userId,
+					initiatedByUserId: viewer.userId,
 					billToUserId: null,
 					invoiceId: null,
 					customerEmail: viewer.email ?? undefined,
 					providerCustomerId: undefined,
+					beneficiary: normalizeIdentityBlock(input.beneficiary),
+					payer: normalizeIdentityBlock(input.payer),
 				});
 			});
 		}),
@@ -641,6 +759,8 @@ const startCheckoutRouter = createTRPCRouter({
 				membershipPlanId: z.string().min(1),
 				consumerUserId: z.string().min(1).optional(),
 				billToUserId: z.string().min(1).optional(),
+				beneficiary: identityBlockSchema.optional(),
+				payer: identityBlockSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -694,10 +814,13 @@ const startCheckoutRouter = createTRPCRouter({
 					amountInCents: amount,
 					description,
 					consumerUserId,
+					initiatedByUserId: viewer.userId,
 					billToUserId: input.billToUserId ?? null,
 					invoiceId: null,
 					customerEmail: viewer.email ?? undefined,
 					providerCustomerId: undefined,
+					beneficiary: normalizeIdentityBlock(input.beneficiary),
+					payer: normalizeIdentityBlock(input.payer),
 				});
 			});
 		}),
@@ -979,6 +1102,139 @@ export const paymentsRouter = createTRPCRouter({
 	// ========================================================
 
 	startCheckout: startCheckoutRouter,
+
+	// ========================================================
+	// Resume / confirmation surface (Round 2.7 — §7.8.13)
+	// ========================================================
+
+	/**
+	 * Drives the "⏳ You have an unfinished checkout" banner on `/account/*`
+	 * pages (§7.8.13). Filters by the caller's userId + clubShortName +
+	 * status='open' + `expiresAt > now()`. Returns `[]` when nothing pending
+	 * — banner stays hidden.
+	 *
+	 * Round 2.7.1: `userId` in design-doc speak maps to our
+	 * `CheckoutSession.initiatedByUserId` column — the user who clicked
+	 * "Pay" (the actor), NOT `consumerUserId` (the beneficiary). For a
+	 * parent paying for a kid's membership the parent's banner shows the
+	 * row even though the kid is the consumer. Guest sessions have
+	 * `initiatedByUserId=null` and never surface here.
+	 */
+	listMyOpenCheckouts: protectedProcedure.query(async ({ ctx }) => {
+		const viewer = await getCurrentUser(ctx);
+		const now = new Date();
+		const rows = await ctx.db.checkoutSession.findMany({
+			where: {
+				clubShortName: viewer.clubShortName,
+				initiatedByUserId: viewer.userId,
+				status: "open",
+				expiresAt: { gt: now },
+			},
+			orderBy: { createdAt: "desc" },
+			select: {
+				id: true,
+				description: true,
+				amountInCents: true,
+				expiresAt: true,
+			},
+		});
+		return rows.map((row) => ({
+			checkoutSessionId: row.id,
+			description: row.description,
+			amountInCents: row.amountInCents,
+			expiresAt: row.expiresAt,
+		}));
+	}),
+
+	/**
+	 * Dismiss a stale CheckoutSession from the resume banner (§7.8.13).
+	 * Cross-tenant + ownership guarded: row's `initiatedByUserId` must equal
+	 * the caller (matches the banner's visibility predicate — only the
+	 * actor who started a checkout may dismiss it) and its `clubShortName`
+	 * must match — otherwise NOT_FOUND to avoid cross-tenant enumeration.
+	 */
+	dismissCheckoutSession: protectedProcedure
+		.input(z.object({ checkoutSessionId: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			const viewer = await getCurrentUser(ctx);
+			const row = await ctx.db.checkoutSession.findUnique({
+				where: { id: input.checkoutSessionId },
+				select: {
+					id: true,
+					clubShortName: true,
+					initiatedByUserId: true,
+					status: true,
+				},
+			});
+			if (
+				!row ||
+				row.clubShortName !== viewer.clubShortName ||
+				row.initiatedByUserId !== viewer.userId
+			) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Checkout session not found",
+				});
+			}
+			// No-op if already terminal — silent success keeps the UI simple.
+			if (row.status === "open") {
+				await ctx.db.checkoutSession.update({
+					where: { id: row.id },
+					data: { status: "expired" },
+				});
+			}
+			return { ok: true as const };
+		}),
+
+	/**
+	 * Confirmation-page poll surface (§7.8.7, §7.8.11 E5). Guest confirmation
+	 * pages call this every 2s for up to 30s waiting for the webhook to
+	 * mark the row 'completed' — hence `publicProcedure` (no auth).
+	 *
+	 * Lookup is by `providerSessionId` (Stripe's `cs_xxx`, the value Stripe
+	 * substitutes into the `{CHECKOUT_SESSION_ID}` template variable on
+	 * the return URL) — NOT our internal `CheckoutSession.id`.
+	 *
+	 * Output is deliberately narrow: status + completedAt + familyGroupOutcome.
+	 * No amount, description, identity emails — anything that could be
+	 * scraped by guessing session ids stays server-side.
+	 */
+	getCheckoutSessionStatus: publicProcedure
+		.input(z.object({ sessionId: z.string().min(1) }))
+		.query(async ({ ctx, input }) => {
+			const row = await ctx.db.checkoutSession.findUnique({
+				where: { providerSessionId: input.sessionId },
+				select: {
+					status: true,
+					updatedAt: true,
+					intent: true,
+				},
+			});
+			if (!row) {
+				// Guest confirmation pages may hit this before the local row
+				// is even created in race conditions — return a stable shape
+				// so the poller can keep trying without crashing.
+				return {
+					status: "open" as const,
+					completedAt: undefined,
+					familyGroupOutcome: undefined,
+				};
+			}
+			// `CheckoutSession.status` is a String column (not an enum); the
+			// design contract documents these four values. We cast to keep
+			// the public type narrow for callers.
+			const status = row.status as "open" | "completed" | "expired" | "failed";
+			// Read the outcome out of intent JSON (no dedicated column — see
+			// CheckoutIntent.familyGroupOutcome in types.ts).
+			const familyGroupOutcome =
+				(row.intent as { familyGroupOutcome?: FamilyGroupLinkOutcome } | null)
+					?.familyGroupOutcome ?? undefined;
+			return {
+				status,
+				completedAt: status === "completed" ? row.updatedAt : undefined,
+				familyGroupOutcome,
+			};
+		}),
 
 	// ========================================================
 	// Orphan management (2 procedures)

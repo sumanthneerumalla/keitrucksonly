@@ -168,6 +168,13 @@ model User {
   // checkout; 12b SetupIntents hang saved cards off these rows.
   processorCustomers ProcessorCustomerLink[] @relation("UserProcessorCustomers")
 
+  // Phase 12a Round 2.7.1 — CheckoutSessions this user initiated (the actor who
+  // clicked "Pay"), distinct from `consumerUserId` (the beneficiary). For a
+  // parent paying for a kid's membership: initiatedByUserId=parent,
+  // consumerUserId=kid. The §7.8.13 resume-checkout banner queries by initiator
+  // so the parent sees their own in-flight checkout, not the kid's.
+  initiatedCheckoutSessions CheckoutSession[] @relation("CheckoutSessionInitiator")
+
   @@index([clerkUserId])
   @@index([clubShortName])
   @@index([activeFacilityId])
@@ -1751,10 +1758,23 @@ model CheckoutSession {
   status            String   @default("open") @db.VarChar(20)
   // "open" | "completed" | "expired" | "voided"
   consumerUserId    String?
+  // Phase 12a Round 2.7.1 — the user who clicked "Pay" (actor), as opposed to
+  // `consumerUserId` (beneficiary). Null for guest/public-shop checkouts.
+  // Drives the §7.8.13 "Resume checkout" banner so a parent paying for a kid
+  // sees their own row instead of the kid's. SetNull on user delete: we keep
+  // the audit/debug row but stop attributing it to a deleted actor.
+  initiatedByUserId String?
+  initiatedByUser   User?    @relation("CheckoutSessionInitiator", fields: [initiatedByUserId], references: [userId], onDelete: SetNull)
   invoiceId         String? // pay-now case
+  // Phase 12a Round 2.7.1 — explicit expiry mirroring the Stripe session's
+  // `expires_at` (set to createdAt + 30 min on insert). The §7.8.13 banner
+  // query filters `expiresAt > now()` so stale rows never display even when
+  // their status stays 'open' (no cron in 12a — deferred).
+  expiresAt         DateTime
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@index([clubShortName, status])
   @@index([providerSessionId])
+  @@index([initiatedByUserId])
 }

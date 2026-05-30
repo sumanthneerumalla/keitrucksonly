@@ -32,7 +32,9 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import {
 	CapacityRaceError,
+	type CheckoutIdentityBlock,
 	type CheckoutIntent,
+	type FamilyGroupLinkOutcome,
 	OrphanError,
 	type ParsedProviderEvent,
 	type ProviderEvent,
@@ -43,6 +45,7 @@ import {
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
 import {
+	ClerkPersistentError,
 	findOrCreateClerkUserId,
 	findOrCreateLocalUserAccount,
 } from "~/server/utils/createUserAccount";
@@ -50,6 +53,7 @@ import {
 	assertRegistrable,
 	createRegistrationTx,
 } from "~/server/utils/eventRegistration";
+import { linkFamilyGroup } from "~/server/utils/familyGroups";
 import { assertLineItemKindConsistency } from "~/server/utils/invoiceLineItems";
 import {
 	recordPaymentInternal,
@@ -91,6 +95,167 @@ function splitGuestName(
  */
 function asCheckoutIntent(json: Prisma.JsonValue): CheckoutIntent {
 	return json as unknown as CheckoutIntent;
+}
+
+/**
+ * Defensive normalization (§7.8.3 STRICT): lowercase + trim. We normalize
+ * at mutation input AND here so a tampered intent row can't slip past.
+ */
+function normalizeEmail(raw: string): string {
+	return raw.trim().toLowerCase();
+}
+
+/**
+ * Resolve a single identity block via the existing Round 1 helpers
+ * (Clerk find-or-create THEN local find-or-create — decision #24 / Option A).
+ * Refines `ClerkPersistentError` into the supplied `clerkOrphanReason` so
+ * the failure module writes an orphan with `clerk_create_failed_buyer` /
+ * `clerk_create_failed_beneficiary` per §7.8.11 E12.
+ */
+async function resolveIdentityBlock(
+	db: PrismaClient,
+	block: CheckoutIdentityBlock,
+	clubShortName: string,
+	clerkOrphanReason: string,
+): Promise<{ userId: string }> {
+	const email = normalizeEmail(block.email);
+	const firstName = block.firstName.trim();
+	const lastName = block.lastName.trim();
+	let clerkUserId: string;
+	try {
+		const result = await findOrCreateClerkUserId({
+			email,
+			firstName,
+			lastName,
+		});
+		clerkUserId = result.clerkUserId;
+	} catch (err) {
+		// Re-throw as OrphanError so failure.ts writes the per-identity reason.
+		// `ClerkPersistentError` (multi-Clerk-user collision) is the only
+		// failure we refine here; other Clerk errors keep their TRPCError
+		// surface and bubble up to the generic dispatch_failed catch-all.
+		if (err instanceof ClerkPersistentError) {
+			throw new OrphanError({
+				reason: clerkOrphanReason,
+				message: err.message,
+			});
+		}
+		throw err;
+	}
+	const { userId } = await db.$transaction(async (tx) =>
+		findOrCreateLocalUserAccount({
+			db: tx,
+			clerkUserId,
+			email,
+			firstName,
+			lastName,
+			clubShortName,
+			role: "STUDENT",
+		}),
+	);
+	return { userId };
+}
+
+/**
+ * §7.8 — two-identity resolution path. Returns:
+ *  - `consumerUserId` (beneficiary's userId)
+ *  - `billedToUserId` (payer's userId, or null when self-pay dedup collapsed)
+ *  - `familyGroupOutcome` (from `linkFamilyGroup`, or 'no_op_self_pay' on collapse)
+ *
+ * Same-email dedup (§7.8.5): if normalized beneficiary email === normalized
+ * payer email, treat as one person. Single Clerk + User row. No family
+ * group. `billedToUserId` left null (self-pay convention, HANDOFF #110).
+ */
+async function resolveTwoIdentityIntent(
+	db: PrismaClient,
+	intent: CheckoutIntent,
+	clubShortName: string,
+): Promise<{
+	consumerUserId: string;
+	billedToUserId: string | null;
+	familyGroupOutcome: FamilyGroupLinkOutcome;
+}> {
+	if (!intent.beneficiary || !intent.payer) {
+		// Caller checked this before invoking; defensive.
+		throw new Error(
+			"resolveTwoIdentityIntent invoked without both identity blocks",
+		);
+	}
+
+	const beneficiaryEmail = normalizeEmail(intent.beneficiary.email);
+	const payerEmail = normalizeEmail(intent.payer.email);
+
+	// §7.8.5 — same-email dedup. Collapse to a single identity.
+	if (beneficiaryEmail === payerEmail) {
+		const { userId } = await resolveIdentityBlock(
+			db,
+			intent.beneficiary,
+			clubShortName,
+			// Single-identity Clerk failure inherits the beneficiary-side
+			// reason; this branch already implies the two blocks collapsed.
+			"clerk_create_failed_beneficiary",
+		);
+		return {
+			consumerUserId: userId,
+			billedToUserId: null,
+			familyGroupOutcome: "no_op_self_pay",
+		};
+	}
+
+	// Distinct identities — resolve beneficiary first (its Clerk failure is
+	// the more user-visible side; orphan reason names it explicitly per E12).
+	const beneficiary = await resolveIdentityBlock(
+		db,
+		intent.beneficiary,
+		clubShortName,
+		"clerk_create_failed_beneficiary",
+	);
+	const payer = await resolveIdentityBlock(
+		db,
+		intent.payer,
+		clubShortName,
+		"clerk_create_failed_buyer",
+	);
+
+	// §7.8.6 — auto-link in its own short tx so the advisory lock is held
+	// for the minimum window. `linkFamilyGroup` is idempotent under retry.
+	const familyGroupOutcome = await db.$transaction(async (tx) =>
+		linkFamilyGroup(tx, {
+			userIdA: beneficiary.userId,
+			userIdB: payer.userId,
+			clubShortName,
+		}),
+	);
+
+	return {
+		consumerUserId: beneficiary.userId,
+		billedToUserId: payer.userId,
+		familyGroupOutcome,
+	};
+}
+
+/**
+ * Persist the resolved family-group outcome onto `CheckoutSession.intent`
+ * JSON so the confirmation page (§7.8.7) can render the right branch via
+ * `payments.getCheckoutSessionStatus`. Stored in JSON rather than a new
+ * column to avoid a migration (per Round 2.7 spec preference).
+ */
+async function stampFamilyGroupOutcome(
+	db: PrismaClient,
+	checkoutSessionId: string,
+	outcome: FamilyGroupLinkOutcome,
+): Promise<void> {
+	const row = await db.checkoutSession.findUnique({
+		where: { id: checkoutSessionId },
+		select: { intent: true },
+	});
+	if (!row) return;
+	const intent = asCheckoutIntent(row.intent);
+	const next: CheckoutIntent = { ...intent, familyGroupOutcome: outcome };
+	await db.checkoutSession.update({
+		where: { id: checkoutSessionId },
+		data: { intent: next as unknown as Prisma.InputJsonValue },
+	});
 }
 
 /**
@@ -172,20 +337,55 @@ async function dispatchCheckoutCompleted(
 
 	// §7.7 Gap #2 — defensive email guard. Guest flows REQUIRE an email;
 	// invoice pay-now flows are logged-in members and don't need one.
+	// §7.8 two-identity flows carry emails inside `intent.beneficiary` /
+	// `intent.payer` (pre-Stripe form output), so Stripe's customer_details
+	// email may legitimately be absent — skip the guard if either block
+	// supplies an email.
+	const hasIntentEmail = Boolean(
+		intent.beneficiary?.email || intent.payer?.email,
+	);
 	if (
 		!parsed.email &&
+		!hasIntentEmail &&
 		intent.itemKind !== "invoice" &&
 		!intent.consumerUserId
 	) {
 		throw new OrphanError({ reason: "no_email" });
 	}
 
-	// Resolve the consumer userId. Guest path = Clerk find-or-create per
-	// §8.5. Per decision #24 (Option A), the Clerk HTTP call happens OUTSIDE
-	// any DB transaction; here we're in the dispatcher proper (post-commit
-	// of the dedup row), so calling Clerk before opening a tx is correct.
+	// Resolve identities. Three paths:
+	//   (A) Two-identity intent (§7.8) — parent-for-kid flow from the new
+	//       pre-Stripe form. `intent.beneficiary` + `intent.payer` are both
+	//       present; we resolve both, link a family group, stamp the
+	//       outcome on the CheckoutSession row.
+	//   (B) Legacy single-identity intent — `intent.consumerUserId` set by
+	//       a logged-in shopper. Use it as-is; payer = the existing
+	//       intent.metadata.billToUserId (Phase 9a bill-to convention).
+	//   (C) Legacy guest single-identity — neither set; fall back to the
+	//       Stripe-side `customer_details` email/name (existing §8.5 flow).
 	let consumerUserId: string | undefined = intent.consumerUserId;
-	if (!consumerUserId) {
+	// `billedToUserId` is null in paths B/C unless the existing intent
+	// metadata carried a `billToUserId` (staff-selected bill-to in Round 2).
+	let billedToUserId: string | null = intent.metadata.billToUserId ?? null;
+
+	if (intent.beneficiary && intent.payer) {
+		// Path A — two-identity. Per decision #24 (Option A), the Clerk
+		// HTTP call happens OUTSIDE any DB transaction; `resolveIdentityBlock`
+		// follows that pattern.
+		const resolved = await resolveTwoIdentityIntent(db, intent, clubShortName);
+		consumerUserId = resolved.consumerUserId;
+		billedToUserId = resolved.billedToUserId;
+		// Stamp the outcome ASAP so the confirmation page (§7.8.7) can read
+		// it via `getCheckoutSessionStatus` even if the downstream dispatch
+		// throws — the OrphanedPurchase + Stripe charge are independent of
+		// the family-group bookkeeping.
+		await stampFamilyGroupOutcome(
+			db,
+			sessionRow.id,
+			resolved.familyGroupOutcome,
+		);
+	} else if (!consumerUserId) {
+		// Path C — legacy guest single-identity.
 		const email = parsed.email;
 		if (!email) {
 			throw new OrphanError({ reason: "no_email" });
@@ -195,7 +395,7 @@ async function dispatchCheckoutCompleted(
 		// length>1 multi-Clerk-user case; webhook failure module catches it
 		// and writes OrphanedPurchase with reason='clerk_create_failed'.
 		const { clerkUserId } = await findOrCreateClerkUserId({
-			email,
+			email: normalizeEmail(email),
 			firstName,
 			lastName,
 		});
@@ -203,7 +403,7 @@ async function dispatchCheckoutCompleted(
 			findOrCreateLocalUserAccount({
 				db: tx,
 				clerkUserId,
-				email,
+				email: normalizeEmail(email),
 				firstName,
 				lastName,
 				clubShortName,
@@ -243,7 +443,10 @@ async function dispatchCheckoutCompleted(
 				input: {
 					userId: consumerUserId,
 					packagePlanId: intent.itemId,
-					billToUserId: intent.metadata.billToUserId,
+					// §7.8: billedToUserId from the two-identity flow overrides
+					// the legacy intent.metadata.billToUserId field. `null` is
+					// the self-pay convention (HANDOFF #110).
+					billToUserId: billedToUserId ?? undefined,
 				},
 			});
 			// Precise row-targeted stamp (Round 2 fix): the prior `updateMany` on
@@ -281,7 +484,9 @@ async function dispatchCheckoutCompleted(
 					userId: consumerUserId,
 					membershipPlanId: intent.itemId,
 					startDate: new Date().toISOString().slice(0, 10),
-					billToUserId: intent.metadata.billToUserId,
+					// §7.8: billedToUserId from the two-identity flow overrides
+					// the legacy intent.metadata.billToUserId field.
+					billToUserId: billedToUserId ?? undefined,
 				},
 			});
 			// Precise row-targeted stamp (Round 2 fix): the prior `updateMany`
@@ -400,10 +605,14 @@ async function dispatchCheckoutCompleted(
 				kind: "EVENT_REGISTRATION",
 				eventRegistrationId: registrationId,
 			});
+			// §7.8: when a payer block resolved a distinct billedToUserId,
+			// the invoice is opened on the PAYER's tab (HANDOFF #110 — credit
+			// follows the payer). Without a distinct payer we fall back to
+			// self-pay (consumer pays their own tab).
 			const eventInvoice = await attachItemKindInvoice(db, {
 				clubShortName,
 				consumerUserId,
-				effectivePayerUserId: consumerUserId,
+				effectivePayerUserId: billedToUserId ?? consumerUserId,
 				facilityId: eventFacilityId,
 				createdByUserId: systemStaffUserId,
 				lineKind: "EVENT_REGISTRATION",
@@ -479,10 +688,11 @@ async function dispatchCheckoutCompleted(
 				kind: "RENTAL",
 				productId: booking.productId,
 			});
+			// §7.8: payer-vs-beneficiary override (see event branch above).
 			const rentalInvoice = await attachItemKindInvoice(db, {
 				clubShortName,
 				consumerUserId,
-				effectivePayerUserId: consumerUserId,
+				effectivePayerUserId: billedToUserId ?? consumerUserId,
 				facilityId: booking.facilityId,
 				createdByUserId: systemStaffUserId,
 				lineKind: "RENTAL",
