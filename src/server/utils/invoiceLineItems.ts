@@ -17,6 +17,7 @@ export function assertLineItemKindConsistency(d: {
 	packagePlanId?: string | null;
 	creditFromInvoiceId?: string | null;
 	memberMembershipId?: string | null;
+	memberPackageId?: string | null;
 	productId?: string | null;
 	eventRegistrationId?: string | null;
 }): void {
@@ -38,5 +39,35 @@ export function assertLineItemKindConsistency(d: {
 		throw new Error(
 			"InvoiceLineItem kind=EVENT_REGISTRATION requires eventRegistrationId",
 		);
+	}
+	if (d.kind === "RENTAL") {
+		// Rentals MAY have a productId (the schema's `RentalBooking.productId`
+		// is nullable — a court rental that hasn't been associated with a
+		// priced product still produces a line item). What we assert is what
+		// we don't permit: rental lines must NOT carry package/membership/
+		// credit/event provenance FKs.
+		if (d.packagePlanId) {
+			throw new Error("InvoiceLineItem kind=RENTAL must not set packagePlanId");
+		}
+		if (d.memberPackageId) {
+			throw new Error(
+				"InvoiceLineItem kind=RENTAL must not set memberPackageId",
+			);
+		}
+		if (d.memberMembershipId) {
+			throw new Error(
+				"InvoiceLineItem kind=RENTAL must not set memberMembershipId",
+			);
+		}
+		if (d.creditFromInvoiceId) {
+			throw new Error(
+				"InvoiceLineItem kind=RENTAL must not set creditFromInvoiceId",
+			);
+		}
+		if (d.eventRegistrationId) {
+			throw new Error(
+				"InvoiceLineItem kind=RENTAL must not set eventRegistrationId",
+			);
+		}
 	}
 }
