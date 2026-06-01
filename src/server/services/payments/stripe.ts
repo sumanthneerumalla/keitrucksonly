@@ -144,7 +144,9 @@ export class StripeProvider implements PaymentProvider {
 	}): Promise<{ sessionId: string; clientSecret: string }> {
 		const stripe = await getStripe();
 		const params: Stripe.Checkout.SessionCreateParams = {
-			ui_mode: "embedded",
+			// Stripe SDK 22 renamed the enum value 'embedded' → 'embedded_page'.
+			// Same behavior — Embedded Checkout iframe lives on our /checkout/[id] page.
+			ui_mode: "embedded_page",
 			mode: "payment",
 			billing_address_collection: "required",
 			customer_creation: "always",
