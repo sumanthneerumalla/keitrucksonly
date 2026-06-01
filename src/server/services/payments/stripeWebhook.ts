@@ -131,7 +131,10 @@ async function resolveClubShortNameForFailure(
 		});
 		return p?.invoice.clubShortName ?? null;
 	}
-	if (parsed.kind === "account.updated") {
+	if (
+		parsed.kind === "account.updated" ||
+		parsed.kind === "v2.account.updated"
+	) {
 		const row = await db.clubStripeAccount.findUnique({
 			where: { stripeAccountId: parsed.providerAccountId },
 			select: { clubShortName: true },

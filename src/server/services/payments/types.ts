@@ -135,6 +135,21 @@ export type ParsedProviderEvent =
 			payoutsEnabled: boolean;
 			detailsSubmitted: boolean;
 	  }
+	/**
+	 * Accounts v2 migration (2026-06-01). v2 connected accounts deliver
+	 * `v2.core.account.updated` instead of v1's `account.updated`. The
+	 * downstream effect is identical (sync `ClubStripeAccount` flags +
+	 * emit `STRIPE_ACCOUNT_UPDATED` audit) — we keep the variant kinds
+	 * distinct so the dispatcher's switch is exhaustive and the v1 case
+	 * stays available as a safety net for any straggler v1 deliveries.
+	 */
+	| {
+			kind: "v2.account.updated";
+			providerAccountId: string;
+			chargesEnabled: boolean;
+			payoutsEnabled: boolean;
+			detailsSubmitted: boolean;
+	  }
 	| {
 			kind: "payment_intent.failed";
 			paymentIntentId: string;
@@ -217,10 +232,31 @@ export interface PaymentProvider {
 	readonly processor: ProcessorName;
 
 	// -------- Onboarding --------
+	/**
+	 * Accounts v2 migration (2026-06-01) — onboarding now requires 5 universal
+	 * business identity fields (§6.1, §23 row 12). Stripe's v2 Accounts API
+	 * uses them to provision the connected account up-front; the hosted
+	 * AccountLink flow then collects everything else (bank account, tax ID,
+	 * NTEE for non-profits, …). Future providers (Paysafe/Valor) that don't
+	 * need every field should ignore the ones they don't consume.
+	 *
+	 *   businessName  registered legal name (Stripe `identity.business_details.
+	 *                                        registered_name`)
+	 *   country       ISO-3166-1 alpha-2, lowercase (Stripe `identity.country`)
+	 *   entityType    'company' | 'individual' | 'non_profit' | 'government_entity'
+	 *   contactEmail  primary contact (Stripe `contact_email`)
+	 *   displayName   public-facing display name (Stripe `display_name`);
+	 *                 defaults to `businessName` when omitted.
+	 */
 	createOnboardingLink(args: {
 		clubShortName: string;
 		returnUrl: string;
 		refreshUrl: string;
+		businessName: string;
+		country: string;
+		entityType: "company" | "individual" | "non_profit" | "government_entity";
+		contactEmail: string;
+		displayName?: string;
 	}): Promise<{ url: string; providerAccountId: string }>;
 
 	refreshAccountStatus(providerAccountId: string): Promise<{

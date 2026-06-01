@@ -2,19 +2,65 @@
 
 import type { ClubStripeAccount } from "@prisma/client";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
+import {
+	Dialog,
+	DialogBody,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "~/app/_components/shared/dialog";
 import { api } from "~/trpc/react";
 
 interface ConnectionStatus {
 	account: ClubStripeAccount | null;
 	isReadyForCharges: boolean;
+	/** Accounts v2 migration — prefill the pre-Connect form's contact email. */
+	adminEmail: string | null;
 }
 
 interface StripeConnectionCardProps {
 	initialStatus: ConnectionStatus;
+}
+
+type EntityType = "company" | "individual" | "non_profit" | "government_entity";
+
+interface PreConnectFormState {
+	businessName: string;
+	country: string;
+	entityType: EntityType;
+	contactEmail: string;
+	displayName: string;
+}
+
+/** Mirror of the server-side Zod input for `payments.startOnboarding`. */
+function validatePreConnectForm(state: PreConnectFormState): {
+	errors: Partial<Record<keyof PreConnectFormState, string>>;
+	isValid: boolean;
+} {
+	const errors: Partial<Record<keyof PreConnectFormState, string>> = {};
+	if (state.businessName.trim().length === 0) {
+		errors.businessName = "Business name is required.";
+	} else if (state.businessName.length > 200) {
+		errors.businessName = "Business name must be 200 characters or fewer.";
+	}
+	if (state.country.trim().length !== 2) {
+		errors.country = "Country code must be 2 letters.";
+	}
+	const email = state.contactEmail.trim();
+	if (email.length === 0) {
+		errors.contactEmail = "Contact email is required.";
+	} else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+		errors.contactEmail = "Enter a valid email address.";
+	}
+	if (state.displayName.length > 200) {
+		errors.displayName = "Display name must be 200 characters or fewer.";
+	}
+	return { errors, isValid: Object.keys(errors).length === 0 };
 }
 
 /**
@@ -57,6 +103,25 @@ export default function StripeConnectionCard({
 
 	const [confirmDisconnectOpen, setConfirmDisconnectOpen] = useState(false);
 
+	// Accounts v2 migration (2026-06-01) — pre-Connect form modal. The
+	// `[Set up Stripe →]` button opens this dialog; submit calls
+	// `payments.startOnboarding` with the 5 collected fields, then
+	// full-window-redirects to the returned hosted onboarding URL.
+	const [setupDialogOpen, setSetupDialogOpen] = useState(false);
+	const [formState, setFormState] = useState<PreConnectFormState>(() => ({
+		businessName: "",
+		country: "us",
+		entityType: "company",
+		contactEmail: initialStatus.adminEmail ?? "",
+		displayName: "",
+	}));
+	const [submitAttempted, setSubmitAttempted] = useState(false);
+
+	const validation = useMemo(
+		() => validatePreConnectForm(formState),
+		[formState],
+	);
+
 	const startOnboardingMutation = api.payments.startOnboarding.useMutation({
 		onSuccess: (data) => {
 			// Full-window navigation: Stripe Account Link is on stripe.com, so
@@ -66,6 +131,22 @@ export default function StripeConnectionCard({
 		},
 		onError: (err) => toast(err.message, "error"),
 	});
+
+	function handleSubmitSetupForm(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		setSubmitAttempted(true);
+		if (!validation.isValid) return;
+		startOnboardingMutation.mutate({
+			businessName: formState.businessName.trim(),
+			country: formState.country.trim().toLowerCase(),
+			entityType: formState.entityType,
+			contactEmail: formState.contactEmail.trim(),
+			displayName:
+				formState.displayName.trim().length > 0
+					? formState.displayName.trim()
+					: undefined,
+		});
+	}
 
 	const refreshMutation = api.payments.refreshAccountStatus.useMutation({
 		onSuccess: () => {
@@ -107,24 +188,184 @@ export default function StripeConnectionCard({
 
 	if (initialStatus.account === null) {
 		// ─── Not connected ────────────────────────────────────────────────
+		const isPending = startOnboardingMutation.isPending;
 		return (
-			<div className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
-				<h2 className="mb-2 font-medium text-[var(--foreground)] text-lg">
-					<span aria-hidden>⚪ </span>Stripe
-				</h2>
-				<p className="mb-4 text-[var(--muted-foreground)] text-sm">
-					Accept online payments by connecting your Stripe account.
-					ShuttleMentor takes no platform fee today.
-				</p>
-				<Button
-					onClick={() => startOnboardingMutation.mutate()}
-					disabled={startOnboardingMutation.isPending}
+			<>
+				<div className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+					<h2 className="mb-2 font-medium text-[var(--foreground)] text-lg">
+						<span aria-hidden>⚪ </span>Stripe
+					</h2>
+					<p className="mb-4 text-[var(--muted-foreground)] text-sm">
+						Accept online payments by connecting your Stripe account.
+						ShuttleMentor takes no platform fee today.
+					</p>
+					<Button
+						onClick={() => {
+							setSubmitAttempted(false);
+							setSetupDialogOpen(true);
+						}}
+						disabled={isPending}
+					>
+						{isPending ? "Redirecting…" : "Set up Stripe →"}
+					</Button>
+				</div>
+
+				<Dialog
+					open={setupDialogOpen}
+					onOpenChange={(next) => {
+						// Block dismiss while the redirect is in flight — closing the
+						// dialog mid-redirect would leave the user on a "Redirecting…"
+						// state with no way back.
+						if (isPending) return;
+						setSetupDialogOpen(next);
+					}}
 				>
-					{startOnboardingMutation.isPending
-						? "Redirecting…"
-						: "Connect Stripe →"}
-				</Button>
-			</div>
+					<DialogContent>
+						<DialogHeader>
+							<DialogTitle>Set up Stripe</DialogTitle>
+						</DialogHeader>
+						<form onSubmit={handleSubmitSetupForm}>
+							<DialogBody>
+								<p className="text-[var(--muted-foreground)] text-sm">
+									We'll send this info to Stripe along with your account
+									creation. Stripe will then ask for additional verification
+									(bank account, tax ID, etc.).
+								</p>
+								<FormField
+									label="Business name"
+									required
+									error={
+										submitAttempted ? validation.errors.businessName : undefined
+									}
+								>
+									<input
+										type="text"
+										value={formState.businessName}
+										onChange={(e) =>
+											setFormState((s) => ({
+												...s,
+												businessName: e.target.value,
+											}))
+										}
+										maxLength={200}
+										disabled={isPending}
+										className="block w-full rounded border border-[var(--border)] bg-white px-3 py-2 text-sm focus:border-[var(--ink)] focus:outline-none disabled:opacity-50"
+									/>
+								</FormField>
+								<FormField
+									label="Country"
+									required
+									error={
+										submitAttempted ? validation.errors.country : undefined
+									}
+									help="US-only for now — contact us if you need another country."
+								>
+									{/* US-only per owner direction (designFiles/roadmap/
+									    phase12-stripe-connect.md §23 row 12). The select is
+									    kept (rather than removed) so a future expansion
+									    only re-enables more options. */}
+									<select
+										value={formState.country}
+										onChange={(e) =>
+											setFormState((s) => ({ ...s, country: e.target.value }))
+										}
+										disabled={isPending}
+										className="block w-full rounded border border-[var(--border)] bg-white px-3 py-2 text-sm focus:border-[var(--ink)] focus:outline-none disabled:opacity-50"
+									>
+										<option value="us">United States</option>
+									</select>
+								</FormField>
+								<FormField
+									label="Entity type"
+									required
+									error={
+										submitAttempted ? validation.errors.entityType : undefined
+									}
+								>
+									<select
+										value={formState.entityType}
+										onChange={(e) =>
+											setFormState((s) => ({
+												...s,
+												entityType: e.target.value as EntityType,
+											}))
+										}
+										disabled={isPending}
+										className="block w-full rounded border border-[var(--border)] bg-white px-3 py-2 text-sm focus:border-[var(--ink)] focus:outline-none disabled:opacity-50"
+									>
+										<option value="company">Company</option>
+										<option value="individual">Individual</option>
+										<option value="non_profit">Non-profit</option>
+										<option value="government_entity">Government entity</option>
+									</select>
+								</FormField>
+								<FormField
+									label="Contact email"
+									required
+									error={
+										submitAttempted ? validation.errors.contactEmail : undefined
+									}
+								>
+									<input
+										type="email"
+										value={formState.contactEmail}
+										onChange={(e) =>
+											setFormState((s) => ({
+												...s,
+												contactEmail: e.target.value,
+											}))
+										}
+										maxLength={255}
+										disabled={isPending}
+										className="block w-full rounded border border-[var(--border)] bg-white px-3 py-2 text-sm focus:border-[var(--ink)] focus:outline-none disabled:opacity-50"
+									/>
+								</FormField>
+								<FormField
+									label="Display name"
+									error={
+										submitAttempted ? validation.errors.displayName : undefined
+									}
+									help="How your name appears to customers — defaults to business name."
+								>
+									<input
+										type="text"
+										value={formState.displayName}
+										onChange={(e) =>
+											setFormState((s) => ({
+												...s,
+												displayName: e.target.value,
+											}))
+										}
+										maxLength={200}
+										disabled={isPending}
+										placeholder={formState.businessName}
+										className="block w-full rounded border border-[var(--border)] bg-white px-3 py-2 text-sm focus:border-[var(--ink)] focus:outline-none disabled:opacity-50"
+									/>
+								</FormField>
+							</DialogBody>
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setSetupDialogOpen(false)}
+									disabled={isPending}
+								>
+									Cancel
+								</Button>
+								<Button
+									type="submit"
+									className="ml-2"
+									disabled={
+										isPending || (submitAttempted && !validation.isValid)
+									}
+								>
+									{isPending ? "Redirecting…" : "Continue to Stripe →"}
+								</Button>
+							</DialogFooter>
+						</form>
+					</DialogContent>
+				</Dialog>
+			</>
 		);
 	}
 
@@ -222,6 +463,39 @@ export default function StripeConnectionCard({
 				}}
 			/>
 		</>
+	);
+}
+
+function FormField({
+	label,
+	required,
+	error,
+	help,
+	children,
+}: {
+	label: string;
+	required?: boolean;
+	error?: string;
+	help?: string;
+	children: React.ReactNode;
+}) {
+	// We don't use a <label> wrapper so we don't trip biome's
+	// `noLabelWithoutControl` rule, which can't see through the polymorphic
+	// `children` slot. The input is still adjacent and the caption text is
+	// visible right above — accessibility is fine for this small admin form.
+	return (
+		<div>
+			<p className="mb-1 block font-medium text-[var(--foreground)] text-sm">
+				{label}
+				{required ? <span className="ml-1 text-red-500">*</span> : null}
+			</p>
+			{children}
+			{error ? (
+				<p className="mt-1 text-red-600 text-xs">{error}</p>
+			) : help ? (
+				<p className="mt-1 text-[var(--muted-foreground)] text-xs">{help}</p>
+			) : null}
+		</div>
 	);
 }
 

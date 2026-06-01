@@ -922,7 +922,15 @@ export const paymentsRouter = createTRPCRouter({
 		});
 		const isReadyForCharges =
 			account?.chargesEnabled === true && account.disconnectedAt === null;
-		return { account, isReadyForCharges };
+		// Accounts v2 migration (2026-06-01): the pre-Connect form prefills
+		// the contact email from the calling admin. Surface it here so the
+		// settings page server component can hand it to the client card
+		// without a separate fetch.
+		return {
+			account,
+			isReadyForCharges,
+			adminEmail: ctx.user.email ?? null,
+		};
 	}),
 
 	/**
@@ -997,70 +1005,114 @@ export const paymentsRouter = createTRPCRouter({
 	 * Both branches use `writeAuditedMutation` since they ARE business state
 	 * changes (creating a Stripe account, stamping connectedAt).
 	 */
-	startOnboarding: clubAdminProcedure.mutation(async ({ ctx }) => {
-		const clubShortName = ctx.user.clubShortName;
+	startOnboarding: clubAdminProcedure
+		.input(
+			z.object({
+				// Accounts v2 migration (2026-06-01): 5 universal pre-Connect
+				// fields collected by `<StripeConnectionCard>` before redirect
+				// to Stripe's hosted onboarding (§6.1 + §23 row 12).
+				businessName: z.string().trim().min(1).max(200),
+				country: z
+					.string()
+					.trim()
+					.length(2)
+					.transform((s) => s.toLowerCase())
+					.default("us"),
+				entityType: z.enum([
+					"company",
+					"individual",
+					"non_profit",
+					"government_entity",
+				]),
+				contactEmail: z.string().trim().email().max(255),
+				displayName: z
+					.string()
+					.trim()
+					.max(200)
+					.optional()
+					.transform((v) => (v === "" ? undefined : v)),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const clubShortName = ctx.user.clubShortName;
 
-		const existing = await ctx.db.clubStripeAccount.findUnique({
-			where: { clubShortName },
-			select: { stripeAccountId: true, chargesEnabled: true },
-		});
-
-		if (existing) {
-			// Resume path — see docstring. Block until the provider interface
-			// grows a "fresh link for existing account" method.
-			throw new TRPCError({
-				code: "PRECONDITION_FAILED",
-				message:
-					"A Stripe account is already linked. Resuming an incomplete onboarding from this UI is not yet implemented — please complete onboarding in the Stripe dashboard, then click Refresh.",
+			const existing = await ctx.db.clubStripeAccount.findUnique({
+				where: { clubShortName },
+				select: { stripeAccountId: true, chargesEnabled: true },
 			});
-		}
 
-		// First-time path — direct provider instantiation since
-		// `getProviderForClub` would throw without a row.
-		const provider = getStripeProvider();
-		const returnUrl = "/admin/settings/payments?stripe=return";
-		const refreshUrl = "/admin/settings/payments?stripe=refresh";
-		const { url, providerAccountId } = await provider.createOnboardingLink({
-			clubShortName,
-			returnUrl,
-			refreshUrl,
-		});
-
-		// Snapshot livemode immediately so a misregistered prod-vs-test endpoint
-		// is caught by the webhook's livemode-mismatch guard.
-		const livemode = process.env.STRIPE_LIVEMODE === "true";
-
-		return await writeAuditedMutation(
-			{
-				db: ctx.db,
-				actorUserId: ctx.user.userId,
-				clubShortName,
-				source: AUDIT_SOURCES.ADMIN_DASHBOARD,
-			},
-			async (tx) => {
-				const row = await tx.clubStripeAccount.create({
-					data: {
-						clubShortName,
-						stripeAccountId: providerAccountId,
-						livemode,
-						chargesEnabled: false,
-						payoutsEnabled: false,
-						detailsSubmitted: false,
-					},
+			if (existing) {
+				// Resume path — see docstring. Block until the provider interface
+				// grows a "fresh link for existing account" method.
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						"A Stripe account is already linked. Resuming an incomplete onboarding from this UI is not yet implemented — please complete onboarding in the Stripe dashboard, then click Refresh.",
 				});
-				return {
-					result: { url },
-					audit: {
-						action: AUDIT_ACTIONS.STRIPE_ACCOUNT_CONNECTED,
-						targetUserId: null,
-						entityType: "ClubStripeAccount",
-						entityId: row.id,
-						metadata: { providerAccountId, livemode },
-					},
-				};
-			},
-		);
-	}),
+			}
+
+			// First-time path — direct provider instantiation since
+			// `getProviderForClub` would throw without a row.
+			const provider = getStripeProvider();
+			const returnUrl = "/admin/settings/payments?stripe=return";
+			const refreshUrl = "/admin/settings/payments?stripe=refresh";
+			const { url, providerAccountId } = await provider.createOnboardingLink({
+				clubShortName,
+				returnUrl,
+				refreshUrl,
+				businessName: input.businessName,
+				country: input.country,
+				entityType: input.entityType,
+				contactEmail: input.contactEmail,
+				displayName: input.displayName,
+			});
+
+			// Snapshot livemode immediately so a misregistered prod-vs-test endpoint
+			// is caught by the webhook's livemode-mismatch guard.
+			const livemode = process.env.STRIPE_LIVEMODE === "true";
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					const row = await tx.clubStripeAccount.create({
+						data: {
+							clubShortName,
+							stripeAccountId: providerAccountId,
+							livemode,
+							chargesEnabled: false,
+							payoutsEnabled: false,
+							detailsSubmitted: false,
+							accountEmail: input.contactEmail,
+						},
+					});
+					return {
+						result: { url },
+						audit: {
+							action: AUDIT_ACTIONS.STRIPE_ACCOUNT_CONNECTED,
+							targetUserId: null,
+							entityType: "ClubStripeAccount",
+							entityId: row.id,
+							metadata: {
+								providerAccountId,
+								livemode,
+								// v2 migration: capture the form input on the audit row so
+								// owner can reconcile "what did we send to Stripe?".
+								businessName: input.businessName,
+								country: input.country,
+								entityType: input.entityType,
+								contactEmail: input.contactEmail,
+								displayName: input.displayName ?? null,
+							},
+						},
+					};
+				},
+			);
+		}),
 
 	/**
 	 * Pull latest account status from Stripe and write it back to the cached

@@ -87,25 +87,115 @@ export class StripeProvider implements PaymentProvider {
 
 	// -------- Onboarding --------
 
+	/**
+	 * Accounts v2 migration (2026-06-01) — `stripe.v2.core.accounts.create`.
+	 *
+	 * v1 Standard (`stripe.accounts.create({ type: 'standard', ... })`) is
+	 * deprecated for new integrations. v2 unifies Standard/Express/Custom
+	 * behind one Account resource configured via:
+	 *   - `dashboard: 'full'`            — clubs get the same full Stripe
+	 *                                       dashboard as v1 Standard (owner
+	 *                                       lock; designFiles/roadmap/
+	 *                                       phase12-stripe-connect.md §23).
+	 *   - `responsibilities.fees_collector: 'stripe'` +
+	 *     `responsibilities.losses_collector: 'stripe'`
+	 *                                    — clubs own disputes/fees, mirroring
+	 *                                       v1 Standard's liability model.
+	 *   - `configuration.merchant.capabilities.card_payments.requested: true`
+	 *                                    — enable card acceptance; equivalent
+	 *                                       of v1's implicit Standard card cap.
+	 *
+	 * Identity fields (registered_name / country / entity_type) come from the
+	 * pre-Connect form (§6.1) — 5 universal fields (HANDOFF + §23 row 12).
+	 * Stripe's hosted onboarding then collects the rest (NTEE for non-profits,
+	 * bank account, tax ID, …) via the AccountLink hosted flow.
+	 *
+	 * v2 AccountLink shape changed: instead of a flat `type: 'account_onboarding'`
+	 * it uses `use_case: { type: 'account_onboarding', account_onboarding: {
+	 * configurations: ['merchant'], refresh_url, return_url } }`. The returned
+	 * `account.id` format (`acct_xxx`) is unchanged — `ClubStripeAccount.
+	 * stripeAccountId` stores either v1 or v2 ids without schema work.
+	 */
 	async createOnboardingLink(args: {
 		clubShortName: string;
 		returnUrl: string;
 		refreshUrl: string;
+		businessName: string;
+		country: string;
+		entityType: "company" | "individual" | "non_profit" | "government_entity";
+		contactEmail: string;
+		displayName?: string;
 	}): Promise<{ url: string; providerAccountId: string }> {
 		const stripe = await getStripe();
-		const account = await stripe.accounts.create({
-			type: "standard",
+		const account = await stripe.v2.core.accounts.create({
+			contact_email: args.contactEmail,
+			display_name: args.displayName ?? args.businessName,
+			dashboard: "full",
+			identity: {
+				country: args.country,
+				entity_type: args.entityType,
+				business_details: {
+					registered_name: args.businessName,
+				},
+			},
+			configuration: {
+				merchant: {
+					capabilities: {
+						card_payments: { requested: true },
+					},
+				},
+			},
+			defaults: {
+				currency: "usd",
+				responsibilities: {
+					fees_collector: "stripe",
+					losses_collector: "stripe",
+				},
+			},
+			include: ["configuration.merchant", "identity", "requirements"],
 			metadata: { clubShortName: args.clubShortName },
 		});
-		const link = await stripe.accountLinks.create({
+		const link = await stripe.v2.core.accountLinks.create({
 			account: account.id,
-			return_url: args.returnUrl,
-			refresh_url: args.refreshUrl,
-			type: "account_onboarding",
+			use_case: {
+				type: "account_onboarding",
+				account_onboarding: {
+					configurations: ["merchant"],
+					refresh_url: args.refreshUrl,
+					return_url: args.returnUrl,
+				},
+			},
 		});
 		return { url: link.url, providerAccountId: account.id };
 	}
 
+	/**
+	 * v2 field mapping (Accounts v2 migration, 2026-06-01):
+	 *
+	 *   v1 Account flag                  v2 Account derivation
+	 *   ───────────────────────────────  ────────────────────────────────────
+	 *   charges_enabled                  configuration.merchant.applied
+	 *                                    && configuration.merchant.capabilities
+	 *                                       .card_payments.status === 'active'
+	 *   payouts_enabled                  configuration.merchant.applied
+	 *                                    (v2 Accounts with merchant active in
+	 *                                    full-dashboard mode receive payouts
+	 *                                    via Stripe's standard schedule once
+	 *                                    requirements are clear; we proxy off
+	 *                                    `applied` since v2 has no direct
+	 *                                    "payouts_enabled" flag on the response)
+	 *   details_submitted                requirements.entries is empty OR
+	 *                                    undefined (no outstanding requirements
+	 *                                    = onboarding complete)
+	 *   email                            contact_email
+	 *   livemode                         livemode (unchanged)
+	 *
+	 * `chargesEnabled` is the only flag that meaningfully gates checkout
+	 * (see `assertClubReadyForCharges` in payments.ts). The `payoutsEnabled`
+	 * proxy via `merchant.applied` is conservative but accurate for the
+	 * full-dashboard model — we never let a non-active merchant accept
+	 * charges, so the user-visible UI pill remains correct.
+	 */
 	async refreshAccountStatus(providerAccountId: string): Promise<{
 		chargesEnabled: boolean;
 		payoutsEnabled: boolean;
@@ -114,17 +204,22 @@ export class StripeProvider implements PaymentProvider {
 		livemode: boolean;
 	}> {
 		const stripe = await getStripe();
-		const account: Stripe.Account =
-			await stripe.accounts.retrieve(providerAccountId);
+		const account = await stripe.v2.core.accounts.retrieve(providerAccountId, {
+			include: ["configuration.merchant", "requirements"],
+		});
+		const merchant = account.configuration?.merchant;
+		const cardPaymentsStatus =
+			merchant?.capabilities?.card_payments?.status ?? "unsupported";
+		const chargesEnabled =
+			merchant?.applied === true && cardPaymentsStatus === "active";
+		const payoutsEnabled = merchant?.applied === true;
+		const detailsSubmitted = (account.requirements?.entries?.length ?? 0) === 0;
 		return {
-			chargesEnabled: account.charges_enabled,
-			payoutsEnabled: account.payouts_enabled,
-			detailsSubmitted: account.details_submitted,
-			accountEmail: account.email ?? null,
-			// Stripe's TS type marks `livemode` as optional on Account but it's
-			// always present in practice on real Connect responses.
-			livemode:
-				(account as unknown as { livemode?: boolean }).livemode ?? false,
+			chargesEnabled,
+			payoutsEnabled,
+			detailsSubmitted,
+			accountEmail: account.contact_email ?? null,
+			livemode: account.livemode,
 		};
 	}
 
@@ -281,6 +376,34 @@ export class StripeProvider implements PaymentProvider {
 
 	async parseEvent(event: ProviderEvent): Promise<ParsedProviderEvent> {
 		const raw = event.raw as Stripe.Event;
+		// Accounts v2 migration (2026-06-01): v2 events (`v2.core.account.*`)
+		// are NOT in the SDK's `Stripe.Event['type']` union (that union is
+		// v1-only). When Stripe delivers a v2 event through our shared webhook
+		// endpoint we still get a parsable JSON object with a `type` field;
+		// match it via `event.type` (the ProviderEvent string copy) before
+		// the v1-typed switch below.
+		if (event.type === "v2.core.account.updated") {
+			const rawV2 = event.raw as {
+				related_object?: { id?: string };
+				data?: { object?: { id?: string } };
+			};
+			const accountId =
+				rawV2.related_object?.id ?? rawV2.data?.object?.id ?? null;
+			if (!accountId) {
+				return { kind: "unhandled" };
+			}
+			// v2 events don't carry the full Account object inline (the
+			// payload is a "thin" event). Round-trip to derive the same
+			// flags `refreshAccountStatus` returns.
+			const status = await this.refreshAccountStatus(accountId);
+			return {
+				kind: "v2.account.updated",
+				providerAccountId: accountId,
+				chargesEnabled: status.chargesEnabled,
+				payoutsEnabled: status.payoutsEnabled,
+				detailsSubmitted: status.detailsSubmitted,
+			};
+		}
 		switch (raw.type) {
 			case "checkout.session.completed": {
 				const session = raw.data.object as Stripe.Checkout.Session;

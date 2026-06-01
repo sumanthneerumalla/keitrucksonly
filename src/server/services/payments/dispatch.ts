@@ -314,6 +314,12 @@ export async function dispatchParsedEvent(
 			return dispatchRefundCreated(db, parsed, event);
 		case "account.updated":
 			return dispatchAccountUpdated(db, parsed, event);
+		// Accounts v2 migration (2026-06-01): v2 events carry the same fields
+		// after `parseEvent` normalizes the payload. We route them to the
+		// SAME handler — the resulting `ClubStripeAccount` write + audit
+		// emission are identical to the v1 path.
+		case "v2.account.updated":
+			return dispatchAccountUpdated(db, parsed, event);
 		case "payment_intent.failed":
 			return dispatchPaymentIntentFailed(db, parsed);
 		case "unhandled":
@@ -1073,7 +1079,10 @@ async function dispatchRefundCreated(
 
 async function dispatchAccountUpdated(
 	db: PrismaClient,
-	parsed: Extract<ParsedProviderEvent, { kind: "account.updated" }>,
+	parsed: Extract<
+		ParsedProviderEvent,
+		{ kind: "account.updated" } | { kind: "v2.account.updated" }
+	>,
 	_event: ProviderEvent,
 ): Promise<void> {
 	// Look up first so we have clubShortName for the audited tx. Stripe
