@@ -32,6 +32,17 @@ export const env = createEnv({
 		// Phase 12a — Stripe.js publishable key, surfaced by the Embedded
 		// Checkout page (Stream 7). Optional so the app boots without Stripe.
 		NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
+		// Phase 12a — absolute app URL used to build Stripe AccountLink
+		// `return_url` / `refresh_url` (the AccountLink API rejects
+		// path-only strings). Optional in the schema so the app boots
+		// without it; consumers resolve via `getPlatformConfig(
+		// 'NEXT_PUBLIC_APP_URL', 'app_url')` so a missing env var can fall
+		// back to a `PlatformConfig` row (no-SSH workaround §24).
+		// Expected values:
+		//   prod  → https://facilitypresence.com
+		//   dev   → https://www.dev.facilitypresence.com
+		//   local → http://localhost:3000
+		NEXT_PUBLIC_APP_URL: z.string().url().optional(),
 	},
 
 	/**
@@ -50,6 +61,7 @@ export const env = createEnv({
 		STRIPE_PLATFORM_ACCOUNT_NAME: process.env.STRIPE_PLATFORM_ACCOUNT_NAME,
 		NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:
 			process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+		NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
 	},
 	/**
 	 * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

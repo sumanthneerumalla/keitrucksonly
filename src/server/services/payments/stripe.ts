@@ -355,6 +355,55 @@ export class StripeProvider implements PaymentProvider {
 			throw new SignatureError("Missing Stripe-Signature header");
 		}
 		const secret = await getWebhookSecret(args.endpointKind);
+
+		// Accounts v2 migration (2026-06-01) — v2 event destinations deliver a
+		// "thin-event" notification with `object === 'v2.core.event'`. The
+		// legacy `stripe.webhooks.constructEvent` explicitly REJECTS this
+		// payload shape with a hard throw (see
+		// `node_modules/stripe/cjs/Webhooks.js` lines 28-30 / 42-44) — it tells
+		// the caller to use `stripe.parseEventNotification` instead. Without
+		// this peek, our catch-all below would wrap that throw as a
+		// `SignatureError`, the route handler would return 400, and Stripe
+		// would stop retrying — silently dropping every v2 webhook delivery.
+		//
+		// Peek the payload (signature-verification still happens inside
+		// parseEventNotification, so cheating the JSON parse here doesn't
+		// weaken security — a malformed/unauthenticated payload still fails
+		// inside that call).
+		let parsed: { object?: string } | null = null;
+		try {
+			parsed = JSON.parse(args.rawBody) as { object?: string };
+		} catch {
+			// not JSON — fall through to constructEvent, which throws a
+			// SignatureError below for free.
+		}
+		if (parsed?.object === "v2.core.event") {
+			let v2Event: Awaited<ReturnType<typeof stripe.parseEventNotification>>;
+			try {
+				// parseEventNotification is sync in the SDK (see
+				// `node_modules/stripe/cjs/stripe.core.js` lines 514-541) but
+				// typed as a method on the Stripe instance; await is safe and
+				// future-proof if Stripe makes it async later.
+				v2Event = await stripe.parseEventNotification(
+					args.rawBody,
+					args.signatureHeader,
+					secret,
+				);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : "signature failed";
+				throw new SignatureError(message);
+			}
+			// V2.Core.EventNotification extends EventBase → id / type / livemode
+			// are all present (see Events.d.ts EventBase definition).
+			return {
+				id: v2Event.id,
+				type: v2Event.type,
+				livemode: v2Event.livemode,
+				raw: v2Event,
+			};
+		}
+
+		// v1 path — unchanged from pre-v2 code.
 		let event: Stripe.Event;
 		try {
 			event = stripe.webhooks.constructEvent(
@@ -382,7 +431,32 @@ export class StripeProvider implements PaymentProvider {
 		// endpoint we still get a parsable JSON object with a `type` field;
 		// match it via `event.type` (the ProviderEvent string copy) before
 		// the v1-typed switch below.
-		if (event.type === "v2.core.account.updated") {
+		//
+		// Stripe fires SEVEN distinct v2 account event variants when a
+		// connected account's state changes (see
+		// `node_modules/stripe/cjs/resources/V2/Core/Events.d.ts` ~line 121):
+		//   - v2.core.account.created
+		//   - v2.core.account.updated
+		//   - v2.core.account.closed
+		//   - v2.core.account[configuration.merchant].updated
+		//   - v2.core.account[configuration.merchant].capability_status_updated
+		//   - v2.core.account[requirements].updated
+		//   - v2.core.account[identity].updated
+		// Any of these can flip `chargesEnabled` / `payoutsEnabled` / details —
+		// we re-fetch state regardless of which sub-resource changed, so a
+		// prefix match captures them all. Returns the same parsed kind
+		// (`v2.account.updated`) so the dispatcher's existing branch handles
+		// every variant.
+		//
+		// EXCLUDED: `v2.core.account_link.returned` — fires when the user
+		// completes/leaves the AccountLink, which is a UX signal not an
+		// account-state change (we already refresh on the return URL via the
+		// settings page). The startsWith below catches `v2.core.account_link.*`
+		// too, so we filter that explicitly.
+		if (
+			event.type.startsWith("v2.core.account") &&
+			!event.type.startsWith("v2.core.account_link")
+		) {
 			const rawV2 = event.raw as {
 				related_object?: { id?: string };
 				data?: { object?: { id?: string } };
@@ -394,7 +468,10 @@ export class StripeProvider implements PaymentProvider {
 			}
 			// v2 events don't carry the full Account object inline (the
 			// payload is a "thin" event). Round-trip to derive the same
-			// flags `refreshAccountStatus` returns.
+			// flags `refreshAccountStatus` returns. This matches all
+			// v2.core.account.{merchant,requirements,identity,*}.updated
+			// events — we re-fetch state regardless of which sub-resource
+			// changed.
 			const status = await this.refreshAccountStatus(accountId);
 			return {
 				kind: "v2.account.updated",

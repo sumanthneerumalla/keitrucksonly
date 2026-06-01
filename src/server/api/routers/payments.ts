@@ -1054,8 +1054,27 @@ export const paymentsRouter = createTRPCRouter({
 			// First-time path — direct provider instantiation since
 			// `getProviderForClub` would throw without a row.
 			const provider = getStripeProvider();
-			const returnUrl = "/admin/settings/payments?stripe=return";
-			const refreshUrl = "/admin/settings/payments?stripe=refresh";
+			// Stripe's AccountLink API (v1 AND v2) REQUIRES absolute URLs —
+			// path-only strings either fail validation or redirect the user
+			// onto Stripe's own domain after onboarding. Resolve via env-first
+			// / DB-fallback so the owner can configure this without SSH (same
+			// no-SSH workaround pattern the Stripe secrets use, §24/§25).
+			const appUrlRaw = await getPlatformConfig(
+				"NEXT_PUBLIC_APP_URL",
+				"app_url",
+			);
+			if (!appUrlRaw) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message:
+						'App URL not configured. Set NEXT_PUBLIC_APP_URL env var or add platform_config row with key "app_url" (e.g., https://www.dev.facilitypresence.com).',
+				});
+			}
+			// Strip trailing slashes so the resulting URL doesn't end up with
+			// a double `//` after path concatenation.
+			const appUrl = appUrlRaw.replace(/\/+$/, "");
+			const returnUrl = `${appUrl}/admin/settings/payments?stripe=return`;
+			const refreshUrl = `${appUrl}/admin/settings/payments?stripe=refresh`;
 			const { url, providerAccountId } = await provider.createOnboardingLink({
 				clubShortName,
 				returnUrl,

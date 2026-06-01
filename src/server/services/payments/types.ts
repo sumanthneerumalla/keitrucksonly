@@ -137,11 +137,26 @@ export type ParsedProviderEvent =
 	  }
 	/**
 	 * Accounts v2 migration (2026-06-01). v2 connected accounts deliver
-	 * `v2.core.account.updated` instead of v1's `account.updated`. The
-	 * downstream effect is identical (sync `ClubStripeAccount` flags +
-	 * emit `STRIPE_ACCOUNT_UPDATED` audit) — we keep the variant kinds
-	 * distinct so the dispatcher's switch is exhaustive and the v1 case
-	 * stays available as a safety net for any straggler v1 deliveries.
+	 * a FAMILY of `v2.core.account*` events instead of v1's single
+	 * `account.updated`. `parseEvent` collapses ALL of them into this
+	 * one kind via an `event.type.startsWith('v2.core.account')` prefix
+	 * match (excluding `v2.core.account_link.*`, which is a UX signal
+	 * not an account-state change). The variants we collapse here:
+	 *
+	 *   - `v2.core.account.created`
+	 *   - `v2.core.account.updated`
+	 *   - `v2.core.account.closed`
+	 *   - `v2.core.account[configuration.merchant].updated`
+	 *   - `v2.core.account[configuration.merchant].capability_status_updated`
+	 *   - `v2.core.account[requirements].updated`
+	 *   - `v2.core.account[identity].updated`
+	 *
+	 * The downstream effect is identical for every variant (re-fetch via
+	 * `refreshAccountStatus`, sync `ClubStripeAccount` flags + emit
+	 * `STRIPE_ACCOUNT_UPDATED` audit). We keep the kind distinct from
+	 * v1's `account.updated` so the dispatcher's switch stays exhaustive
+	 * and the v1 case stays available as a safety net for any straggler
+	 * v1 deliveries.
 	 */
 	| {
 			kind: "v2.account.updated";
