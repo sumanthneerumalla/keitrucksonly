@@ -11,8 +11,11 @@
  *   - §23 #9 — `createRefund` does NOT carry a `reverseTransfer` flag.
  *     `reverse_transfer` is invalid for direct charges and the Stripe API
  *     rejects it; only `refundApplicationFee` survives.
- *   - §23 #10 — Clerk `signInTokens.createSignInToken({ userId, expiresInSeconds })`
- *     uses required `expiresInSeconds` (handled inside `createUserAccount.ts`).
+ *   - §23 #10 — Tier 1 email rollout: the public-shop confirmation page links
+ *     to `/sign-in?identifier=<email>` and Clerk sends the OTP on the user's
+ *     click. No sign-in token is minted in 12a. The Tier 3 mailer with a
+ *     one-click magic link (which WOULD mint `signInTokens.createSignInToken`
+ *     with the required `expiresInSeconds`) is future polish — not wired today.
  *
  * Errors are now TWO classes (collapsed 2026-05-30 from five):
  *   - `SignatureError` — route handler treats specially (400 response).

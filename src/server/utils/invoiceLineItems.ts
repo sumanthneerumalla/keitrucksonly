@@ -25,13 +25,20 @@ export function assertLineItemKindConsistency(d: {
 		throw new Error("InvoiceLineItem kind=PACKAGE_SALE requires packagePlanId");
 	}
 	// CREDIT lines: negative-amount overpayment-credit adjustments.
-	// Two sources:
-	//   1. Carry-forward from a prior auto-closed overpaid invoice
-	//      (creditFromInvoiceId SET, points at source invoice)
-	//   2. Refund-as-credit on the SAME invoice (creditFromInvoiceId NULL,
-	//      adjustment from a refund that issues credit instead of money back)
-	// Both: unitPriceInCents + totalInCents are negative; productId/packagePlanId/
+	// THREE possible provenance shapes (post Round 3.6):
+	//   1. Auto-carry-forward: creditFromInvoiceId SET, creditFromPaymentId NULL
+	//      (carry-forward from a prior auto-closed overpaid invoice)
+	//   2. Admin refund-as-credit: creditFromInvoiceId NULL, creditFromPaymentId SET
+	//      (adjustment issued by `issueAccountCreditFromPayment` instead of
+	//      a money-back refund; the FK back to the funding payment lets
+	//      the refundable-cap math subtract credit-issued from the
+	//      payment's remaining balance)
+	//   3. (Hypothetical) creditFromInvoiceId SET + creditFromPaymentId SET —
+	//      not used today
+	// All: unitPriceInCents + totalInCents are negative; productId/packagePlanId/
 	// memberPackageId/memberMembershipId/eventRegistrationId MUST be null.
+	// No assertion changes — both creditFromInvoiceId and creditFromPaymentId
+	// are nullable; producers set whichever applies.
 	if (d.kind === "CREDIT") {
 		if (d.packagePlanId) {
 			throw new Error("InvoiceLineItem kind=CREDIT must not set packagePlanId");

@@ -1153,6 +1153,14 @@ model InvoiceLineItem {
   creditFromUserId    String?
   creditFromUser      User?    @relation("LineItemCreditFromUser", fields: [creditFromUserId], references: [userId], onDelete: SetNull)
 
+  /// Phase 12a Round 3.6 — when this CREDIT line was issued by an admin
+  /// refund (vs auto-carry-forward), points at the payment that funded it.
+  /// Used by refundStripePayment to reduce the refundable cap so we don't
+  /// double-issue money (e.g. $50 credit + $100 Stripe refund on a $100
+  /// payment would return $150). NULL for auto-carry-forward CREDIT lines.
+  creditFromPaymentId String?
+  creditFromPayment   InvoicePayment? @relation("CreditLineFromPayment", fields: [creditFromPaymentId], references: [paymentId], onDelete: SetNull)
+
   // Phase 10a — Memberships (HANDOFF #119; the period/membership-FK slots were
   // designed in the line-item hardening pass and deferred to Phase 10).
   // memberMembershipId is the MEMBERSHIP_FEE provenance FK (parallels
@@ -1185,6 +1193,7 @@ model InvoiceLineItem {
   @@index([creditFromUserId])
   @@index([memberMembershipId])
   @@index([eventRegistrationId])
+  @@index([creditFromPaymentId])
 }
 
 // InvoicePayment — a payment received against an invoice. Multi-processor by design:
@@ -1211,7 +1220,11 @@ model InvoicePayment {
   receivedAt     DateTime @default(now())
   createdAt      DateTime @default(now())
 
-  refunds InvoiceRefund[]
+  refunds     InvoiceRefund[]
+  // Phase 12a Round 3.6 — CREDIT lines issued by an admin refund (refund-as-
+  // credit) back-reference the funding payment via creditFromPaymentId so the
+  // refundable cap math can include them. Empty for cash/check payments.
+  creditLines InvoiceLineItem[] @relation("CreditLineFromPayment")
 
   // Webhook idempotency: same processor tx id can't be recorded twice.
   // Postgres treats multiple NULLs as distinct, so manual cash/check payments don't conflict.
@@ -1763,7 +1776,8 @@ model CheckoutSession {
   description       String   @db.VarChar(500)
   intent            Json // serialized CheckoutIntent — read-only audit/debug
   status            String   @default("open") @db.VarChar(20)
-  // "open" | "completed" | "expired" | "voided"
+  // "open" | "completed" | "expired" | "failed"
+  // (Round 3.6 N5 — 'failed' replaces 'voided' to match dispatch code.)
   consumerUserId    String?
   // Phase 12a Round 2.7.1 — the user who clicked "Pay" (actor), as opposed to
   // `consumerUserId` (beneficiary). Null for guest/public-shop checkouts.

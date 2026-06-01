@@ -318,17 +318,37 @@ export async function recordRefundInternal(args: RecordRefundInternalArgs) {
 				});
 			}
 
-			// No over-refund: cap at the payment's not-yet-refunded balance.
-			const priorRefunds = await tx.invoiceRefund.aggregate({
-				_sum: { amountInCents: true },
-				where: { paymentId: input.paymentId },
-			});
+			// No over-refund: cap = paid − already-refunded −
+			// credit-already-issued-against-this-payment (Round 3.6
+			// IMPORTANT #1). The credit term covers refund-as-credit lines
+			// posted via `billing.issueAccountCreditFromPayment` — without
+			// it, a $50 credit + a full Stripe refund of the same $100
+			// payment would return $150 to the buyer against $100 paid.
+			// Each pre-lock fast-fail caller re-runs this under the lock.
+			const [priorRefunds, priorCreditIssued] = await Promise.all([
+				tx.invoiceRefund.aggregate({
+					_sum: { amountInCents: true },
+					where: { paymentId: input.paymentId },
+				}),
+				tx.invoiceLineItem.aggregate({
+					_sum: { totalInCents: true },
+					where: {
+						creditFromPaymentId: input.paymentId,
+						kind: "CREDIT",
+					},
+				}),
+			]);
 			const alreadyRefunded = priorRefunds._sum.amountInCents ?? 0;
-			const refundableRemaining = payment.amountInCents - alreadyRefunded;
+			// CREDIT line totals are negative; abs to dollar amount issued.
+			const alreadyCredited = Math.abs(
+				priorCreditIssued._sum.totalInCents ?? 0,
+			);
+			const refundableRemaining =
+				payment.amountInCents - alreadyRefunded - alreadyCredited;
 			if (input.amountInCents > refundableRemaining) {
 				throw new TRPCError({
 					code: "PRECONDITION_FAILED",
-					message: `Refund exceeds the payment's refundable balance ($${(refundableRemaining / 100).toFixed(2)}).`,
+					message: `Refund would exceed remaining refundable amount. Payment $${(payment.amountInCents / 100).toFixed(2)} paid; $${(alreadyRefunded / 100).toFixed(2)} already refunded; $${(alreadyCredited / 100).toFixed(2)} issued as account credit. Maximum refundable: $${(refundableRemaining / 100).toFixed(2)}.`,
 				});
 			}
 

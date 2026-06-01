@@ -169,6 +169,16 @@ async function resolveIdentityBlock(
  * Same-email dedup (§7.8.5): if normalized beneficiary email === normalized
  * payer email, treat as one person. Single Clerk + User row. No family
  * group. `billedToUserId` left null (self-pay convention, HANDOFF #110).
+ *
+ * Round 3.6 N7 — Choice B composition (phase12 §9.3.1): the two-identity
+ * flow runs each `findOrCreateClerkUserId` + `findOrCreateLocalUserAccount`
+ * in its own short transaction, then `linkFamilyGroup` in another. If the
+ * webhook crashes between these txs, the affected users exist but aren't
+ * yet linked. Recovery: the next purchase attempt with the same emails
+ * finds the users (find-or-create is idempotent) and re-runs
+ * `linkFamilyGroup` (also idempotent). No orphan row is written for this
+ * mid-flight case — documented edge for v1; revisit if it surfaces in
+ * production telemetry.
  */
 async function resolveTwoIdentityIntent(
 	db: PrismaClient,
@@ -763,7 +773,15 @@ async function dispatchCheckoutCompleted(
 					amountInCents: parsed.amountInCents,
 					paymentMethod: "credit_card",
 					processor: "stripe",
-					processorTransactionId: parsed.sessionId,
+					// Round 3.6 BLOCKER #1 fix: store the PaymentIntent id, not
+					// the Checkout Session id. `payments.refundStripePayment`
+					// reads this column and passes it to `provider.createRefund`
+					// as `providerPaymentIntentId` — Stripe rejects cs_xxx values
+					// with `parameter_invalid`. The session id is still
+					// preserved on `CheckoutSession.providerSessionId` and on
+					// the per-row `stripeCheckoutSessionId` columns, so no
+					// information is lost.
+					processorTransactionId: parsed.paymentIntentId ?? undefined,
 					processorChargeId: parsed.chargeId ?? undefined,
 					processorFeeInCents: parsed.feeInCents ?? undefined,
 				},
@@ -954,7 +972,12 @@ async function recordPaymentForInvoice(
 			amountInCents: args.parsed.amountInCents,
 			paymentMethod: "credit_card",
 			processor: "stripe",
-			processorTransactionId: args.parsed.sessionId,
+			// Round 3.6 BLOCKER #1 fix: store the PaymentIntent id (pi_xxx),
+			// not the Checkout Session id (cs_xxx). `refundStripePayment`
+			// reads this column as the PaymentIntent id when calling Stripe.
+			// `parsed.sessionId` remains on CheckoutSession.providerSessionId
+			// and on each itemKind's `stripeCheckoutSessionId` column.
+			processorTransactionId: args.parsed.paymentIntentId ?? undefined,
 			processorChargeId: args.parsed.chargeId ?? undefined,
 			processorFeeInCents: args.parsed.feeInCents ?? undefined,
 		},
@@ -1108,11 +1131,46 @@ async function dispatchPaymentIntentFailed(
 	db: PrismaClient,
 	parsed: Extract<ParsedProviderEvent, { kind: "payment_intent.failed" }>,
 ): Promise<void> {
-	// Mark any matching CheckoutSession as voided. We don't have a direct
-	// PI→CheckoutSession index, but the Embedded Checkout flow records the
-	// session in `CheckoutSession.providerSessionId` and the PI lives on
-	// the session row only after `checkout.session.completed`. For 12a we
-	// treat this as a logging hook; no member-side action.
-	void db;
-	void parsed;
+	// Round 3.6 N4 — keep the local CheckoutSession mirror consistent by
+	// transitioning any matching row to 'failed' (vocab locked in §7.3 +
+	// N5). No business mutation: Stripe Embedded Checkout already showed
+	// the decline inline to the buyer; we just stop the §7.8.13
+	// resume-checkout banner from advertising a dead session.
+	//
+	// Stripe `payment_intent.payment_failed` payloads do NOT carry the
+	// Checkout Session id, so we look up by the embedded PI on the
+	// stamped item rows (MemberPackage / EventRegistration / RentalBooking
+	// / MemberMembership). For 12a guest flows the PI isn't mirrored until
+	// `checkout.session.completed` fires, so a card-decline at the
+	// Embedded form has no row to flip — that case is a clean no-op (the
+	// CheckoutSession will expire naturally via `expiresAt`).
+	//
+	// A 12b follow-up adds a `providerPaymentIntentId` column on
+	// CheckoutSession so this lookup becomes one indexed read.
+	const piRowFromMembership = await db.memberMembership.findFirst({
+		where: { stripePaymentIntentId: parsed.paymentIntentId },
+		select: { stripeCheckoutSessionId: true },
+	});
+	const piRowFromPackage =
+		piRowFromMembership ??
+		(await db.memberPackage.findFirst({
+			where: { stripePaymentIntentId: parsed.paymentIntentId },
+			select: { stripeCheckoutSessionId: true },
+		}));
+	const piRow =
+		piRowFromPackage ??
+		(await db.eventRegistration.findFirst({
+			where: { stripePaymentIntentId: parsed.paymentIntentId },
+			select: { stripeCheckoutSessionId: true },
+		})) ??
+		(await db.rentalBooking.findFirst({
+			where: { stripePaymentIntentId: parsed.paymentIntentId },
+			select: { stripeCheckoutSessionId: true },
+		}));
+	if (piRow?.stripeCheckoutSessionId) {
+		await db.checkoutSession.updateMany({
+			where: { providerSessionId: piRow.stripeCheckoutSessionId },
+			data: { status: "failed" },
+		});
+	}
 }

@@ -34,7 +34,7 @@
  * `clubShortName` matches the caller's club before any provider call.
  */
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
 	OrphanedPurchaseStatus,
 	type Prisma,
@@ -110,9 +110,37 @@ function normalizeIdentityBlock(
  * (cs_xxx) at completion. Our server confirmation page reads the local
  * CheckoutSession by its cuid (joined via providerSessionId), so passing the
  * Stripe id through the URL is fine.
+ *
+ * Round 3.6 N6 — guest flows land on `/shop/confirmation`, in-app flows on
+ * `/checkout/confirmation`. The two pages render the same client; the split
+ * just makes Stripe's receipt-email link point at the appropriate surface.
  */
 const SHOP_CONFIRMATION_RETURN_URL =
 	"/shop/confirmation?session_id={CHECKOUT_SESSION_ID}";
+const INAPP_CONFIRMATION_RETURN_URL =
+	"/checkout/confirmation?session_id={CHECKOUT_SESSION_ID}";
+
+/**
+ * Mint a CheckoutSession primary key in the cuid-style format the schema's
+ * `@default(cuid())` produces (single letter prefix + 24 chars of base36).
+ * We mint server-side because the id must be stamped into Stripe metadata
+ * BEFORE the row is inserted (the webhook keys off `metadata.checkoutSessionId`).
+ * Round 3.6 N2 — was `randomUUID()` (dash-formatted uuid); cuid-style matches
+ * the rest of the codebase's id format and the schema column's default.
+ *
+ * Cryptographically random (16 random bytes → ~96 bits entropy after the
+ * substring) is overkill for collision resistance at our scale but matches
+ * the security profile of crypto.randomUUID. No new dependency.
+ */
+function mintCheckoutSessionId(): string {
+	// 16 bytes → 26+ chars of base36; take 24 + 'c' prefix for the cuid shape.
+	const tail = randomBytes(16).toString("hex");
+	const base36 = BigInt(`0x${tail}`)
+		.toString(36)
+		.padStart(24, "0")
+		.slice(0, 24);
+	return `c${base36}`;
+}
 
 /**
  * Pre-check the cached `ClubStripeAccount` row. Per §23 #3 we do NOT call
@@ -194,6 +222,15 @@ async function createCheckoutSessionForIntent(
 		 */
 		beneficiary?: CheckoutIdentityBlock | null;
 		payer?: CheckoutIdentityBlock | null;
+		/**
+		 * Round 3.6 N6 — pick the Stripe `return_url` per surface:
+		 *   - 'guest' (publicProcedure callers) → `/shop/confirmation?...`
+		 *   - 'inapp' (protectedProcedure callers) → `/checkout/confirmation?...`
+		 * Both pages render the same client, so neither branch breaks UX; the
+		 * split keeps the Stripe receipt-email link pointed at the appropriate
+		 * surface for that buyer.
+		 */
+		audience: "guest" | "inapp";
 	},
 ): Promise<{ checkoutSessionId: string; clientSecret: string }> {
 	const { providerAccountId } = await assertClubReadyForCharges(
@@ -204,7 +241,9 @@ async function createCheckoutSessionForIntent(
 	// Mint the local id NOW so it can be stamped into Stripe metadata before
 	// the Stripe row exists. We use it as both the metadata.checkoutSessionId
 	// and the CheckoutSession PK so the webhook lookup is one indexed read.
-	const checkoutSessionId = randomUUID();
+	// Round 3.6 N2 — cuid-style id (matches schema's `@default(cuid())` shape
+	// and the rest of the codebase) instead of dash-formatted uuid.
+	const checkoutSessionId = mintCheckoutSessionId();
 	const correlationId = randomUUID();
 
 	// Round 2.7.1 — compute once, store on the local row AND pass to Stripe
@@ -235,7 +274,12 @@ async function createCheckoutSessionForIntent(
 		providerCustomerId: args.providerCustomerId,
 		applicationFeeInCents: 0, // §3: 0% in 12a; scaffolded for future
 		metadata,
-		returnUrl: SHOP_CONFIRMATION_RETURN_URL,
+		// Round 3.6 N6 — guest surfaces land on /shop/confirmation; logged-in
+		// surfaces land on /checkout/confirmation. Both render the same client.
+		returnUrl:
+			args.audience === "guest"
+				? SHOP_CONFIRMATION_RETURN_URL
+				: INAPP_CONFIRMATION_RETURN_URL,
 		expiresAt,
 	});
 
@@ -410,6 +454,7 @@ const startCheckoutRouter = createTRPCRouter({
 					providerCustomerId: undefined,
 					beneficiary: normalizeIdentityBlock(input.beneficiary),
 					payer: normalizeIdentityBlock(input.payer),
+					audience: "inapp",
 				});
 			});
 		}),
@@ -481,6 +526,7 @@ const startCheckoutRouter = createTRPCRouter({
 					providerCustomerId: undefined,
 					beneficiary: normalizeIdentityBlock(input.beneficiary),
 					payer: normalizeIdentityBlock(input.payer),
+					audience: "inapp",
 				});
 			});
 		}),
@@ -546,6 +592,7 @@ const startCheckoutRouter = createTRPCRouter({
 					providerCustomerId: undefined,
 					beneficiary: normalizeIdentityBlock(input.beneficiary),
 					payer: normalizeIdentityBlock(input.payer),
+					audience: "guest",
 				});
 			});
 		}),
@@ -612,6 +659,7 @@ const startCheckoutRouter = createTRPCRouter({
 					providerCustomerId: undefined,
 					beneficiary: normalizeIdentityBlock(input.beneficiary),
 					payer: normalizeIdentityBlock(input.payer),
+					audience: "inapp",
 				});
 			});
 		}),
@@ -675,6 +723,7 @@ const startCheckoutRouter = createTRPCRouter({
 					providerCustomerId: undefined,
 					beneficiary: normalizeIdentityBlock(input.beneficiary),
 					payer: normalizeIdentityBlock(input.payer),
+					audience: "guest",
 				});
 			});
 		}),
@@ -743,6 +792,7 @@ const startCheckoutRouter = createTRPCRouter({
 					providerCustomerId: undefined,
 					beneficiary: normalizeIdentityBlock(input.beneficiary),
 					payer: normalizeIdentityBlock(input.payer),
+					audience: "inapp",
 				});
 			});
 		}),
@@ -821,6 +871,7 @@ const startCheckoutRouter = createTRPCRouter({
 					providerCustomerId: undefined,
 					beneficiary: normalizeIdentityBlock(input.beneficiary),
 					payer: normalizeIdentityBlock(input.payer),
+					audience: "inapp",
 				});
 			});
 		}),
@@ -1507,17 +1558,38 @@ export const paymentsRouter = createTRPCRouter({
 						"Refund would over-reverse the credit ledger; reverse applied credit first.",
 				});
 			}
-			// Over-refund guard: sum of all prior refunds against this payment.
-			const priorRefunds = await ctx.db.invoiceRefund.aggregate({
-				_sum: { amountInCents: true },
-				where: { paymentId: payment.paymentId },
-			});
+			// Over-refund guard (Round 3.6 IMPORTANT #1): cap = paid −
+			// already-refunded − credit-already-issued-against-this-payment.
+			// Without the credit term, an admin who issued $50 of account
+			// credit on a $100 payment could still Stripe-refund the full
+			// $100 to the card → $150 returned against $100 paid.
+			// `recordRefundInternal` re-runs the same math under the
+			// per-payer advisory lock; this is the pre-lock fast-fail.
+			const [priorRefunds, priorCreditIssued] = await Promise.all([
+				ctx.db.invoiceRefund.aggregate({
+					_sum: { amountInCents: true },
+					where: { paymentId: payment.paymentId },
+				}),
+				ctx.db.invoiceLineItem.aggregate({
+					_sum: { totalInCents: true },
+					where: {
+						creditFromPaymentId: payment.paymentId,
+						kind: "CREDIT",
+					},
+				}),
+			]);
 			const alreadyRefunded = priorRefunds._sum.amountInCents ?? 0;
-			const refundable = payment.amountInCents - alreadyRefunded;
+			// CREDIT line totals are negative; abs to get the dollar amount
+			// of credit already issued against this payment.
+			const alreadyCredited = Math.abs(
+				priorCreditIssued._sum.totalInCents ?? 0,
+			);
+			const refundable =
+				payment.amountInCents - alreadyRefunded - alreadyCredited;
 			if (input.amountInCents > refundable) {
 				throw new TRPCError({
 					code: "PRECONDITION_FAILED",
-					message: `Refund exceeds the payment's refundable balance ($${(refundable / 100).toFixed(2)}).`,
+					message: `Refund would exceed remaining refundable amount. Payment $${(payment.amountInCents / 100).toFixed(2)} paid; $${(alreadyRefunded / 100).toFixed(2)} already refunded; $${(alreadyCredited / 100).toFixed(2)} issued as account credit. Maximum refundable via Stripe: $${(refundable / 100).toFixed(2)}.`,
 				});
 			}
 			// Disconnect guard.

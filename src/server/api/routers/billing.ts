@@ -1658,13 +1658,32 @@ export const billingRouter = createTRPCRouter({
 						});
 					}
 
-					// Cap at the payment's not-yet-refunded balance.
-					const priorRefunds = await tx.invoiceRefund.aggregate({
-						_sum: { amountInCents: true },
-						where: { paymentId: input.paymentId },
-					});
+					// Cap at the payment's not-yet-refunded balance MINUS
+					// credit already issued against this payment (Round 3.6
+					// IMPORTANT #1). Without the credit term, a $50 cash refund
+					// + a $50 credit + another $50 credit on a $100 payment
+					// would all succeed (each <= $100 - $50 prior cash).
+					const [priorRefunds, priorCreditIssued] = await Promise.all([
+						tx.invoiceRefund.aggregate({
+							_sum: { amountInCents: true },
+							where: { paymentId: input.paymentId },
+						}),
+						tx.invoiceLineItem.aggregate({
+							_sum: { totalInCents: true },
+							where: {
+								creditFromPaymentId: input.paymentId,
+								kind: "CREDIT",
+							},
+						}),
+					]);
 					const alreadyRefunded = priorRefunds._sum.amountInCents ?? 0;
-					const refundableRemaining = payment.amountInCents - alreadyRefunded;
+					// CREDIT line totals are negative; abs to get the dollar
+					// amount of credit already issued against this payment.
+					const alreadyCredited = Math.abs(
+						priorCreditIssued._sum.totalInCents ?? 0,
+					);
+					const refundableRemaining =
+						payment.amountInCents - alreadyRefunded - alreadyCredited;
 					if (input.amountInCents > refundableRemaining) {
 						throw new TRPCError({
 							code: "PRECONDITION_FAILED",
@@ -1702,6 +1721,14 @@ export const billingRouter = createTRPCRouter({
 							creditFromInvoiceId: null,
 							// The credit benefits the payer (whoever holds the tab).
 							creditFromUserId: effectivePayerUserId,
+							// Round 3.6 IMPORTANT #1 — link the CREDIT line back to
+							// the funding payment so the refundable-cap math in
+							// `recordRefundInternal` / `refundStripePayment` can
+							// subtract credit-issued from the payment's refundable
+							// balance. Without this column a $50 credit + a full
+							// Stripe refund of the same $100 payment would return
+							// $150 to the buyer against $100 paid.
+							creditFromPaymentId: input.paymentId,
 						},
 					});
 
