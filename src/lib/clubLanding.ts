@@ -1,31 +1,69 @@
-export const CLUB_LANDING_SHORTNAMES = [
-	"cba",
-	"squashdublin",
-	"patricksquash",
-	"featherballer",
-	"badmintontutorials",
-	"aharu",
-] as const;
+/**
+ * Top-level URL segments that belong to the app itself and must NEVER be
+ * treated as a club short URL.
+ *
+ * Club short URLs are matched OPTIMISTICALLY: any first segment that is NOT in
+ * this set and matches `SHORTNAME_PATTERN` + a known short-URL shape is
+ * rewritten to `/club/<short>/...`. The target page's
+ * `db.club.findUnique → notFound()` is the single source of truth for whether
+ * the club actually exists — so onboarding a new customer is a pure DB insert
+ * with NO code change here.
+ *
+ * This set only needs to grow when a NEW top-level app route is added (which is
+ * itself a code change). `clubLanding.test.ts` asserts it stays in sync with
+ * the `src/app/(app)` route directory so a new route can't silently get
+ * shadowed by the optimistic rewrite.
+ */
+export const RESERVED_TOP_LEVEL_SEGMENTS: ReadonlySet<string> = new Set([
+	// src/app/(app)/* route segments (route group → these are top-level URLs)
+	"account",
+	"admin",
+	"articles",
+	"calendar",
+	"checkin",
+	"checkout",
+	"clients",
+	"club",
+	"coaches",
+	"dashboard",
+	"database",
+	"email-groups",
+	"events",
+	"features",
+	"home",
+	"invoices",
+	"join",
+	"pricing",
+	"products",
+	"profile",
+	"rentals",
+	"resources",
+	"shop",
+	"video-collections",
+	// root routes (src/app/*)
+	"privacy",
+	"terms",
+	// (embed) route group
+	"embed",
+	// Clerk hosted auth — no route dir, but middleware still runs for these
+	"sign-in",
+	"sign-up",
+	// infra (already excluded by the middleware matcher; listed defensively)
+	"api",
+	"trpc",
+	"_next",
+]);
+
+// A club short URL's first segment must look like a slug: lowercase
+// alphanumerics with optional internal hyphens. This rejects dotted asset/feed
+// paths (e.g. robots.txt, sitemap.xml), uppercase, and other non-club shapes
+// without having to enumerate every special file.
+const SHORTNAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 export function normalizePathname(pathname: string): string {
 	return pathname.endsWith("/") && pathname !== "/"
 		? pathname.slice(0, -1)
 		: pathname;
-}
-
-export function pathnameToTopLevelSegment(pathname: string): string {
-	const normalized = normalizePathname(pathname);
-	return normalized.startsWith("/") ? normalized.slice(1) : normalized;
-}
-
-// True iff pathname is a bare club short URL — exactly /<short> or /<short>/.
-// Used as an allowlist check that does NOT consider any deeper paths
-// (/<short>/dashboard is NOT a bare landing).
-export function isClubLandingShortUrlPathname(pathname: string): boolean {
-	const topLevel = pathnameToTopLevelSegment(pathname);
-	return CLUB_LANDING_SHORTNAMES.includes(
-		topLevel as (typeof CLUB_LANDING_SHORTNAMES)[number],
-	);
 }
 
 // Result of a short-URL match: the club we matched and the internal path the
@@ -70,10 +108,12 @@ export function matchClubShortUrlPathname(
 	const [short, ...rest] = segments;
 	if (!short) return null;
 
+	// Denylist + slug-shape guard. A reserved app route or a non-slug segment is
+	// never a club short URL. Everything else is optimistically rewritten and
+	// validated against the DB by the target /club/<short> page.
 	if (
-		!CLUB_LANDING_SHORTNAMES.includes(
-			short as (typeof CLUB_LANDING_SHORTNAMES)[number],
-		)
+		RESERVED_TOP_LEVEL_SEGMENTS.has(short) ||
+		!SHORTNAME_PATTERN.test(short)
 	) {
 		return null;
 	}
