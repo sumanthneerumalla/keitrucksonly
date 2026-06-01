@@ -274,7 +274,7 @@ export interface PaymentProvider {
 		rawBody: string;
 		signatureHeader: string | null;
 		endpointKind: "platform" | "connect";
-	}): ProviderEvent;
+	}): Promise<ProviderEvent>;
 
 	parseEvent(event: ProviderEvent): Promise<ParsedProviderEvent>;
 }

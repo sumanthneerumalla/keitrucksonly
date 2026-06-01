@@ -30,6 +30,7 @@
 
 import { notFound, redirect } from "next/navigation";
 import { db } from "~/server/db";
+import { getPlatformConfig } from "~/server/utils/platformConfig";
 import { CheckoutClient } from "./CheckoutClient";
 
 export default async function CheckoutPage({
@@ -58,10 +59,32 @@ export default async function CheckoutPage({
 
 	const returnUrl = `/checkout/confirmation?session_id=${encodeURIComponent(session.providerSessionId)}`;
 
+	// Phase 12a no-SSH workaround — resolve the publishable key server-side
+	// (env-first, DB fallback) and pass it to the client component as a prop
+	// instead of relying on `process.env.NEXT_PUBLIC_*` at module-eval time
+	// in the client bundle. See designFiles/roadmap/phase12-stripe-connect.md §24.
+	const publishableKey = await getPlatformConfig(
+		"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+		"stripe_publishable_key",
+	);
+	if (!publishableKey) {
+		return (
+			<div className="container mx-auto px-4 py-8">
+				<div className="mx-auto max-w-md rounded-lg border border-red-200 bg-red-50 p-6 text-red-900 text-sm">
+					<p className="font-medium">Online checkout is not configured.</p>
+					<p className="mt-2">
+						Please contact the club directly to complete this purchase.
+					</p>
+				</div>
+			</div>
+		);
+	}
+
 	return (
 		<div className="container mx-auto px-4 py-8">
 			<CheckoutClient
 				clientSecret={session.clientSecret}
+				publishableKey={publishableKey}
 				returnUrl={returnUrl}
 			/>
 		</div>

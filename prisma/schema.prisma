@@ -1799,3 +1799,21 @@ model CheckoutSession {
   @@index([providerSessionId])
   @@index([initiatedByUserId])
 }
+
+/// Phase 12a interim store for Stripe (and future processor) configuration
+/// values when env vars can't be set (e.g., owner traveling without SSH
+/// access). The env-var path takes priority: code calls getPlatformConfig()
+/// and only consults this table when process.env.<KEY> is blank/missing.
+/// When env vars are restored, DB rows here should be removed.
+///
+/// Security note: values are stored plaintext. Do not put live-mode secrets
+/// here for production; this is intended for test-mode keys + dev/staging
+/// emergencies. Access via Prisma Studio is gated by platform-admin auth.
+model PlatformConfig {
+  key       String   @id @db.VarChar(100)
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+  updatedBy String? // userId or null for system
+
+  @@map("PlatformConfig")
+}

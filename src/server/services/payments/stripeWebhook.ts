@@ -46,7 +46,7 @@ export async function handleStripeWebhook(
 	// 1. Signature verification — first call, on RAW body (Gap #3).
 	let event: Awaited<ReturnType<typeof provider.verifyWebhookSignature>>;
 	try {
-		event = provider.verifyWebhookSignature({
+		event = await provider.verifyWebhookSignature({
 			rawBody,
 			signatureHeader: sig,
 			endpointKind,

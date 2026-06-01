@@ -17,44 +17,62 @@
  */
 
 import Stripe from "stripe";
-import { env } from "~/env";
 import {
 	type ParsedProviderEvent,
 	type PaymentProvider,
 	type ProviderEvent,
 	SignatureError,
 } from "~/server/services/payments/types";
+import { getPlatformConfig } from "~/server/utils/platformConfig";
 
 // ============================================================
 // Lazy Stripe client
 // ============================================================
+//
+// Phase 12a no-SSH workaround: secrets resolve through `getPlatformConfig`
+// (env-first, DB fallback). `getStripe()` is async because the DB fallback
+// is async; if the secret changes (e.g., Prisma Studio edit), the cached
+// client is rebuilt on the next call after the platform-config cache
+// expires (≤60s).
 
 let _stripe: Stripe | null = null;
+let _stripeKey: string | null = null;
 
-function getStripe(): Stripe {
-	if (_stripe !== null) return _stripe;
-	const secret = env.STRIPE_SECRET_KEY;
+async function getStripe(): Promise<Stripe> {
+	const secret = await getPlatformConfig(
+		"STRIPE_SECRET_KEY",
+		"stripe_secret_key",
+	);
 	if (!secret) {
 		throw new Error(
-			"STRIPE_SECRET_KEY is not configured — Stripe operations are unavailable.",
+			'STRIPE_SECRET_KEY is not configured — set the env var or add a row to the PlatformConfig table with key="stripe_secret_key".',
 		);
 	}
+	if (_stripe !== null && _stripeKey === secret) return _stripe;
 	_stripe = new Stripe(secret, {
 		// Pin to the SDK's bundled API version (omitted = SDK default, which
 		// matches the installed SDK's TypeScript types).
 		typescript: true,
 	});
+	_stripeKey = secret;
 	return _stripe;
 }
 
-function getWebhookSecret(endpointKind: "platform" | "connect"): string {
-	const secret =
+async function getWebhookSecret(
+	endpointKind: "platform" | "connect",
+): Promise<string> {
+	const envVarName =
 		endpointKind === "platform"
-			? env.STRIPE_WEBHOOK_SECRET_PLATFORM
-			: env.STRIPE_WEBHOOK_SECRET_CONNECT;
+			? "STRIPE_WEBHOOK_SECRET_PLATFORM"
+			: "STRIPE_WEBHOOK_SECRET_CONNECT";
+	const dbKey =
+		endpointKind === "platform"
+			? "stripe_webhook_secret_platform"
+			: "stripe_webhook_secret_connect";
+	const secret = await getPlatformConfig(envVarName, dbKey);
 	if (!secret) {
 		throw new Error(
-			`STRIPE_WEBHOOK_SECRET_${endpointKind.toUpperCase()} is not configured.`,
+			`${envVarName} is not configured — set the env var or add a row to the PlatformConfig table with key="${dbKey}".`,
 		);
 	}
 	return secret;
@@ -74,7 +92,7 @@ export class StripeProvider implements PaymentProvider {
 		returnUrl: string;
 		refreshUrl: string;
 	}): Promise<{ url: string; providerAccountId: string }> {
-		const stripe = getStripe();
+		const stripe = await getStripe();
 		const account = await stripe.accounts.create({
 			type: "standard",
 			metadata: { clubShortName: args.clubShortName },
@@ -95,7 +113,7 @@ export class StripeProvider implements PaymentProvider {
 		accountEmail: string | null;
 		livemode: boolean;
 	}> {
-		const stripe = getStripe();
+		const stripe = await getStripe();
 		const account: Stripe.Account =
 			await stripe.accounts.retrieve(providerAccountId);
 		return {
@@ -124,7 +142,7 @@ export class StripeProvider implements PaymentProvider {
 		returnUrl: string;
 		expiresAt?: Date;
 	}): Promise<{ sessionId: string; clientSecret: string }> {
-		const stripe = getStripe();
+		const stripe = await getStripe();
 		const params: Stripe.Checkout.SessionCreateParams = {
 			ui_mode: "embedded",
 			mode: "payment",
@@ -191,7 +209,7 @@ export class StripeProvider implements PaymentProvider {
 				"createRefund requires a positive amountInCents (Stripe rejects amount=0).",
 			);
 		}
-		const stripe = getStripe();
+		const stripe = await getStripe();
 		const refund = await stripe.refunds.create(
 			{
 				payment_intent: args.providerPaymentIntentId,
@@ -230,16 +248,16 @@ export class StripeProvider implements PaymentProvider {
 
 	// -------- Webhook --------
 
-	verifyWebhookSignature(args: {
+	async verifyWebhookSignature(args: {
 		rawBody: string;
 		signatureHeader: string | null;
 		endpointKind: "platform" | "connect";
-	}): ProviderEvent {
-		const stripe = getStripe();
+	}): Promise<ProviderEvent> {
+		const stripe = await getStripe();
 		if (!args.signatureHeader) {
 			throw new SignatureError("Missing Stripe-Signature header");
 		}
-		const secret = getWebhookSecret(args.endpointKind);
+		const secret = await getWebhookSecret(args.endpointKind);
 		let event: Stripe.Event;
 		try {
 			event = stripe.webhooks.constructEvent(
@@ -279,7 +297,7 @@ export class StripeProvider implements PaymentProvider {
 				let feeInCents: number | null = null;
 				if (paymentIntentId) {
 					try {
-						const stripe = getStripe();
+						const stripe = await getStripe();
 						const connectedAccount =
 							typeof raw.account === "string" ? raw.account : undefined;
 						const pi = await stripe.paymentIntents.retrieve(
@@ -349,7 +367,7 @@ export class StripeProvider implements PaymentProvider {
 				if (latest?.balance_transaction) {
 					if (typeof latest.balance_transaction === "string") {
 						try {
-							const stripe = getStripe();
+							const stripe = await getStripe();
 							const connectedAccount =
 								typeof raw.account === "string" ? raw.account : undefined;
 							const bt = await stripe.balanceTransactions.retrieve(

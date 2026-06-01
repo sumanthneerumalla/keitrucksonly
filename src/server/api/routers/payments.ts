@@ -64,6 +64,7 @@ import {
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
 import { recordRefundInternal } from "~/server/utils/invoicePayments";
+import { getPlatformConfig } from "~/server/utils/platformConfig";
 import {
 	getCurrentUser,
 	isFacilityOrAbove,
@@ -878,6 +879,32 @@ const startCheckoutRouter = createTRPCRouter({
 });
 
 export const paymentsRouter = createTRPCRouter({
+	// ========================================================
+	// Config (no-SSH workaround — §24)
+	// ========================================================
+
+	/**
+	 * Returns the Stripe publishable key resolved via env-first / DB-fallback
+	 * (see `getPlatformConfig`). `publicProcedure` because guest checkouts on
+	 * `/checkout/[sessionId]` need to load Stripe.js without a logged-in user.
+	 * The CheckoutPage server component is the primary caller (passes the key
+	 * down to CheckoutClient as a prop); this tRPC procedure exists for any
+	 * future client-only surface that needs to load Stripe.js.
+	 */
+	getPublishableKey: publicProcedure.query(async () => {
+		const publishableKey = await getPlatformConfig(
+			"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+			"stripe_publishable_key",
+		);
+		if (!publishableKey) {
+			throw new TRPCError({
+				code: "PRECONDITION_FAILED",
+				message: "Stripe publishable key not configured.",
+			});
+		}
+		return { publishableKey };
+	}),
+
 	// ========================================================
 	// Onboarding (5 procedures)
 	// ========================================================

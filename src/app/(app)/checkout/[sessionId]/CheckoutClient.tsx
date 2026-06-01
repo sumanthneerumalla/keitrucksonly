@@ -31,6 +31,15 @@ interface CheckoutClientProps {
 	/** Stripe's single-use Embedded Checkout client_secret. */
 	clientSecret: string;
 	/**
+	 * Stripe publishable key, resolved server-side by the CheckoutPage server
+	 * component via `getPlatformConfig('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY',
+	 * 'stripe_publishable_key')` — env-first, DB-fallback. Passed as a prop
+	 * (rather than read from `process.env.NEXT_PUBLIC_*` in this client
+	 * module) so the Phase 12a no-SSH workaround can supply the key via the
+	 * `PlatformConfig` table without a rebuild.
+	 */
+	publishableKey: string;
+	/**
 	 * Where the buyer lands after Stripe's iframe completes — our local
 	 * confirmation page. Stripe substitutes its own `cs_xxx` into the
 	 * `{CHECKOUT_SESSION_ID}` token when configured via the session-create
@@ -42,15 +51,21 @@ interface CheckoutClientProps {
 
 export function CheckoutClient({
 	clientSecret,
+	publishableKey,
 	returnUrl,
 }: CheckoutClientProps) {
 	const router = useRouter();
 	const [stripeUnavailable, setStripeUnavailable] = useState(false);
 
-	const stripePromise = useMemo(() => getStripePromise(), []);
+	const stripePromise = useMemo(
+		() => getStripePromise(publishableKey),
+		[publishableKey],
+	);
 
-	// Surface a clean error if NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY is missing —
-	// `getStripePromise` resolves to `null` in that case (see stripe-client.ts).
+	// Surface a clean error if Stripe.js fails to load (e.g., network block).
+	// The CheckoutPage server component already guards against a missing
+	// publishable key, so getStripePromise() here will normally resolve to a
+	// real Stripe instance — `null` indicates load failure, not unconfigured.
 	useEffect(() => {
 		let cancelled = false;
 		stripePromise.then((stripe) => {

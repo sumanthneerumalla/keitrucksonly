@@ -10,30 +10,29 @@
  * The promise is memoized at module scope so every `<EmbeddedCheckoutProvider>`
  * mount across the app session shares one Stripe.js instance — re-loading the
  * script per page is wasteful and Stripe explicitly recommends a singleton.
+ * If the publishable key changes between calls (no-SSH workaround: key may be
+ * rotated via the `PlatformConfig` table without a rebuild), the cached
+ * promise is invalidated and Stripe.js is reloaded.
  *
- * Publishable key sourcing: `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` is the only
- * Stripe credential that may appear on the client. The server secret key
- * (`STRIPE_SECRET_KEY`) is server-only and MUST NOT be imported here. If the
- * publishable key is missing at runtime, `getStripePromise()` resolves to
- * `null` and CheckoutClient surfaces a clean "Stripe not configured" message
- * rather than crashing the iframe mount.
+ * Publishable key sourcing: callers must pass the key in. The CheckoutPage
+ * server component resolves it via `getPlatformConfig` (env-first, DB-fallback
+ * — see designFiles/roadmap/phase12-stripe-connect.md §24) and threads it
+ * through to CheckoutClient as a prop. The server secret key
+ * (`STRIPE_SECRET_KEY`) is server-only and MUST NOT be imported here.
  */
 
 import { type Stripe, loadStripe } from "@stripe/stripe-js";
 
 let stripePromise: Promise<Stripe | null> | null = null;
+let cachedKey: string | null = null;
 
-export function getStripePromise(): Promise<Stripe | null> {
-	if (stripePromise === null) {
-		const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-		if (!publishableKey) {
-			// Resolve to null so callers can render a degraded UI rather than
-			// throwing inside React render. Memoize the rejection-equivalent
-			// so we don't try again on every re-render.
-			stripePromise = Promise.resolve(null);
-		} else {
-			stripePromise = loadStripe(publishableKey);
-		}
+export function getStripePromise(
+	publishableKey: string,
+): Promise<Stripe | null> {
+	if (stripePromise !== null && cachedKey === publishableKey) {
+		return stripePromise;
 	}
+	stripePromise = loadStripe(publishableKey);
+	cachedKey = publishableKey;
 	return stripePromise;
 }
