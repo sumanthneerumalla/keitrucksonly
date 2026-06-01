@@ -1,3 +1,7 @@
+# ShuttleMentor
+
+[![CI](https://github.com/sumanthneerumalla/shuttleMentor/actions/workflows/ci.yml/badge.svg)](https://github.com/sumanthneerumalla/shuttleMentor/actions/workflows/ci.yml)
+
 ## Libraries Used
 
 The stack used in this project is 

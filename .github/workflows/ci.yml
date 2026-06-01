@@ -1,0 +1,50 @@
+name: CI
+
+# Runs the vitest unit suite (40 tests as of this writing, including the
+# clubLanding reserved-segment sync check). This is server-side CI that
+# complements the local `.githooks/pre-push` build gate: the hook runs
+# `next build` locally and can be bypassed with `--no-verify`, whereas this
+# workflow runs on GitHub for every push/PR and can be made a *required* check
+# via branch protection — so it cannot be skipped.
+#
+# Scope note: this intentionally runs ONLY `npm test`. Typecheck and
+# `biome check .` are deferred because, as of this commit, the full-repo biome
+# pass has pre-existing findings and typecheck depends on a clean install
+# resolving the Stripe types — wiring either in now would make the badge
+# permanently red. Add them as separate steps/jobs once those are clean.
+
+on:
+  # No branch filter → every push to every branch runs CI.
+  push:
+  # Plus pull requests, so the check shows up on PRs (incl. from forks).
+  pull_request:
+
+# Cancel an in-progress run when newer commits land on the same branch/PR, so
+# we don't burn minutes finishing a run for a commit that's already superseded.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests (vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      # `npm ci` installs exactly from package-lock.json. The package.json
+      # `prepare` script (git config core.hooksPath) is guarded and a harmless
+      # no-op here. No DB or secrets are needed — the test setup mocks the
+      # Next router, tRPC, and Clerk (see src/test/setup.ts).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
