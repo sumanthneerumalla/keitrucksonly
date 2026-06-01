@@ -34,8 +34,16 @@ ENVS="dev:shuttlementor-db-dev prod:shuttlementor-db-prod"
 mkdir -p "$BACKUP_DIR"
 
 # Single-instance guard — a slow dump must never overlap the next tick.
-exec 9>"$BACKUP_DIR/.lock"
-flock -n 9 || { echo "$(date -Iseconds) another backup is running; skipping"; exit 0; }
+# flock is util-linux (present on the Linux server, absent on macOS). Guard its
+# use: a MISSING flock must never look like a HELD lock and exit 0 — that would
+# silently skip the backup nightly while cron sees success. If flock is gone we
+# warn and proceed (a once-daily dump can tolerate the rare overlap).
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$BACKUP_DIR/.lock"
+  flock -n 9 || { echo "$(date -Iseconds) another backup is running; skipping"; exit 0; }
+else
+  echo "$(date -Iseconds) WARN: flock not found; proceeding without single-instance lock"
+fi
 
 rc=0
 for pair in $ENVS; do
