@@ -2,6 +2,7 @@
 
 import { ChevronsUpDown, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import BillToUserPicker from "~/app/_components/shared/BillToUserPicker";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import {
@@ -31,9 +32,9 @@ import { api } from "~/trpc/react";
  *    the list to bypass the catalog and type a free-text description + amount.
  *
  * The charge lands on the member's currently-open tab (or opens a fresh one)
- * via the server-side `billing.addAdHocCharge`. v1 charges the member being
- * viewed (self-pay); the backend supports an optional billTo for parent/payer
- * scenarios but the UI doesn't expose it yet to keep the modal simple.
+ * via the server-side `billing.addAdHocCharge`. Phase 9a Round 5 adds optional
+ * bill-to selection via BillToUserPicker — allows charging a parent/payer for
+ * the member's charge (parent picks from club members, defaults to self-pay).
  */
 
 // First-page cap for the picker — most clubs have well under this. Above 200
@@ -85,6 +86,16 @@ export default function AddChargeModal({
 	const [quantity, setQuantity] = useState<string>("1");
 	const [amountDollars, setAmountDollars] = useState<string>("");
 	const [productPickerOpen, setProductPickerOpen] = useState<boolean>(false);
+	const [billToUser, setBillToUser] = useState<{
+		userId: string;
+		firstName: string | null;
+		lastName: string | null;
+		email: string | null;
+	} | null>(null);
+	// True when staff typed a bill-to query but didn't pick anyone — blocks
+	// submit so they can't silently fall through to self-pay.
+	const [billToTypedButUnselected, setBillToTypedButUnselected] =
+		useState<boolean>(false);
 
 	// Reset on each open. Effect only reads `open` + calls stable setters, so
 	// no biome suppression is needed (setState identities are stable in React).
@@ -95,6 +106,7 @@ export default function AddChargeModal({
 			setQuantity("1");
 			setAmountDollars("");
 			setProductPickerOpen(false);
+			setBillToUser(null);
 		}
 	}, [open]);
 
@@ -214,6 +226,7 @@ export default function AddChargeModal({
 			description: trimmedDescription,
 			quantity: parsedQuantity,
 			unitPriceInCents: parsedAmountCents,
+			billToUserId: billToUser?.userId,
 		});
 	};
 
@@ -375,6 +388,16 @@ export default function AddChargeModal({
 							/>
 						</div>
 
+						{/* Bill to — optional, defaults self-pay */}
+						<BillToUserPicker
+							consumerId={userId}
+							value={billToUser}
+							onChange={setBillToUser}
+							disabled={saving}
+							label="Bill to (optional)"
+							onTypedButUnselectedChange={setBillToTypedButUnselected}
+						/>
+
 						{/* Quantity + Amount side by side */}
 						<div className="grid grid-cols-2 gap-3">
 							<div className="space-y-1">
@@ -449,7 +472,11 @@ export default function AddChargeModal({
 						>
 							Cancel
 						</Button>
-						<Button type="submit" size="sm" disabled={saving}>
+						<Button
+							type="submit"
+							size="sm"
+							disabled={saving || billToTypedButUnselected}
+						>
 							{saving ? "Adding…" : "Add charge"}
 						</Button>
 					</div>

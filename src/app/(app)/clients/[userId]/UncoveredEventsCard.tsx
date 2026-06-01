@@ -1,7 +1,8 @@
 "use client";
 
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, X } from "lucide-react";
 import { useState } from "react";
+import BillToUserPicker from "~/app/_components/shared/BillToUserPicker";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import { formatCents } from "~/lib/money";
@@ -45,6 +46,21 @@ export default function UncoveredEventsCard({
 	// Per-row pending tracker so only the clicked row's button shows "Billing…".
 	// `chargeMutation.isPending` is the global guard against double-click.
 	const [pendingId, setPendingId] = useState<string | null>(null);
+	// Bill-to modal state — when non-null, a modal appears for this row asking
+	// who to bill. Stores the registrationId of the row being billed.
+	const [billingRegistrationId, setBillingRegistrationId] = useState<
+		string | null
+	>(null);
+	const [billToUser, setBillToUser] = useState<{
+		userId: string;
+		firstName: string | null;
+		lastName: string | null;
+		email: string | null;
+	} | null>(null);
+	// True when staff typed a bill-to query but didn't pick anyone — blocks
+	// Confirm so they can't silently fall through to self-pay.
+	const [billToTypedButUnselected, setBillToTypedButUnselected] =
+		useState<boolean>(false);
 
 	const query = api.billing.listUncoveredEvents.useQuery(
 		{ userId },
@@ -126,8 +142,8 @@ export default function UncoveredEventsCard({
 								variant="outline"
 								disabled={disabled}
 								onClick={() => {
-									setPendingId(r.registrationId);
-									chargeMutation.mutate({ registrationId: r.registrationId });
+									setBillingRegistrationId(r.registrationId);
+									setBillToUser(null);
 								}}
 							>
 								{isPending ? "Billing…" : "Bill"}
@@ -136,6 +152,90 @@ export default function UncoveredEventsCard({
 					);
 				})}
 			</ul>
+
+			{/* Bill-to modal — appears when the user clicks Bill on a row */}
+			{billingRegistrationId !== null && (
+				<>
+					{/* Backdrop */}
+					{/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop is a visual scrim */}
+					<div
+						className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
+						onClick={() => {
+							if (!chargeMutation.isPending) {
+								setBillingRegistrationId(null);
+								setBillToUser(null);
+							}
+						}}
+					/>
+					{/* Modal */}
+					<div className="glass-panel -translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 w-full max-w-sm rounded-lg border border-[var(--border)] shadow-xl">
+						{/* Header */}
+						<div className="flex items-center justify-between border-[var(--border)] border-b px-6 py-4">
+							<h3 className="font-semibold text-[var(--foreground)] text-base">
+								Who to bill?
+							</h3>
+							<button
+								onClick={() => {
+									if (!chargeMutation.isPending) {
+										setBillingRegistrationId(null);
+										setBillToUser(null);
+									}
+								}}
+								disabled={chargeMutation.isPending}
+								className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
+								aria-label="Close"
+								type="button"
+							>
+								<X size={18} />
+							</button>
+						</div>
+						{/* Body */}
+						<div className="space-y-4 px-6 py-5">
+							<BillToUserPicker
+								consumerId={userId}
+								value={billToUser}
+								onChange={setBillToUser}
+								disabled={chargeMutation.isPending}
+								label="Bill to"
+								helperText="Choose who pays for this event. Defaults to the member."
+								onTypedButUnselectedChange={setBillToTypedButUnselected}
+							/>
+						</div>
+						{/* Footer */}
+						<div className="flex items-center justify-end gap-2 border-[var(--border)] border-t px-6 py-4">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									setBillingRegistrationId(null);
+									setBillToUser(null);
+								}}
+								disabled={chargeMutation.isPending}
+							>
+								Cancel
+							</Button>
+							<Button
+								type="button"
+								size="sm"
+								disabled={chargeMutation.isPending || billToTypedButUnselected}
+								onClick={() => {
+									setPendingId(billingRegistrationId);
+									chargeMutation.mutate({
+										registrationId: billingRegistrationId,
+										billToUserId: billToUser?.userId,
+									});
+									setBillingRegistrationId(null);
+									setBillToUser(null);
+									setBillToTypedButUnselected(false);
+								}}
+							>
+								{chargeMutation.isPending ? "Billing…" : "Confirm"}
+							</Button>
+						</div>
+					</div>
+				</>
+			)}
 		</div>
 	);
 }

@@ -1,7 +1,8 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import BillToUserPicker from "~/app/_components/shared/BillToUserPicker";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import { Select } from "~/app/_components/shared/ui/select";
@@ -14,27 +15,14 @@ interface SellPackageModalProps {
 }
 
 /**
- * Phase 9a Round 5 — Bill-to typeahead.
+ * Phase 9a Round 5 — Bill-to typeahead (shared component).
  *
  * The "Bill to" field is OPTIONAL. When left blank the backend defaults to the
  * consumer (i.e. self-pay) and `billToUserId` is omitted from the mutation
- * payload. Search reuses the existing `api.user.searchMembers` query (same
- * club-scoped name/email contains, same 10-row cap, same alphabetical order,
- * already used by the staff check-in flow). That endpoint accepts any
- * non-empty query, but we gate the firing here with a 4-char minimum so a
- * stray keystroke can't trigger a server request. The consumer is filtered
- * from results client-side (the backend treats consumer-as-bill-to as a
- * no-op but hiding it avoids confusion for staff).
- *
- * Round 5 review fixes folded in:
- *  - 200ms debounce on the query so a fast typer doesn't fire one request
- *    per keystroke (Fix B).
- *  - `maxLength=100` on the input matches the server-side Zod `max(100)`
- *    so the user can't type past the limit and hit an opaque error (Fix C).
- *  - Submit is disabled when the user has typed something but hasn't picked
- *    anyone — prevents silently falling back to self-pay when staff probably
- *    meant to bill someone else (Fix D).
- *  - Dropdown closes on outside click (Fix E), mirroring AdminCheckinClient.
+ * payload. The search/debounce/dropdown behavior lives in the shared
+ * BillToUserPicker; this modal only tracks the selected user and whether staff
+ * typed without picking (which disables Submit — Fix D — so they can't silently
+ * fall back to self-pay when they probably meant to bill someone else).
  */
 
 type BillToUser = {
@@ -43,14 +31,6 @@ type BillToUser = {
 	lastName: string | null;
 	email: string | null;
 };
-
-function formatUserName(u: {
-	firstName: string | null;
-	lastName: string | null;
-}): string {
-	const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
-	return name || "(no name)";
-}
 
 export default function SellPackageModal({
 	userId,
@@ -61,58 +41,15 @@ export default function SellPackageModal({
 	const [selectedPlanId, setSelectedPlanId] = useState<string>("");
 	const [notes, setNotes] = useState("");
 	const [saving, setSaving] = useState(false);
-	const [billToQuery, setBillToQuery] = useState<string>("");
-	const [debouncedBillToQuery, setDebouncedBillToQuery] = useState<string>("");
 	const [billToUser, setBillToUser] = useState<BillToUser | null>(null);
-	const [showDropdown, setShowDropdown] = useState<boolean>(true);
-	const billToWrapperRef = useRef<HTMLDivElement>(null);
-
-	// Round 5 review fix B — debounce 200ms before firing the server query.
-	useEffect(() => {
-		const t = setTimeout(() => setDebouncedBillToQuery(billToQuery), 200);
-		return () => clearTimeout(t);
-	}, [billToQuery]);
-
-	// Round 5 review fix E — close the dropdown when the user clicks outside
-	// the bill-to wrapper. Mirrors the pattern in AdminCheckinClient.tsx.
-	useEffect(() => {
-		function handleClickOutside(e: MouseEvent) {
-			if (
-				billToWrapperRef.current &&
-				!billToWrapperRef.current.contains(e.target as Node)
-			) {
-				setShowDropdown(false);
-			}
-		}
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
+	// True when staff typed a bill-to query but didn't pick anyone — blocks
+	// Submit so they can't silently fall through to self-pay (Fix D).
+	const [billToTypedButUnselected, setBillToTypedButUnselected] =
+		useState<boolean>(false);
 
 	const { data: plansData, isLoading } = api.packages.listPackagePlans.useQuery(
 		{ isActive: true },
 	);
-
-	const trimmedBillToQuery = billToQuery.trim();
-	const trimmedDebouncedQuery = debouncedBillToQuery.trim();
-	// Gate the server query on the DEBOUNCED value so we don't fire on every
-	// keystroke. The 4-char minimum + 200ms debounce together keep the request
-	// count low even for fast typers.
-	const billToSearchEnabled =
-		billToUser === null && trimmedDebouncedQuery.length >= 4;
-
-	const billToSearch = api.user.searchMembers.useQuery(
-		{ query: trimmedDebouncedQuery },
-		{ enabled: billToSearchEnabled },
-	);
-
-	const billToResults = (billToSearch.data?.members ?? []).filter(
-		(r) => r.userId !== userId,
-	);
-
-	// True when the user has typed something but hasn't picked from the
-	// dropdown. Used to disable Submit + show an inline warning (Fix D).
-	const billToTypedButUnselected =
-		trimmedBillToQuery.length > 0 && billToUser === null;
 
 	const utils = api.useUtils();
 
@@ -165,24 +102,14 @@ export default function SellPackageModal({
 	const handleClose = () => {
 		if (saving) return;
 		// Reset bill-to state on close so a reopened modal starts clean.
-		setBillToQuery("");
 		setBillToUser(null);
 		onClose();
-	};
-
-	const selectBillToUser = (u: BillToUser) => {
-		setBillToUser(u);
-		setBillToQuery("");
-	};
-
-	const clearBillToUser = () => {
-		setBillToUser(null);
-		setBillToQuery("");
 	};
 
 	return (
 		<>
 			{/* Backdrop */}
+			{/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop is a visual scrim */}
 			<div
 				className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
 				onClick={saving ? undefined : handleClose}
@@ -210,7 +137,10 @@ export default function SellPackageModal({
 				<div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
 					{/* Plan picker */}
 					<div className="space-y-1">
-						<label className="font-medium text-[var(--foreground)] text-sm">
+						<label
+							htmlFor="sell-package-plan"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
 							Package Plan <span className="text-red-500">*</span>
 						</label>
 						{isLoading ? (
@@ -227,6 +157,7 @@ export default function SellPackageModal({
 							</p>
 						) : (
 							<Select
+								id="sell-package-plan"
 								value={selectedPlanId}
 								onChange={(e) => setSelectedPlanId(e.target.value)}
 								className="h-9"
@@ -274,10 +205,14 @@ export default function SellPackageModal({
 
 					{/* Notes */}
 					<div className="space-y-1">
-						<label className="font-medium text-[var(--foreground)] text-sm">
+						<label
+							htmlFor="sell-package-notes"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
 							Notes
 						</label>
 						<textarea
+							id="sell-package-notes"
 							value={notes}
 							onChange={(e) => setNotes(e.target.value)}
 							rows={3}
@@ -289,117 +224,15 @@ export default function SellPackageModal({
 					</div>
 
 					{/* Bill to (optional) */}
-					<div className="space-y-1">
-						<label
-							htmlFor="sell-package-bill-to"
-							className="font-medium text-[var(--foreground)] text-sm"
-						>
-							Bill to{" "}
-							<span className="font-normal text-[var(--muted-foreground)]">
-								(optional)
-							</span>
-						</label>
-
-						{billToUser ? (
-							/* Selected chip */
-							<div className="flex flex-wrap items-center gap-2">
-								<span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--muted)] px-3 py-1 text-[var(--foreground)] text-sm">
-									<span className="font-medium">
-										{formatUserName(billToUser)}
-									</span>
-									{billToUser.email ? (
-										<span className="text-[var(--muted-foreground)] text-xs">
-											({billToUser.email})
-										</span>
-									) : null}
-									<button
-										type="button"
-										onClick={clearBillToUser}
-										disabled={saving}
-										aria-label="Clear bill-to user"
-										className="ml-1 rounded-full p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--background)] hover:text-[var(--foreground)] disabled:opacity-50"
-									>
-										<X size={12} />
-									</button>
-								</span>
-							</div>
-						) : (
-							/* Search input + result dropdown */
-							<div ref={billToWrapperRef} className="relative">
-								<input
-									id="sell-package-bill-to"
-									type="text"
-									value={billToQuery}
-									onChange={(e) => {
-										setBillToQuery(e.target.value);
-										// Re-open the dropdown on every keystroke so a previous
-										// outside-click dismissal doesn't strand the user.
-										setShowDropdown(true);
-									}}
-									onFocus={() => setShowDropdown(true)}
-									placeholder="Search by name or email..."
-									disabled={saving}
-									autoComplete="off"
-									maxLength={100}
-									className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-2 text-[var(--foreground)] text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-								/>
-
-								{trimmedBillToQuery.length > 0 && showDropdown && (
-									<div className="absolute top-full right-0 left-0 z-10 mt-1 max-h-64 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--card)] shadow-md">
-										{trimmedBillToQuery.length < 4 ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												Type at least 4 characters to search.
-											</p>
-										) : billToSearch.isLoading ||
-											trimmedBillToQuery !== trimmedDebouncedQuery ? (
-											// "Searching..." covers both the debounce window
-											// (user typed past 4 chars but the 200ms timer
-											// hasn't fired yet) and the actual server fetch.
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												Searching...
-											</p>
-										) : billToResults.length === 0 ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												No matches found.
-											</p>
-										) : (
-											<ul className="py-1">
-												{billToResults.map((r) => (
-													<li key={r.userId}>
-														<button
-															type="button"
-															onClick={() => selectBillToUser(r)}
-															className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--muted)]"
-														>
-															<span className="text-[var(--foreground)]">
-																{formatUserName(r)}
-															</span>
-															{r.email ? (
-																<span className="text-[var(--muted-foreground)] text-xs">
-																	{r.email}
-																</span>
-															) : null}
-														</button>
-													</li>
-												))}
-											</ul>
-										)}
-									</div>
-								)}
-							</div>
-						)}
-
-						{billToTypedButUnselected ? (
-							<p className="text-amber-600 text-xs dark:text-amber-400">
-								Pick someone from the dropdown, or clear the search to bill{" "}
-								{memberName} directly.
-							</p>
-						) : (
-							<p className="text-[var(--muted-foreground)] text-xs">
-								Leave blank to bill {memberName} directly.
-							</p>
-						)}
-					</div>
+					<BillToUserPicker
+						consumerId={userId}
+						value={billToUser}
+						onChange={setBillToUser}
+						disabled={saving}
+						label="Bill to (optional)"
+						helperText={`Leave blank to bill ${memberName} directly.`}
+						onTypedButUnselectedChange={setBillToTypedButUnselected}
+					/>
 				</div>
 
 				{/* Footer */}
