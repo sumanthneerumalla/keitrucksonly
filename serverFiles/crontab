@@ -1,0 +1,31 @@
+# ============================================================================
+# Canonical crontab for the shuttlementor server (neerumalla).
+#
+# This file is the SOURCE OF TRUTH for what cron should look like on the box.
+# Install / re-sync with:  serverFiles/install-crontab.sh
+# Check for drift with:     serverFiles/install-crontab.sh --check
+#
+# Why a committed file: the auto-deploy pollers `git reset --hard origin/<branch>`
+# every minute, so the only durable record of "what cron runs" must live in the
+# repo. Editing crontab by hand on the box is invisible to git and will drift —
+# always edit THIS file, commit it, then re-run the installer on the box.
+#
+# Two clones on the box (each tracks a different branch, each auto-deploys itself):
+#   /home/sumanth/Desktop/projects/shuttleMentor       -> branch `dev`  -> dev env
+#   /home/sumanth/Desktop/projects/shuttleMentor-prod  -> branch `main` -> prod env
+#
+# Cron has a minimal PATH and no profile; scripts re-export PATH themselves.
+# Output is appended to logs OUTSIDE the checkouts so `git reset --hard` can't
+# wipe them (same rationale as the pollers' ~/.shuttlementor-*-poll/ state dirs).
+# ============================================================================
+
+# --- Auto-deploy: dev env (polls origin/dev every minute) -------------------
+* * * * * /home/sumanth/Desktop/projects/shuttleMentor/scripts/poll-dev-redeploy.sh
+
+# --- Auto-deploy: prod env (polls origin/main every minute) -----------------
+* * * * * REPO_DIR=/home/sumanth/Desktop/projects/shuttleMentor-prod /home/sumanth/Desktop/projects/shuttleMentor-prod/scripts/poll-main-redeploy.sh
+
+# --- Daily local DB backup (~midnight; pg_dump -Fc per running env) ---------
+# Runs from the prod clone (branch `main`) so it ships with prod releases.
+# Requires scripts/backup-db.sh to be committed to `main`. Strictly local for now.
+0 0 * * * /home/sumanth/Desktop/projects/shuttleMentor-prod/scripts/backup-db.sh >> $HOME/facilitypresence-db-backups/backup.log 2>&1
