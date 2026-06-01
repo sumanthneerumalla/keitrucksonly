@@ -8,20 +8,22 @@
  *
  * Locked decisions reflected here:
  *   - §23 #1 — per-processor connection tables; this interface is agnostic.
- *   - §23 #5 — `ClerkPersistentError` is re-exported from `createUserAccount.ts`
- *     so callers can `import { ClerkPersistentError } from
- *     '~/server/services/payments/types'` without reaching into auth utilities.
  *   - §23 #9 — `createRefund` does NOT carry a `reverseTransfer` flag.
  *     `reverse_transfer` is invalid for direct charges and the Stripe API
  *     rejects it; only `refundApplicationFee` survives.
  *   - §23 #10 — Clerk `signInTokens.createSignInToken({ userId, expiresInSeconds })`
  *     uses required `expiresInSeconds` (handled inside `createUserAccount.ts`).
+ *
+ * Errors are now TWO classes (collapsed 2026-05-30 from five):
+ *   - `SignatureError` — route handler treats specially (400 response).
+ *   - `WebhookFailure` — every other persistent failure; carries a `reason`
+ *     string the failure module switches on to pick the orphan-write +
+ *     auto-refund behavior. End-to-end behavior (OrphanedPurchase row +
+ *     return 200 to Stripe) is unchanged from the old per-class shape.
  */
 
-import { ClerkPersistentError } from "~/server/utils/createUserAccount";
 import type { FamilyGroupLinkOutcome } from "~/server/utils/familyGroups";
 
-export { ClerkPersistentError };
 export type { FamilyGroupLinkOutcome };
 
 // ============================================================
@@ -43,49 +45,48 @@ export class SignatureError extends Error {
 }
 
 /**
- * Thrown by the webhook handler when an event's `livemode` flag disagrees
- * with `process.env.STRIPE_LIVEMODE`. Suggests a misregistered endpoint.
+ * Single class for every persistent webhook-dispatch failure that should
+ * land as an `OrphanedPurchase` row + return 200 to Stripe. The `reason`
+ * string discriminates the cases the failure module previously matched on
+ * `instanceof <SubclassError>`. Known reasons (extensible — column is
+ * String, not enum):
+ *
+ *   - `'livemode_mismatch'`                      — event livemode flag
+ *                                                  disagrees with env
+ *   - `'clerk_create_failed'`                    — multi-Clerk-user
+ *                                                  collision (single-identity)
+ *   - `'clerk_create_failed_buyer'`              — multi-Clerk-user buyer
+ *   - `'clerk_create_failed_beneficiary'`        — multi-Clerk-user beneficiary
+ *   - `'capacity_race'`                          — event seat filled
+ *                                                  pre-webhook (failure
+ *                                                  module also issues an
+ *                                                  auto-refund)
+ *   - `'unknown_metadata'`                       — orphan: cannot reconcile
+ *                                                  metadata.checkoutSessionId
+ *                                                  / itemId
+ *   - `'unknown_club'`                           — no matching club for the
+ *                                                  resolved short name
+ *   - `'no_email'`                               — guest flow without an
+ *                                                  email
+ *   - `'rental_userid_mismatch'`                 — held booking userId !=
+ *                                                  checkout consumer
+ *   - `'stripe_dashboard_refund_with_consumed_credit'` — D1 guard on refund
+ *                                                        Path B sync
+ *   - `'seat_filled_pre_webhook'`                — orphan-row reason after
+ *                                                  capacity_race auto-refund
+ *   - `'dispatch_failed'`                        — catch-all in failure.ts
+ *
+ * The `context` object is best-effort metadata for the orphan row's notes
+ * column (e.g. `{ sessionId, paymentIntentId }` for capacity races).
  */
-export class LivemodeMismatchError extends Error {
-	readonly event: ProviderEvent;
-	constructor(event: ProviderEvent) {
-		super(
-			`livemode mismatch: event=${event.livemode} env=${process.env.STRIPE_LIVEMODE}`,
-		);
-		this.name = "LivemodeMismatchError";
-		this.event = event;
-	}
-}
-
-/**
- * Thrown by `dispatchParsedEvent` when a checkout completes for a row we
- * cannot reconcile (unknown metadata.checkoutSessionId, missing held rental,
- * unknown club, …). The webhook failure module catches this and writes an
- * `OrphanedPurchase` row with the carried `reason`.
- */
-export class OrphanError extends Error {
+export class WebhookFailure extends Error {
 	readonly reason: string;
-	constructor(args: { reason: string; message?: string }) {
-		super(args.message ?? `orphan: ${args.reason}`);
-		this.name = "OrphanError";
-		this.reason = args.reason;
-	}
-}
-
-/**
- * Thrown when a paid event-registration webhook arrives but the event is
- * already fully booked (capacity race per §11). The failure module catches,
- * auto-refunds via `provider.createRefund` with idempotency key
- * `auto-refund-<sessionId>`, then writes an `OrphanedPurchase` row.
- */
-export class CapacityRaceError extends Error {
-	readonly sessionId: string;
-	readonly paymentIntentId: string | null;
-	constructor(args: { sessionId: string; paymentIntentId: string | null }) {
-		super("capacity race — seat filled pre-webhook");
-		this.name = "CapacityRaceError";
-		this.sessionId = args.sessionId;
-		this.paymentIntentId = args.paymentIntentId;
+	readonly context?: Record<string, unknown>;
+	constructor(reason: string, context?: Record<string, unknown>) {
+		super(`Webhook failure: ${reason}`);
+		this.name = "WebhookFailure";
+		this.reason = reason;
+		this.context = context;
 	}
 }
 

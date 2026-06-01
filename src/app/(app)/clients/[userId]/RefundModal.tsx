@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import { formatCents } from "~/lib/money";
@@ -13,12 +14,23 @@ import { api } from "~/trpc/react";
  * shell + string-based cents parsing.
  *
  * Bookkeeping only (D3): `billing.recordRefund` records an `InvoiceRefund` row —
- * staff hand back cash / refund in the processor dashboard separately; no
- * processor API call until Phase 12. The mutation blocks refunds on invoices
- * whose overpayment credit was consumed elsewhere (D1) and leaves an
- * auto-closed invoice closed (D2). The button that opens this is already gated
- * on `viewerIsClubAdmin`, `!hasConsumedCredit`, and a positive refundable
- * balance — but the mutation re-checks everything authoritatively.
+ * staff hand back cash / refund in the processor dashboard separately. The
+ * mutation blocks refunds on invoices whose overpayment credit was consumed
+ * elsewhere (D1) and leaves an auto-closed invoice closed (D2). The button
+ * that opens this is already gated on `viewerIsClubAdmin`,
+ * `!hasConsumedCredit`, and a positive refundable balance — but the mutation
+ * re-checks everything authoritatively.
+ *
+ * Phase 12a Round 3 Stream 5 — added a "Refund method" selector. The default
+ * is **Account credit** per the locked design decision (user-confirmed).
+ *
+ * Routing (Round 3 cleanup — schema gap closed):
+ *   - `account_credit` → `billing.issueAccountCreditFromPayment` (appends a
+ *     negative CREDIT line item to the invoice; no money moves).
+ *   - `cash` / `check` → `billing.recordRefund` (bookkeeping; staff hands
+ *     money back outside the system).
+ *   - `stripe_card` → `payments.refundStripePayment` (real Stripe refund);
+ *     gated to payments with `processor === 'stripe'`.
  */
 
 // Mirrors RecordPaymentModal.dollarStringToCents — string parse avoids IEEE-754
@@ -36,6 +48,33 @@ function dollarStringToCents(input: string): number | null {
 	);
 }
 
+/**
+ * Phase 12a Round 3 — refund method options.
+ *
+ * - `account_credit` (DEFAULT): the user keeps the money on their account as
+ *   positive balance. Routed to `billing.issueAccountCreditFromPayment`,
+ *   which appends a negative CREDIT line item to the invoice. No money
+ *   moves; the buyer can spend the credit on a future invoice.
+ *
+ * - `cash` / `check`: routed to `billing.recordRefund`. The refund row
+ *   inherits the original payment's method (the mutation doesn't accept a
+ *   paymentMethod input today); the staff-entered reason captures intent
+ *   for the bookkeeper.
+ *
+ * - `stripe_card`: routed to the dedicated `payments.refundStripePayment`
+ *   mutation, which DOES call Stripe. Only enabled when the originating
+ *   payment was itself made via Stripe (processor === 'stripe'), since
+ *   you can't push money back to a card that never charged.
+ */
+type RefundMethod = "account_credit" | "cash" | "check" | "stripe_card";
+
+const REFUND_METHOD_OPTIONS: Array<{ value: RefundMethod; label: string }> = [
+	{ value: "account_credit", label: "Account credit" },
+	{ value: "cash", label: "Cash" },
+	{ value: "check", label: "Check" },
+	{ value: "stripe_card", label: "Refund to Stripe card" },
+];
+
 export interface RefundContext {
 	paymentId: string;
 	invoiceId: string;
@@ -44,6 +83,12 @@ export interface RefundContext {
 	refundableInCents: number;
 	/** e.g. "Cash · $50.00" — display only. */
 	paymentLabel: string;
+	/**
+	 * Phase 12a Round 3 — processor of the originating payment. Gates the
+	 * "Refund to Stripe card" option: only enabled when this === 'stripe'.
+	 * Undefined / null for manual payments.
+	 */
+	processor?: string | null;
 }
 
 interface RefundModalProps {
@@ -67,6 +112,8 @@ export default function RefundModal({
 
 	const [amountDollars, setAmountDollars] = useState<string>("");
 	const [reason, setReason] = useState<string>("");
+	const [method, setMethod] = useState<RefundMethod>("account_credit");
+	const [confirmStripeOpen, setConfirmStripeOpen] = useState(false);
 
 	// Reset on open for a new payment. id-only dep (matches RecordPaymentModal):
 	// the whole `refund` object is a fresh literal each render.
@@ -75,61 +122,137 @@ export default function RefundModal({
 		if (open && refund) {
 			setAmountDollars((refund.refundableInCents / 100).toFixed(2));
 			setReason("");
+			setMethod("account_credit");
+			setConfirmStripeOpen(false);
 		}
 	}, [open, refund?.paymentId]);
 
-	const refundMutation = api.billing.recordRefund.useMutation({
+	const invalidateAll = async () => {
+		if (!refund) return;
+		await Promise.all([
+			utils.billing.getInvoice.invalidate({ invoiceId: refund.invoiceId }),
+			utils.billing.getMemberBilling.invalidate({ userId: consumerUserId }),
+			payerUserId
+				? utils.billing.getMemberBilling.invalidate({ userId: payerUserId })
+				: Promise.resolve(),
+			utils.billing.listInvoices.invalidate(),
+		]);
+	};
+
+	const bookkeepingMutation = api.billing.recordRefund.useMutation({
 		onSuccess: async (data) => {
 			toast(
 				`Refunded ${formatCents(data.refund.amountInCents)} — Invoice ${refund?.invoiceNumber ?? ""}`,
 				"success",
 			);
-			await Promise.all([
-				refund
-					? utils.billing.getInvoice.invalidate({ invoiceId: refund.invoiceId })
-					: Promise.resolve(),
-				utils.billing.getMemberBilling.invalidate({ userId: consumerUserId }),
-				payerUserId
-					? utils.billing.getMemberBilling.invalidate({ userId: payerUserId })
-					: Promise.resolve(),
-				utils.billing.listInvoices.invalidate(),
-			]);
+			await invalidateAll();
 			onOpenChange(false);
 		},
 		onError: (err) => toast(err.message, "error"),
 	});
-	const saving = refundMutation.isPending;
+
+	const accountCreditMutation =
+		api.billing.issueAccountCreditFromPayment.useMutation({
+			onSuccess: async () => {
+				toast(
+					`Issued account credit — Invoice ${refund?.invoiceNumber ?? ""}`,
+					"success",
+				);
+				await invalidateAll();
+				onOpenChange(false);
+			},
+			onError: (err) => toast(err.message, "error"),
+		});
+
+	const stripeRefundMutation = api.payments.refundStripePayment.useMutation({
+		onSuccess: async (data) => {
+			toast(
+				`Refunded ${formatCents(data.amountInCents)} to card — Invoice ${refund?.invoiceNumber ?? ""}`,
+				"success",
+			);
+			setConfirmStripeOpen(false);
+			await invalidateAll();
+			onOpenChange(false);
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+			setConfirmStripeOpen(false);
+		},
+	});
+
+	const saving =
+		bookkeepingMutation.isPending ||
+		accountCreditMutation.isPending ||
+		stripeRefundMutation.isPending;
 
 	if (!open || !refund) return null;
+
+	const stripeAvailable = refund.processor === "stripe";
 
 	const close = () => {
 		if (!saving) onOpenChange(false);
 	};
 
-	const handleSubmit = (e?: React.FormEvent) => {
-		e?.preventDefault();
-		if (!refund) return;
+	const validate = (): { cents: number; reason: string } | null => {
 		const cents = dollarStringToCents(amountDollars);
 		if (cents === null || cents <= 0) {
 			toast("Enter a valid refund amount greater than zero", "error");
-			return;
+			return null;
 		}
 		if (cents > refund.refundableInCents) {
 			toast(
 				`Refund cannot exceed ${formatCents(refund.refundableInCents)}`,
 				"error",
 			);
-			return;
+			return null;
 		}
 		const trimmedReason = reason.trim();
 		if (trimmedReason === "") {
 			toast("A reason is required", "error");
+			return null;
+		}
+		return { cents, reason: trimmedReason };
+	};
+
+	const handleSubmit = (e?: React.FormEvent) => {
+		e?.preventDefault();
+		const v = validate();
+		if (!v) return;
+
+		if (method === "stripe_card") {
+			// Real-money path — gate behind explicit confirmation.
+			setConfirmStripeOpen(true);
 			return;
 		}
-		refundMutation.mutate({
+
+		if (method === "account_credit") {
+			// Round 3 cleanup — account-credit "refund" appends a CREDIT line
+			// item to the invoice instead of an InvoiceRefund row.
+			accountCreditMutation.mutate({
+				paymentId: refund.paymentId,
+				amountInCents: v.cents,
+				reason: v.reason,
+			});
+			return;
+		}
+
+		// Bookkeeping path — cash / check. The reason captures intent for the
+		// bookkeeper; refund row's processor metadata inherits from the parent
+		// payment (the mutation doesn't accept paymentMethod today).
+		bookkeepingMutation.mutate({
 			paymentId: refund.paymentId,
-			amountInCents: cents,
-			reason: trimmedReason,
+			amountInCents: v.cents,
+			reason: v.reason,
+		});
+	};
+
+	const submitStripeRefund = () => {
+		const v = validate();
+		if (!v) return;
+		stripeRefundMutation.mutate({
+			paymentId: refund.paymentId,
+			amountInCents: v.cents,
+			reason: v.reason,
 		});
 	};
 
@@ -175,6 +298,49 @@ export default function RefundModal({
 							</div>
 						</div>
 
+						{/* Refund method — Phase 12a Round 3 Stream 5 */}
+						<fieldset className="space-y-2">
+							<legend className="font-medium text-[var(--foreground)] text-sm">
+								Refund method <span className="text-red-500">*</span>
+							</legend>
+							<div className="space-y-1.5">
+								{REFUND_METHOD_OPTIONS.map((opt) => {
+									const disabled =
+										opt.value === "stripe_card" && !stripeAvailable;
+									return (
+										<label
+											key={opt.value}
+											className={`flex items-center gap-2 text-sm ${
+												disabled
+													? "cursor-not-allowed text-[var(--muted-foreground)]"
+													: "cursor-pointer text-[var(--foreground)]"
+											}`}
+											title={
+												disabled
+													? "This payment wasn't made via Stripe — pick another method"
+													: undefined
+											}
+										>
+											<input
+												type="radio"
+												name="refund-method"
+												value={opt.value}
+												checked={method === opt.value}
+												disabled={saving || disabled}
+												onChange={() => setMethod(opt.value)}
+											/>
+											{opt.label}
+											{disabled && (
+												<span className="text-[var(--muted-foreground)] text-xs italic">
+													(payment not made via Stripe)
+												</span>
+											)}
+										</label>
+									);
+								})}
+							</div>
+						</fieldset>
+
 						{/* Amount */}
 						<div className="space-y-1">
 							<label
@@ -199,8 +365,9 @@ export default function RefundModal({
 								/>
 							</div>
 							<p className="text-[var(--muted-foreground)] text-xs">
-								Records the refund (cash handed back, or refunded in your
-								processor's dashboard). It does not call any processor.
+								{method === "stripe_card"
+									? "Sends the money back to the original card via Stripe."
+									: "Records the refund (cash handed back, check written, or applied as account credit). Does not call any processor."}
 							</p>
 						</div>
 
@@ -241,6 +408,22 @@ export default function RefundModal({
 					</div>
 				</form>
 			</div>
+
+			<AlertDialog
+				open={confirmStripeOpen}
+				title="Refund to card via Stripe?"
+				description="This will send the money back to the buyer's card via Stripe. This cannot be undone."
+				confirmLabel={
+					stripeRefundMutation.isPending ? "Refunding…" : "Refund to card"
+				}
+				cancelLabel="Cancel"
+				destructive
+				confirmDisabled={stripeRefundMutation.isPending}
+				onConfirm={submitStripeRefund}
+				onCancel={() => {
+					if (!stripeRefundMutation.isPending) setConfirmStripeOpen(false);
+				}}
+			/>
 		</>
 	);
 }

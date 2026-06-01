@@ -1558,6 +1558,208 @@ export const billingRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Phase 12a Round 3 cleanup — issue an account-credit "refund" by
+	 * appending a negative CREDIT adjustment line item to the invoice that
+	 * carried the original payment. The buyer's money stays on the books as
+	 * a balance they can spend on a future invoice; nothing is handed back
+	 * physically. Paired with the RefundModal "Account credit" method,
+	 * which previously had to misuse `recordRefund` with a prefixed reason.
+	 *
+	 * Unlike `recordRefund` which BLOCKS when the invoice has consumed
+	 * credit (D1, HANDOFF #123), `issueAccountCreditFromPayment` ALLOWS
+	 * this — adding account credit doesn't reverse already-consumed credit,
+	 * it ADDS new credit. The D1 invariant is "you can't physically refund
+	 * money that's been spent as credit elsewhere"; a paper credit
+	 * adjustment on the same invoice doesn't move money, so the invariant
+	 * doesn't apply.
+	 *
+	 * The cap is the payment's not-yet-refunded balance (cumulative
+	 * InvoiceRefund rows). Account-credit adjustments don't reduce
+	 * amountPaidInCents (they're an InvoiceLineItem, not an InvoiceRefund),
+	 * so the existing-refund floor is the right cap.
+	 *
+	 * Mirrors recordRefund / applyAccountCredit: per-payer advisory lock +
+	 * FOR UPDATE on the invoice row, re-fetch inside the lock, append the
+	 * CREDIT line, recompute subtotal/total/status.
+	 */
+	issueAccountCreditFromPayment: clubAdminProcedure
+		.input(
+			z.object({
+				paymentId: z.string(),
+				amountInCents: z.number().int().positive(),
+				reason: z.string().trim().min(1, "A reason is required").max(500),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const reason = input.reason.trim();
+
+			// Cross-tenant guard + pre-lock fast-fail.
+			const payment = await ctx.db.invoicePayment.findFirst({
+				where: {
+					paymentId: input.paymentId,
+					invoice: { clubShortName: ctx.user.clubShortName },
+				},
+				select: {
+					amountInCents: true,
+					invoiceId: true,
+					invoice: {
+						select: {
+							status: true,
+							userId: true,
+							billedToUserId: true,
+						},
+					},
+				},
+			});
+			if (!payment) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Payment not found in this club",
+				});
+			}
+			if (payment.invoice.status === "void") {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "Cannot issue credit against a payment on a void invoice",
+				});
+			}
+
+			const effectivePayerUserId =
+				payment.invoice.billedToUserId ?? payment.invoice.userId;
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Same per-payer advisory lock as recordRefund / applyAccountCredit.
+					const lockKey = `invoice-payer-${effectivePayerUserId}-${ctx.user.clubShortName}`;
+					await tx.$executeRaw`SELECT pg_advisory_xact_lock(('x' || substr(md5(${lockKey}), 1, 16))::bit(64)::bigint)`;
+					await tx.$executeRaw`SELECT 1 FROM "Invoice" WHERE "invoiceId" = ${payment.invoiceId} FOR UPDATE`;
+
+					// Re-read inside the lock.
+					const locked = await tx.invoice.findUniqueOrThrow({
+						where: { invoiceId: payment.invoiceId },
+						select: {
+							subtotalInCents: true,
+							totalInCents: true,
+							amountPaidInCents: true,
+							status: true,
+						},
+					});
+					if (locked.status === "void") {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message:
+								"Cannot issue credit against a payment on a void invoice",
+						});
+					}
+
+					// Cap at the payment's not-yet-refunded balance.
+					const priorRefunds = await tx.invoiceRefund.aggregate({
+						_sum: { amountInCents: true },
+						where: { paymentId: input.paymentId },
+					});
+					const alreadyRefunded = priorRefunds._sum.amountInCents ?? 0;
+					const refundableRemaining = payment.amountInCents - alreadyRefunded;
+					if (input.amountInCents > refundableRemaining) {
+						throw new TRPCError({
+							code: "PRECONDITION_FAILED",
+							message: `Credit exceeds the payment's refundable balance ($${(refundableRemaining / 100).toFixed(2)}).`,
+						});
+					}
+
+					// Append the credit line after any existing line items.
+					const lastLine = await tx.invoiceLineItem.findFirst({
+						where: { invoiceId: payment.invoiceId },
+						orderBy: { sortOrder: "desc" },
+						select: { sortOrder: true },
+					});
+					const sortOrder = (lastLine?.sortOrder ?? -1) + 1;
+
+					assertLineItemKindConsistency({
+						kind: "CREDIT",
+						creditFromInvoiceId: null,
+					});
+					const lineItem = await tx.invoiceLineItem.create({
+						data: {
+							invoiceId: payment.invoiceId,
+							kind: "CREDIT",
+							description: `Refund credit applied — ${reason}`,
+							quantity: 1,
+							unitPriceInCents: -input.amountInCents,
+							discountInCents: 0,
+							taxRateBps: 0,
+							taxAmountInCents: 0,
+							totalInCents: -input.amountInCents,
+							sortOrder,
+							// creditFromInvoiceId NULL — this credit doesn't originate
+							// from a prior overpaid invoice; it's an adjustment issued
+							// in lieu of a money refund.
+							creditFromInvoiceId: null,
+							// The credit benefits the payer (whoever holds the tab).
+							creditFromUserId: effectivePayerUserId,
+						},
+					});
+
+					// Recompute subtotal/total — CREDIT lines carry 0 tax, so subtotal
+					// and total move by the same amount (mirrors applyAccountCredit).
+					const newSubtotal = locked.subtotalInCents - input.amountInCents;
+					const newTotal = locked.totalInCents - input.amountInCents;
+
+					// Status: an adjustment can leave the invoice overpaid (→ "paid",
+					// overpayment counts as paid) or partially paid. closedAt stays
+					// UNTOUCHED — an adjustment doesn't move close-tab state (matches
+					// recordRefund D2).
+					const amountPaid = locked.amountPaidInCents;
+					let newStatus: string;
+					if (amountPaid >= newTotal) {
+						newStatus = "paid";
+					} else if (amountPaid > 0) {
+						newStatus = "partially_paid";
+					} else {
+						newStatus = "open";
+					}
+
+					const updated = await tx.invoice.update({
+						where: { invoiceId: payment.invoiceId },
+						data: {
+							subtotalInCents: newSubtotal,
+							totalInCents: newTotal,
+							status: newStatus,
+						},
+						select: {
+							invoiceId: true,
+							totalInCents: true,
+							amountPaidInCents: true,
+							status: true,
+						},
+					});
+
+					return {
+						result: { lineItem, invoice: updated },
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.REFUND_ISSUED_AS_CREDIT,
+							consumerUserId: payment.invoice.userId,
+							payerUserId: payment.invoice.billedToUserId,
+							entityType: "InvoiceLineItem",
+							entityId: lineItem.lineItemId,
+							metadata: {
+								amountInCents: input.amountInCents,
+								paymentId: input.paymentId,
+								lineItemId: lineItem.lineItemId,
+								reason,
+							},
+						}),
+					};
+				},
+			);
+		}),
+
+	/**
 	 * Phase 9a — add an ad-hoc / one-off charge to a member's running tab
 	 * (drinks, equipment, fees, or any catalog Product sold directly). Mirrors
 	 * the package-sale path: routes through `getOrCreateOpenInvoice` (same
@@ -2160,7 +2362,7 @@ export const billingRouter = createTRPCRouter({
 	 * EXACTLY ONE row per logical action that involved them — no client-side
 	 * collapsing needed.
 	 */
-	listMemberActivity: facilityProcedure
+	listMemberActivity: protectedProcedure
 		.input(
 			z.object({
 				userId: z.string().min(1),
@@ -2171,23 +2373,38 @@ export const billingRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const member = await ctx.db.user.findFirst({
-				where: {
-					userId: input.userId,
-					clubShortName: ctx.user.clubShortName,
-				},
-				select: { userId: true },
+			// Self-or-staff widening — viewer is EITHER the target member (self)
+			// OR same-club staff. Mirrors getMemberBilling (~line 71) so the
+			// member-facing Activity tab can read its own audit timeline.
+			const viewer = await getCurrentUser(ctx);
+			const member = await ctx.db.user.findUnique({
+				where: { userId: input.userId },
+				select: { userId: true, clubShortName: true },
 			});
 			if (!member) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
-					message: "Member not found in this club",
+					message: "Member not found",
 				});
 			}
 
+			const isSelf = viewer.userId === input.userId;
+			const isStaffViewer =
+				isPlatformAdmin(viewer) ||
+				(isFacilityOrAbove(viewer) &&
+					viewer.clubShortName === member.clubShortName);
+			if (!(isSelf || isStaffViewer)) {
+				// 404 (not 403) so cross-club probes can't enumerate userIds.
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found",
+				});
+			}
+			const clubShortName = member.clubShortName;
+
 			const rows = await ctx.db.auditLog.findMany({
 				where: {
-					clubShortName: ctx.user.clubShortName,
+					clubShortName,
 					targetUserId: input.userId,
 					...(input.cursor && {
 						OR: [

@@ -20,9 +20,10 @@
  *      recordPaymentInternal, recordRefundInternal) open their own audited
  *      transactions — Choice B composition (phase12 §9.3.1).
  *   6. Any error from dispatch routes through `handleWebhookFailure`:
- *      known classes (Clerk, capacity race, OrphanError reasons) → 200
- *      with an OrphanedPurchase row; unknown errors → re-thrown so the
- *      route handler returns 500 and Stripe retries.
+ *      `WebhookFailure` (carries a `reason` string covering Clerk failures,
+ *      capacity races, orphan reasons) → 200 with an OrphanedPurchase row;
+ *      unknown errors → re-thrown so the route handler returns 500 and
+ *      Stripe retries.
  */
 
 import { Prisma } from "@prisma/client";
@@ -31,7 +32,6 @@ import { dispatchParsedEvent } from "~/server/services/payments/dispatch";
 import { handleWebhookFailure } from "~/server/services/payments/failure";
 import { getStripeProvider } from "~/server/services/payments/index";
 import {
-	LivemodeMismatchError,
 	type ParsedProviderEvent,
 	SignatureError,
 } from "~/server/services/payments/types";
@@ -61,9 +61,9 @@ export async function handleStripeWebhook(
 	// 2. Livemode sanity check.
 	const expectedLivemode = process.env.STRIPE_LIVEMODE === "true";
 	if (event.livemode !== expectedLivemode) {
-		// LivemodeMismatchError is thrown for visibility / logging; we still
-		// return 400 directly per §8.3.
-		void new LivemodeMismatchError(event);
+		// §8.3 — return 400 directly. We don't go through the orphan path here
+		// (mismatched-livemode events are misregistration; an OrphanedPurchase
+		// row would just be noise).
 		return new Response("livemode mismatch", { status: 400 });
 	}
 

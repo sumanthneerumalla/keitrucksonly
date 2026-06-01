@@ -1,11 +1,15 @@
 /**
  * Phase 12a Round 2.7 — Auto-family-group linker.
  *
- * Implements the §7.8.6 truth table from
+ * Implements the §7.8.6 simplified rule from
  * `designFiles/roadmap/phase12-stripe-connect.md`. Called by the webhook
  * dispatch after both buyer and beneficiary have been resolved to local
  * `User` rows. Returns a discriminated outcome so the confirmation page
  * (§7.8.7) can render the right branch.
+ *
+ * SIMPLIFIED 2026-05-30: 3 outcomes (was 6). The directional "extended"
+ * variants were premature complexity for a rare-and-recoverable scenario;
+ * the rule is now "either party already has a group → DO NOT TOUCH".
  *
  * Locked decisions:
  *  - HANDOFF #7 — `FamilyGroup` is club-scoped. A user in two clubs may sit
@@ -36,10 +40,7 @@ import type { Prisma } from "@prisma/client";
 
 export type FamilyGroupLinkOutcome =
 	| "created"
-	| "extended_a_into_b_group"
-	| "extended_b_into_a_group"
-	| "untouched_both_existing_different_groups"
-	| "no_op_same_group"
+	| "not_linked_existing_group"
 	| "no_op_self_pay";
 
 // ============================================================
@@ -53,13 +54,24 @@ export interface LinkFamilyGroupInput {
 }
 
 /**
- * Apply the §7.8.6 truth table for two distinct identities at a paid
+ * Apply the §7.8.6 simplified rule for two distinct identities at a paid
  * checkout. Idempotent under concurrent retry via PG advisory lock.
  *
  * The two userIds are symmetric — `userIdA` and `userIdB` carry no
  * semantic priority (the "buyer" vs "beneficiary" framing is dispatch's
  * concern; here we only see two userIds and a club). The returned outcome
  * is enough for the confirmation page (§7.8.7) to render the right branch.
+ *
+ * Rule (3 outcomes):
+ *   - `userIdA === userIdB` (defensive — dedup already collapsed):
+ *       → `no_op_self_pay`, no DB writes.
+ *   - EITHER user already in a club-scoped FamilyGroup at `clubShortName`:
+ *       → `not_linked_existing_group`, family groups untouched. Trade-off
+ *         accepted (§7.8.6): when a parent already has a family group and
+ *         buys for a brand-new kid, the kid does NOT auto-join. Admin can
+ *         manually link via the existing "Add to family" flow afterward.
+ *   - Neither in a group → create a new FamilyGroup containing both:
+ *       → `created`.
  *
  * MUST be called from inside a Prisma `$transaction` — the advisory lock
  * is acquired with `pg_advisory_xact_lock`, which auto-releases on tx commit
@@ -119,43 +131,15 @@ export async function linkFamilyGroup(
 		);
 	}
 
-	const aGroup = userA.familyGroupId;
-	const bGroup = userB.familyGroupId;
-
-	// §7.8.6 truth table — 8 cases mapped to 6 outcomes.
-
-	// Case 7: both in the same group → no-op.
-	if (aGroup !== null && bGroup !== null && aGroup === bGroup) {
-		return "no_op_same_group";
+	// §7.8.6 simplified rule — if EITHER has a group, do not touch.
+	if (userA.familyGroupId !== null || userB.familyGroupId !== null) {
+		return "not_linked_existing_group";
 	}
 
-	// Case 8: both in DIFFERENT existing groups → DO NOT TOUCH.
-	if (aGroup !== null && bGroup !== null && aGroup !== bGroup) {
-		return "untouched_both_existing_different_groups";
-	}
-
-	// Case 5: A in group, B has none → add B to A's group.
-	if (aGroup !== null && bGroup === null) {
-		await tx.user.update({
-			where: { userId: userB.userId },
-			data: { familyGroupId: aGroup },
-		});
-		return "extended_b_into_a_group";
-	}
-
-	// Case 6: A has no group, B in group → add A to B's group.
-	if (aGroup === null && bGroup !== null) {
-		await tx.user.update({
-			where: { userId: userA.userId },
-			data: { familyGroupId: bGroup },
-		});
-		return "extended_a_into_b_group";
-	}
-
-	// Cases 1–4: neither has a group → create a fresh one and link both.
+	// Neither has a group — create a fresh one and link both.
 	// Auto-default the name to "{lastName} family" from the FIRST identity
 	// (matches the FamilyGroup schema comment). Fall back to a generic
-	// "Family" when both lastNames are empty.
+	// `null` (display-fallback "Family") when both lastNames are empty.
 	const defaultName =
 		(userA.lastName && userA.lastName.trim().length > 0
 			? `${userA.lastName.trim()} family`

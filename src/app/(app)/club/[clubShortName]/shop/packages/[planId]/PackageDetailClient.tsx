@@ -89,7 +89,7 @@ export default function PackageDetailClient({
 
 			{/* Title + price */}
 			<div className="space-y-2">
-				<h1 className="font-bold text-[var(--foreground)] text-2xl">
+				<h1 className="font-bold text-2xl text-[var(--foreground)]">
 					{data.name}
 				</h1>
 				<p className="font-semibold text-[var(--primary)] text-xl">
@@ -113,7 +113,9 @@ export default function PackageDetailClient({
 						</p>
 					</div>
 					<div className="col-span-2">
-						<p className="text-[var(--muted-foreground)] text-xs">Eligibility</p>
+						<p className="text-[var(--muted-foreground)] text-xs">
+							Eligibility
+						</p>
 						<p className="font-medium text-[var(--foreground)]">
 							{data.isGeneralDropIn
 								? "General open play"
@@ -135,10 +137,15 @@ export default function PackageDetailClient({
 				</div>
 			)}
 
-			{/* Buy stub — Phase C blocks paid checkout */}
+			{/* Phase 12a Round 3 Stream 6 — Buy button routes to the dedicated
+			    checkout-form page (Option B URL structure, §7.8.2). The form
+			    captures identity (buyer vs beneficiary) before mounting the
+			    Stripe iframe at `/checkout/[sessionId]`. */}
 			<div className="flex justify-end">
-				<Button disabled title="Sign in to buy" size="lg">
-					Sign in to buy
+				<Button asChild size="lg">
+					<Link href={`/club/${clubShortName}/checkout/package/${planId}`}>
+						Buy
+					</Link>
 				</Button>
 			</div>
 		</div>

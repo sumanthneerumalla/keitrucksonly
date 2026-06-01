@@ -1691,6 +1691,13 @@ model ProcessedProcessorEvent {
 // mapping. Webhook populates on first checkout; future SetupIntents in 12b hang
 // saved cards off these rows. Multi-club person ends up with one row per
 // (club's connected account); single User row.
+/// 12b prep: stores the Stripe Customer ID per (user, club, processor) so
+/// that Phase 12b (card-on-file + recurring billing) can charge a saved
+/// card via off-session PaymentIntent without re-entering card details.
+/// Currently WRITTEN in 12a (every checkout creates a Stripe Customer
+/// automatically; we capture the link) but NOT READ — no 12a code uses
+/// these rows. The forward-investment cost is ~5 lines in dispatch.ts;
+/// migrating to 12b is just "look up the link and charge" with no backfill.
 model ProcessorCustomerLink {
   id                 String   @id @default(cuid())
   userId             String

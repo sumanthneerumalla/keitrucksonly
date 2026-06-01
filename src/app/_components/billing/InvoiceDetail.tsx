@@ -1,7 +1,8 @@
 "use client";
 
-import { ArrowLeft, Download } from "lucide-react";
+import { ArrowLeft, CreditCard, Download } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import RecordPaymentModal from "~/app/(app)/clients/[userId]/RecordPaymentModal";
 import RefundModal, {
@@ -108,6 +109,15 @@ interface InvoiceDetailProps {
 	audience: InvoiceAudience;
 	/** Optional "back" target (e.g. the client page the staff drilled in from). */
 	backHref?: string;
+	/**
+	 * Phase 12a Round 3 Stream 6 — whether the invoice's club has a usable
+	 * Stripe Connect link (chargesEnabled = true && disconnectedAt = null).
+	 * Gates the "Pay $X" button. Resolved server-side by the page rendering
+	 * this component (members can't call `payments.getConnectionStatus`,
+	 * which is `clubAdminProcedure`); see member + staff page wrappers.
+	 * Default `false` so callers that haven't been updated yet stay safe.
+	 */
+	clubChargesEnabled?: boolean;
 }
 
 /**
@@ -160,9 +170,11 @@ export default function InvoiceDetail({
 	invoiceId,
 	audience,
 	backHref,
+	clubChargesEnabled = false,
 }: InvoiceDetailProps) {
 	const { toast } = useToast();
 	const utils = api.useUtils();
+	const router = useRouter();
 	const isStaff = audience === "staff";
 
 	const {
@@ -229,6 +241,20 @@ export default function InvoiceDetail({
 		},
 	});
 	const voiding = voidMutation.isPending;
+
+	// Phase 12a Round 3 Stream 6 — invoice pay-now. Single click: no
+	// BuyerBeneficiaryForm in the middle (the invoice already encodes
+	// consumer + billed-to per §7.8.2 invoice-exception). Pushes to
+	// `/checkout/[checkoutSessionId]` on success.
+	const startInvoiceCheckout = api.payments.startCheckout.invoice.useMutation({
+		onSuccess: (result) => {
+			router.push(`/checkout/${result.checkoutSessionId}`);
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+	});
+	const starting = startInvoiceCheckout.isPending;
 
 	if (isLoading) {
 		return (
@@ -308,6 +334,21 @@ export default function InvoiceDetail({
 	// refundable balance (p.netInCents > 0). The mutation re-checks all of this.
 	const canRefund = isStaff && inv.viewerIsClubAdmin && !inv.hasConsumedCredit;
 
+	// Phase 12a Round 3 Stream 6 — "Pay $X" button visibility (§12.1):
+	//   - audience is 'member' or 'staff' (admin can ALSO trigger pay-now)
+	//   - there's an outstanding (positive) balance
+	//   - the invoice isn't void
+	//   - the club's Stripe Connect is wired up (chargesEnabled + not disconnected)
+	// The server-side `payments.startCheckout.invoice` mutation re-checks all
+	// of this authoritatively; the button-visibility gate just avoids showing
+	// the user a button that's guaranteed to bounce.
+	const outstandingInCents = inv.balanceInCents > 0 ? inv.balanceInCents : 0;
+	const canPayNow =
+		(audience === "member" || audience === "staff") &&
+		outstandingInCents > 0 &&
+		inv.status !== "void" &&
+		clubChargesEnabled;
+
 	return (
 		<div className="mx-auto max-w-4xl space-y-6 p-6">
 			{/* Top bar */}
@@ -352,6 +393,21 @@ export default function InvoiceDetail({
 						<Download size={14} />
 						Download PDF
 					</a>
+					{canPayNow && (
+						<Button
+							variant="default"
+							size="sm"
+							disabled={starting}
+							onClick={() =>
+								startInvoiceCheckout.mutate({ invoiceId: inv.invoiceId })
+							}
+						>
+							<CreditCard size={14} />
+							{starting
+								? "Starting…"
+								: `Pay ${formatCents(outstandingInCents)}`}
+						</Button>
+					)}
 					{canRecordPayment && (
 						<Button
 							variant="default"
@@ -601,6 +657,11 @@ export default function InvoiceDetail({
 													invoiceNumber: inv.invoiceNumber,
 													refundableInCents: p.netInCents,
 													paymentLabel: `${PAYMENT_METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod} · ${formatCents(p.amountInCents)}`,
+													// Phase 12a Round 3 — gates the "Refund to Stripe
+													// card" option in RefundModal. Stripe-collected
+													// payments can be refunded back to the card;
+													// cash/check/etc. cannot.
+													processor: p.processor,
 												})
 											}
 										>

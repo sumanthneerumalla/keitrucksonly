@@ -1,7 +1,8 @@
 "use client";
 
-import { Receipt } from "lucide-react";
+import { CreditCard, Receipt } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
@@ -65,6 +66,15 @@ interface BillingPanelProps {
 	 * of /clients/[userId]/invoices/[id]).
 	 */
 	audience?: "staff" | "member";
+	/**
+	 * Phase 12a Round 3 — whether the club's Stripe Connect link is healthy
+	 * (chargesEnabled && !disconnectedAt). Gates the per-row "Pay $X" button
+	 * in member audience. Resolved server-side by the page that mounts this
+	 * (members can't call `payments.getConnectionStatus` — clubAdmin-only).
+	 * Defaults to false so callers that haven't been updated stay safe; the
+	 * button just doesn't appear.
+	 */
+	clubChargesEnabled?: boolean;
 }
 
 type InvoiceRow = {
@@ -172,15 +182,33 @@ function StatusPill({
 export default function BillingPanel({
 	userId,
 	audience = "staff",
+	clubChargesEnabled = false,
 }: BillingPanelProps) {
 	const isStaff = audience === "staff";
 	const { toast } = useToast();
+	const router = useRouter();
 	const utils = api.useUtils();
 
 	const { data, isLoading, error } = api.billing.getMemberBilling.useQuery(
 		{ userId },
 		{ enabled: !!userId },
 	);
+
+	// Phase 12a Round 3 — per-row pay-now. Mirrors the invoice-detail flow:
+	// no buyer/beneficiary form, just `startCheckout.invoice` → push to
+	// `/checkout/[sessionId]`. The mutation re-checks club-Stripe health,
+	// payer permission, and outstanding balance authoritatively.
+	const startInvoiceCheckout = api.payments.startCheckout.invoice.useMutation({
+		onSuccess: (result) => {
+			router.push(`/checkout/${result.checkoutSessionId}`);
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+	});
+	const startingInvoiceId = startInvoiceCheckout.isPending
+		? startInvoiceCheckout.variables?.invoiceId ?? null
+		: null;
 
 	const [paymentInvoice, setPaymentInvoice] = useState<InvoiceRow | null>(null);
 	// Close-tab confirmation target — when non-null, the AlertDialog is open
@@ -228,19 +256,17 @@ export default function BillingPanel({
 						<Receipt size={14} />
 						{isStaff ? "Invoices" : "Your invoices"}
 					</button>
-					{isStaff && (
-						<button
-							type="button"
-							onClick={() => setActiveTab("activity")}
-							className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 font-medium text-sm transition-colors ${
-								activeTab === "activity"
-									? "border-[var(--primary)] text-[var(--foreground)]"
-									: "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-							}`}
-						>
-							Activity
-						</button>
-					)}
+					<button
+						type="button"
+						onClick={() => setActiveTab("activity")}
+						className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 font-medium text-sm transition-colors ${
+							activeTab === "activity"
+								? "border-[var(--primary)] text-[var(--foreground)]"
+								: "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+						}`}
+					>
+						Activity
+					</button>
 				</div>
 				{isStaff && activeTab === "invoices" && (
 					<Button
@@ -304,7 +330,7 @@ export default function BillingPanel({
 												<th className="px-3 py-2 text-right font-medium">
 													Balance
 												</th>
-												{isStaff && (
+												{(isStaff || clubChargesEnabled) && (
 													<th className="px-3 py-2 text-right font-medium">
 														Actions
 													</th>
@@ -349,6 +375,19 @@ export default function BillingPanel({
 													inv.balanceInCents > 0 &&
 													inv.status !== "void";
 												const annotation = annotationFor(userId, inv);
+												// Phase 12a Round 3 — "Pay $X" gating mirrors
+												// `InvoiceDetail`: viewer is consumer or payer (members
+												// only see their own invoices), positive outstanding
+												// balance, not void, and the club's Stripe Connect is
+												// healthy. The server-side `payments.startCheckout.invoice`
+												// re-checks all of this authoritatively; the gate just
+												// suppresses a button that's guaranteed to bounce.
+												const outstandingInCents =
+													inv.balanceInCents > 0 ? inv.balanceInCents : 0;
+												const canPayNow =
+													outstandingInCents > 0 &&
+													inv.status !== "void" &&
+													clubChargesEnabled;
 												return (
 													<tr
 														key={inv.invoiceId}
@@ -421,10 +460,29 @@ export default function BillingPanel({
 																formatCents(inv.balanceInCents)
 															)}
 														</td>
-														{isStaff && (
+														{(isStaff || clubChargesEnabled) && (
 															<td className="px-3 py-2 text-right">
 																<div className="flex flex-col items-end gap-1">
-																	{canRecordPayment ? (
+																	{canPayNow ? (
+																		<Button
+																			variant="default"
+																			size="sm"
+																			disabled={
+																				startInvoiceCheckout.isPending
+																			}
+																			onClick={() =>
+																				startInvoiceCheckout.mutate({
+																					invoiceId: inv.invoiceId,
+																				})
+																			}
+																		>
+																			<CreditCard size={14} />
+																			{startingInvoiceId === inv.invoiceId
+																				? "Starting…"
+																				: `Pay ${formatCents(outstandingInCents)}`}
+																		</Button>
+																	) : null}
+																	{isStaff && canRecordPayment ? (
 																		<Button
 																			variant="outline"
 																			size="sm"
@@ -442,7 +500,7 @@ export default function BillingPanel({
 																			Record Payment
 																		</Button>
 																	) : null}
-																	{canMarkDue ? (
+																	{isStaff && canMarkDue ? (
 																		<Button
 																			variant="outline"
 																			size="sm"
@@ -477,9 +535,7 @@ export default function BillingPanel({
 				</>
 			)}
 
-			{activeTab === "activity" && isStaff && (
-				<MemberActivityTimeline userId={userId} />
-			)}
+			{activeTab === "activity" && <MemberActivityTimeline userId={userId} />}
 
 			{isStaff && (
 				<>

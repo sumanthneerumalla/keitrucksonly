@@ -8,8 +8,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import ConnectStripeBanner from "~/app/_components/client/shared/ConnectStripeBanner";
 import { getOnboardedUserOrRedirect } from "~/app/_components/server/OnboardedGuard";
-import { isStaffOrAbove } from "~/server/utils/utils";
+import { isAnyAdmin, isStaffOrAbove } from "~/server/utils/utils";
 
 const quickLinks = [
 	{
@@ -109,8 +110,16 @@ export default async function AdminPage() {
 		redirect("/dashboard");
 	}
 
+	// Phase 12a Stream 5 — the connect-Stripe banner is gated to actual
+	// admins (CLUB_ADMIN / PLATFORM_ADMIN). Facility/coach viewers see the
+	// admin index for the cards they're allowed to use but can't act on
+	// billing infrastructure, so the prompt would be a dead end for them.
+	const showStripeBanner = isAnyAdmin(user);
+
 	return (
 		<div className="p-6">
+			{showStripeBanner && <ConnectStripeBanner />}
+
 			<h1 className="mb-6 font-semibold text-2xl text-[var(--foreground)]">
 				Admin
 			</h1>

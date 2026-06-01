@@ -22,22 +22,27 @@
  *   - `unhandled`:             no-op.
  *
  * Errors raised here (caught by stripeWebhook.ts):
- *   - `OrphanError({ reason })`     → failure module writes OrphanedPurchase.
- *   - `CapacityRaceError(...)`      → auto-refund + OrphanedPurchase.
- *   - `ClerkPersistentError`        → OrphanedPurchase reason=clerk_create_failed.
- *   - Any other throw               → 500 to Stripe; retried.
+ *   - `WebhookFailure({ reason })`   → failure module writes OrphanedPurchase
+ *                                       (and, for `'capacity_race'`,
+ *                                       auto-refunds via Stripe first). The
+ *                                       reason string carries the same
+ *                                       vocabulary the old per-class shape
+ *                                       used (`'unknown_metadata'`,
+ *                                       `'unknown_club'`,
+ *                                       `'clerk_create_failed_buyer'`,
+ *                                       `'capacity_race'`, …).
+ *   - Any other throw                → 500 to Stripe; retried.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import {
-	CapacityRaceError,
 	type CheckoutIdentityBlock,
 	type CheckoutIntent,
 	type FamilyGroupLinkOutcome,
-	OrphanError,
 	type ParsedProviderEvent,
 	type ProviderEvent,
+	WebhookFailure,
 } from "~/server/services/payments/types";
 import {
 	AUDIT_ACTIONS,
@@ -130,14 +135,13 @@ async function resolveIdentityBlock(
 		});
 		clerkUserId = result.clerkUserId;
 	} catch (err) {
-		// Re-throw as OrphanError so failure.ts writes the per-identity reason.
-		// `ClerkPersistentError` (multi-Clerk-user collision) is the only
-		// failure we refine here; other Clerk errors keep their TRPCError
+		// Re-throw as WebhookFailure so failure.ts writes the per-identity
+		// reason. `ClerkPersistentError` (multi-Clerk-user collision) is the
+		// only failure we refine here; other Clerk errors keep their TRPCError
 		// surface and bubble up to the generic dispatch_failed catch-all.
 		if (err instanceof ClerkPersistentError) {
-			throw new OrphanError({
-				reason: clerkOrphanReason,
-				message: err.message,
+			throw new WebhookFailure(clerkOrphanReason, {
+				originalMessage: err.message,
 			});
 		}
 		throw err;
@@ -277,8 +281,7 @@ async function resolveSystemStaffUserId(
 		select: { userId: true },
 	});
 	if (!row) {
-		throw new OrphanError({
-			reason: "unknown_club",
+		throw new WebhookFailure("unknown_club", {
 			message: `No admin/owner user found for club ${clubShortName}`,
 		});
 	}
@@ -319,8 +322,7 @@ async function dispatchCheckoutCompleted(
 ): Promise<void> {
 	const checkoutSessionId = parsed.metadata.checkoutSessionId;
 	if (!checkoutSessionId) {
-		throw new OrphanError({
-			reason: "unknown_metadata",
+		throw new WebhookFailure("unknown_metadata", {
 			message: "checkout.completed missing metadata.checkoutSessionId",
 		});
 	}
@@ -329,7 +331,7 @@ async function dispatchCheckoutCompleted(
 		where: { id: checkoutSessionId },
 	});
 	if (!sessionRow) {
-		throw new OrphanError({ reason: "unknown_metadata" });
+		throw new WebhookFailure("unknown_metadata");
 	}
 
 	const intent = asCheckoutIntent(sessionRow.intent);
@@ -350,7 +352,7 @@ async function dispatchCheckoutCompleted(
 		intent.itemKind !== "invoice" &&
 		!intent.consumerUserId
 	) {
-		throw new OrphanError({ reason: "no_email" });
+		throw new WebhookFailure("no_email");
 	}
 
 	// Resolve identities. Three paths:
@@ -388,17 +390,29 @@ async function dispatchCheckoutCompleted(
 		// Path C — legacy guest single-identity.
 		const email = parsed.email;
 		if (!email) {
-			throw new OrphanError({ reason: "no_email" });
+			throw new WebhookFailure("no_email");
 		}
 		const { firstName, lastName } = splitGuestName(parsed.customerName, email);
 		// `findOrCreateClerkUserId` throws `ClerkPersistentError` on the
-		// length>1 multi-Clerk-user case; webhook failure module catches it
-		// and writes OrphanedPurchase with reason='clerk_create_failed'.
-		const { clerkUserId } = await findOrCreateClerkUserId({
-			email: normalizeEmail(email),
-			firstName,
-			lastName,
-		});
+		// length>1 multi-Clerk-user case; we catch it below and refine to
+		// `WebhookFailure('clerk_create_failed')` so failure.ts writes
+		// OrphanedPurchase with that reason.
+		let clerkUserId: string;
+		try {
+			const r = await findOrCreateClerkUserId({
+				email: normalizeEmail(email),
+				firstName,
+				lastName,
+			});
+			clerkUserId = r.clerkUserId;
+		} catch (err) {
+			if (err instanceof ClerkPersistentError) {
+				throw new WebhookFailure("clerk_create_failed", {
+					originalMessage: err.message,
+				});
+			}
+			throw err;
+		}
 		const { userId } = await db.$transaction(async (tx) =>
 			findOrCreateLocalUserAccount({
 				db: tx,
@@ -414,6 +428,12 @@ async function dispatchCheckoutCompleted(
 	}
 
 	// Best-effort ProcessorCustomerLink. Race-safe via composite unique.
+	//
+	// 12b prep: storing the Stripe Customer ID so Phase 12b's saved-card flow
+	// can charge an off-session PaymentIntent without re-entering card details
+	// and without a backfill. NOT read anywhere in 12a — no 12a code path
+	// looks up `ProcessorCustomerLink`. Cost is ~5 lines here; the forward-
+	// migrate is "look up the link + charge".
 	if (parsed.providerCustomerId) {
 		await db.processorCustomerLink.createMany({
 			data: [
@@ -567,7 +587,7 @@ async function dispatchCheckoutCompleted(
 					err.code === "BAD_REQUEST" &&
 					/fully booked/i.test(err.message)
 				) {
-					throw new CapacityRaceError({
+					throw new WebhookFailure("capacity_race", {
 						sessionId: parsed.sessionId,
 						paymentIntentId: parsed.paymentIntentId,
 					});
@@ -649,10 +669,10 @@ async function dispatchCheckoutCompleted(
 				},
 			});
 			if (!booking || booking.status !== "CONFIRMED") {
-				throw new OrphanError({ reason: "unknown_metadata" });
+				throw new WebhookFailure("unknown_metadata");
 			}
 			if (booking.clubShortName !== clubShortName) {
-				throw new OrphanError({ reason: "unknown_club" });
+				throw new WebhookFailure("unknown_club");
 			}
 			// Defense-in-depth (Round 2.5 Important #8): the held booking's
 			// userId MUST match the checkout intent's consumerUserId. The
@@ -660,8 +680,7 @@ async function dispatchCheckoutCompleted(
 			// initial call, but a tampered cs_ id or a re-replayed webhook
 			// against a different held booking would slip past without this.
 			if (booking.userId !== consumerUserId) {
-				throw new OrphanError({
-					reason: "rental_userid_mismatch",
+				throw new WebhookFailure("rental_userid_mismatch", {
 					message: `rental booking userId (${booking.userId}) does not match checkout intent consumerUserId (${consumerUserId})`,
 				});
 			}
@@ -723,10 +742,10 @@ async function dispatchCheckoutCompleted(
 				},
 			});
 			if (!invoice) {
-				throw new OrphanError({ reason: "unknown_metadata" });
+				throw new WebhookFailure("unknown_metadata");
 			}
 			if (invoice.clubShortName !== clubShortName) {
-				throw new OrphanError({ reason: "unknown_club" });
+				throw new WebhookFailure("unknown_club");
 			}
 			await recordPaymentInternal({
 				db,
@@ -915,8 +934,7 @@ async function recordPaymentForInvoice(
 		},
 	});
 	if (!invoice) {
-		throw new OrphanError({
-			reason: "unknown_metadata",
+		throw new WebhookFailure("unknown_metadata", {
 			message: "invoice vanished between sell and pay",
 		});
 	}
@@ -953,7 +971,7 @@ async function dispatchRefundCreated(
 	_event: ProviderEvent,
 ): Promise<void> {
 	if (!parsed.chargeId) {
-		throw new OrphanError({ reason: "unknown_metadata" });
+		throw new WebhookFailure("unknown_metadata");
 	}
 
 	// Path A round-trip: if our UI already recorded this refund, no-op.
@@ -982,7 +1000,7 @@ async function dispatchRefundCreated(
 		},
 	});
 	if (!payment) {
-		throw new OrphanError({ reason: "unknown_metadata" });
+		throw new WebhookFailure("unknown_metadata");
 	}
 
 	// D1 pre-check (§9.2 step 2): consumed credit blocks Path B; orphan
@@ -992,9 +1010,7 @@ async function dispatchRefundCreated(
 		payment.invoice.creditConsumedInCents > 0 ||
 		payment.invoice.creditConsumedAt !== null
 	) {
-		throw new OrphanError({
-			reason: "stripe_dashboard_refund_with_consumed_credit",
-		});
+		throw new WebhookFailure("stripe_dashboard_refund_with_consumed_credit");
 	}
 
 	// §9.4: reuse the original payment's receivedBy as the refundedBy.

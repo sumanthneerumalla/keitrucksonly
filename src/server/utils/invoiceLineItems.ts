@@ -24,8 +24,36 @@ export function assertLineItemKindConsistency(d: {
 	if (d.kind === "PACKAGE_SALE" && !d.packagePlanId) {
 		throw new Error("InvoiceLineItem kind=PACKAGE_SALE requires packagePlanId");
 	}
-	if (d.kind === "CREDIT" && !d.creditFromInvoiceId) {
-		throw new Error("InvoiceLineItem kind=CREDIT requires creditFromInvoiceId");
+	// CREDIT lines: negative-amount overpayment-credit adjustments.
+	// Two sources:
+	//   1. Carry-forward from a prior auto-closed overpaid invoice
+	//      (creditFromInvoiceId SET, points at source invoice)
+	//   2. Refund-as-credit on the SAME invoice (creditFromInvoiceId NULL,
+	//      adjustment from a refund that issues credit instead of money back)
+	// Both: unitPriceInCents + totalInCents are negative; productId/packagePlanId/
+	// memberPackageId/memberMembershipId/eventRegistrationId MUST be null.
+	if (d.kind === "CREDIT") {
+		if (d.packagePlanId) {
+			throw new Error("InvoiceLineItem kind=CREDIT must not set packagePlanId");
+		}
+		if (d.memberPackageId) {
+			throw new Error(
+				"InvoiceLineItem kind=CREDIT must not set memberPackageId",
+			);
+		}
+		if (d.memberMembershipId) {
+			throw new Error(
+				"InvoiceLineItem kind=CREDIT must not set memberMembershipId",
+			);
+		}
+		if (d.productId) {
+			throw new Error("InvoiceLineItem kind=CREDIT must not set productId");
+		}
+		if (d.eventRegistrationId) {
+			throw new Error(
+				"InvoiceLineItem kind=CREDIT must not set eventRegistrationId",
+			);
+		}
 	}
 	if (d.kind === "MEMBERSHIP_FEE" && !d.memberMembershipId) {
 		throw new Error(

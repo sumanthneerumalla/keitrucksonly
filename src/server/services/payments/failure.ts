@@ -8,17 +8,19 @@
  * The webhook handler returns 200 to Stripe on every failure routed through
  * here — these are persistent classes; Stripe retries would never recover
  * them. The orphan queue is the manual-triage path.
+ *
+ * SIMPLIFIED 2026-05-30: switches on `err.reason` (single `WebhookFailure`
+ * class) instead of five `instanceof` checks. The end-to-end behavior —
+ * write an OrphanedPurchase row, optionally auto-refund Stripe-side, return
+ * 200 — is unchanged.
  */
 
 import type { PrismaClient } from "@prisma/client";
 import { getStripeProvider } from "~/server/services/payments/index";
 import {
-	CapacityRaceError,
-	ClerkPersistentError,
-	LivemodeMismatchError,
-	OrphanError,
 	type ParsedProviderEvent,
 	type ProviderEvent,
+	WebhookFailure,
 } from "~/server/services/payments/types";
 
 interface FailureContext {
@@ -33,36 +35,46 @@ export async function handleWebhookFailure(
 	parsed: ParsedProviderEvent,
 	ctx: FailureContext,
 ): Promise<Response> {
-	// LivemodeMismatch — caller already returns 400; this branch is defensive.
-	if (err instanceof LivemodeMismatchError) {
-		return new Response("livemode mismatch", { status: 400 });
-	}
+	if (err instanceof WebhookFailure) {
+		switch (err.reason) {
+			case "livemode_mismatch":
+				// Caller already returns 400 for this; defensive branch kept.
+				return new Response("livemode mismatch", { status: 400 });
 
-	// ClerkPersistent — multi-Clerk-user collision per §23 #5.
-	if (err instanceof ClerkPersistentError) {
-		await writeOrphan(ctx, {
-			reason: "clerk_create_failed",
-			event,
-			parsed,
-		});
-		return new Response("ok", { status: 200 });
-	}
+			case "capacity_race": {
+				// §11 — auto-refund the over-the-line registration, then orphan.
+				const sessionId =
+					typeof err.context?.sessionId === "string"
+						? err.context.sessionId
+						: parsed.kind === "checkout.completed"
+							? parsed.sessionId
+							: null;
+				const paymentIntentId =
+					typeof err.context?.paymentIntentId === "string"
+						? err.context.paymentIntentId
+						: parsed.kind === "checkout.completed"
+							? parsed.paymentIntentId
+							: null;
+				await autoRefundAndOrphan(
+					ctx,
+					{ sessionId, paymentIntentId },
+					event,
+					parsed,
+				);
+				return new Response("ok", { status: 200 });
+			}
 
-	// CapacityRace — auto-refund + orphan per §11.
-	if (err instanceof CapacityRaceError) {
-		await autoRefundAndOrphan(ctx, err, event, parsed);
-		return new Response("ok", { status: 200 });
-	}
-
-	// OrphanError — categorized reason from the dispatcher (unknown_metadata,
-	// unknown_club, no_email, stripe_dashboard_refund_with_consumed_credit).
-	if (err instanceof OrphanError) {
-		await writeOrphan(ctx, {
-			reason: err.reason,
-			event,
-			parsed,
-		});
-		return new Response("ok", { status: 200 });
+			default:
+				// Every other reason just lands as an OrphanedPurchase row with
+				// the carried reason string. Vocabulary is open-ended (§ types.ts
+				// docstring lists the known reasons).
+				await writeOrphan(ctx, {
+					reason: err.reason,
+					event,
+					parsed,
+				});
+				return new Response("ok", { status: 200 });
+		}
 	}
 
 	// Catch-all (Choice B silent-event-loss guard): `ProcessedProcessorEvent`
@@ -172,7 +184,7 @@ async function writeOrphan(
 
 async function autoRefundAndOrphan(
 	ctx: FailureContext,
-	err: CapacityRaceError,
+	args: { sessionId: string | null; paymentIntentId: string | null },
 	event: ProviderEvent,
 	parsed: ParsedProviderEvent,
 ): Promise<void> {
@@ -191,17 +203,17 @@ async function autoRefundAndOrphan(
 		select: { stripeAccountId: true },
 	});
 
-	if (stripeAccount && err.paymentIntentId) {
+	if (stripeAccount && args.paymentIntentId && args.sessionId) {
 		try {
 			const provider = getStripeProvider();
 			await provider.createRefund({
 				providerAccountId: stripeAccount.stripeAccountId,
 				providerChargeId: "", // not needed when refunding by PI
-				providerPaymentIntentId: err.paymentIntentId,
+				providerPaymentIntentId: args.paymentIntentId,
 				amountInCents:
 					parsed.kind === "checkout.completed" ? parsed.amountInCents : 0,
 				refundApplicationFee: true,
-				idempotencyKey: `auto-refund-${err.sessionId}`,
+				idempotencyKey: `auto-refund-${args.sessionId}`,
 			});
 		} catch {
 			// Best-effort — the orphan row records the situation for manual
