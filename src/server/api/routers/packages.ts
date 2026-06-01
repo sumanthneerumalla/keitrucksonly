@@ -23,18 +23,18 @@ function parseDataUrl(dataUrl: string): {
 	mime: string;
 } {
 	const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-	if (!match) {
+	if (!match || !match[1] || !match[2]) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Invalid image data URL",
 		});
 	}
-	const buf = Buffer.from(match[2]!, "base64");
+	const buf = Buffer.from(match[2], "base64");
 	// Copy into a fresh Uint8Array<ArrayBuffer> so Prisma's `Bytes` typing accepts it.
 	const ab = new ArrayBuffer(buf.byteLength);
 	const bytes = new Uint8Array(ab);
 	bytes.set(buf);
-	return { mime: match[1]!, bytes };
+	return { mime: match[1], bytes };
 }
 
 // ============================================================
