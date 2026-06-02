@@ -1,7 +1,8 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, CreditCard, Download } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import RecordPaymentModal from "~/app/(app)/clients/[userId]/RecordPaymentModal";
 import RefundModal, {
@@ -108,15 +109,72 @@ interface InvoiceDetailProps {
 	audience: InvoiceAudience;
 	/** Optional "back" target (e.g. the client page the staff drilled in from). */
 	backHref?: string;
+	/**
+	 * Phase 12a Round 3 Stream 6 — whether the invoice's club has a usable
+	 * Stripe Connect link (chargesEnabled = true && disconnectedAt = null).
+	 * Gates the "Pay $X" button. Resolved server-side by the page rendering
+	 * this component (members can't call `payments.getConnectionStatus`,
+	 * which is `clubAdminProcedure`); see member + staff page wrappers.
+	 * Default `false` so callers that haven't been updated yet stay safe.
+	 */
+	clubChargesEnabled?: boolean;
+}
+
+/**
+ * Phase 9b — re-usable "Bill to" / "For" / "Member" block. Renders the
+ * name (with a deep-link for staff), email, and phone. The phone field
+ * arrives from `billing.getInvoice` via the JSON profileData blob and is
+ * null when the member hasn't set it.
+ */
+function PartyBlock({
+	label,
+	party,
+	isStaff,
+}: {
+	label: string;
+	party: {
+		userId: string;
+		firstName: string | null;
+		lastName: string | null;
+		email: string | null;
+		phone: string | null;
+	};
+	isStaff: boolean;
+}) {
+	return (
+		<div>
+			<dt className="text-[var(--muted-foreground)] text-xs">{label}</dt>
+			<dd className="text-[var(--foreground)]">
+				{isStaff ? (
+					<Link
+						href={`/clients/${party.userId}`}
+						className="underline-offset-2 hover:underline"
+					>
+						{formatPersonName(party)}
+					</Link>
+				) : (
+					formatPersonName(party)
+				)}
+			</dd>
+			{(party.email || party.phone) && (
+				<dd className="space-y-0.5 pt-0.5 text-[var(--muted-foreground)] text-xs">
+					{party.email && <div>{party.email}</div>}
+					{party.phone && <div>{party.phone}</div>}
+				</dd>
+			)}
+		</div>
+	);
 }
 
 export default function InvoiceDetail({
 	invoiceId,
 	audience,
 	backHref,
+	clubChargesEnabled = false,
 }: InvoiceDetailProps) {
 	const { toast } = useToast();
 	const utils = api.useUtils();
+	const router = useRouter();
 	const isStaff = audience === "staff";
 
 	const {
@@ -183,6 +241,20 @@ export default function InvoiceDetail({
 		},
 	});
 	const voiding = voidMutation.isPending;
+
+	// Phase 12a Round 3 Stream 6 — invoice pay-now. Single click: no
+	// BuyerBeneficiaryForm in the middle (the invoice already encodes
+	// consumer + billed-to per §7.8.2 invoice-exception). Pushes to
+	// `/checkout/[checkoutSessionId]` on success.
+	const startInvoiceCheckout = api.payments.startCheckout.invoice.useMutation({
+		onSuccess: (result) => {
+			router.push(`/checkout/${result.checkoutSessionId}`);
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+	});
+	const starting = startInvoiceCheckout.isPending;
 
 	if (isLoading) {
 		return (
@@ -262,6 +334,21 @@ export default function InvoiceDetail({
 	// refundable balance (p.netInCents > 0). The mutation re-checks all of this.
 	const canRefund = isStaff && inv.viewerIsClubAdmin && !inv.hasConsumedCredit;
 
+	// Phase 12a Round 3 Stream 6 — "Pay $X" button visibility (§12.1):
+	//   - audience is 'member' or 'staff' (admin can ALSO trigger pay-now)
+	//   - there's an outstanding (positive) balance
+	//   - the invoice isn't void
+	//   - the club's Stripe Connect is wired up (chargesEnabled + not disconnected)
+	// The server-side `payments.startCheckout.invoice` mutation re-checks all
+	// of this authoritatively; the button-visibility gate just avoids showing
+	// the user a button that's guaranteed to bounce.
+	const outstandingInCents = inv.balanceInCents > 0 ? inv.balanceInCents : 0;
+	const canPayNow =
+		(audience === "member" || audience === "staff") &&
+		outstandingInCents > 0 &&
+		inv.status !== "void" &&
+		clubChargesEnabled;
+
 	return (
 		<div className="mx-auto max-w-4xl space-y-6 p-6">
 			{/* Top bar */}
@@ -288,39 +375,68 @@ export default function InvoiceDetail({
 					</div>
 				</div>
 
-				{/* Actions (staff) */}
-				{(canRecordPayment || canMarkDue || canVoid) && (
-					<div className="flex items-center gap-2">
-						{canRecordPayment && (
-							<Button
-								variant="default"
-								size="sm"
-								onClick={() => setPaymentOpen(true)}
-							>
-								Record Payment
-							</Button>
-						)}
-						{canMarkDue && (
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => setMarkDueOpen(true)}
-							>
-								Mark as due
-							</Button>
-						)}
-						{canVoid && (
-							<Button
-								variant="outline"
-								size="sm"
-								className="text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
-								onClick={() => setVoidOpen(true)}
-							>
-								Void
-							</Button>
-						)}
-					</div>
-				)}
+				{/* Actions. The Download PDF link is shown to every viewer who can
+				    see the invoice (members AND staff). Backed by the Phase 9b
+				    `/api/invoices/[invoiceId]/pdf` route handler, which re-runs
+				    the same consumer-OR-payer-OR-staff auth check. */}
+				<div className="flex items-center gap-2">
+					<a
+						href={`/api/invoices/${inv.invoiceId}/pdf`}
+						// `download` forces a save instead of opening inline in a new
+						// tab. Left valueless so the browser uses the server's
+						// Content-Disposition filename (<Last>_<First>_<INV>.pdf);
+						// it's a same-origin request, so that header is honored.
+						download
+						rel="noreferrer noopener"
+						className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 font-medium text-[var(--foreground)] text-xs transition-colors hover:bg-[var(--muted)]"
+					>
+						<Download size={14} />
+						Download PDF
+					</a>
+					{canPayNow && (
+						<Button
+							variant="default"
+							size="sm"
+							disabled={starting}
+							onClick={() =>
+								startInvoiceCheckout.mutate({ invoiceId: inv.invoiceId })
+							}
+						>
+							<CreditCard size={14} />
+							{starting
+								? "Starting…"
+								: `Pay ${formatCents(outstandingInCents)}`}
+						</Button>
+					)}
+					{canRecordPayment && (
+						<Button
+							variant="default"
+							size="sm"
+							onClick={() => setPaymentOpen(true)}
+						>
+							Record Payment
+						</Button>
+					)}
+					{canMarkDue && (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setMarkDueOpen(true)}
+						>
+							Mark as due
+						</Button>
+					)}
+					{canVoid && (
+						<Button
+							variant="outline"
+							size="sm"
+							className="text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+							onClick={() => setVoidOpen(true)}
+						>
+							Void
+						</Button>
+					)}
+				</div>
 			</div>
 
 			{/* Meta + parties */}
@@ -354,71 +470,21 @@ export default function InvoiceDetail({
 
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
 					{hasSeparatePayer && inv.billedTo ? (
-						<dl className="space-y-2">
-							<div>
-								<dt className="text-[var(--muted-foreground)] text-xs">
-									Bill to
-								</dt>
-								<dd className="text-[var(--foreground)]">
-									{isStaff ? (
-										<Link
-											href={`/clients/${inv.billedTo.userId}`}
-											className="underline-offset-2 hover:underline"
-										>
-											{formatPersonName(inv.billedTo)}
-										</Link>
-									) : (
-										formatPersonName(inv.billedTo)
-									)}
-									{isStaff && inv.billedTo.email && (
-										<span className="text-[var(--muted-foreground)]">
-											{" "}
-											· {inv.billedTo.email}
-										</span>
-									)}
-								</dd>
-							</div>
-							<div>
-								<dt className="text-[var(--muted-foreground)] text-xs">For</dt>
-								<dd className="text-[var(--foreground)]">
-									{isStaff ? (
-										<Link
-											href={`/clients/${inv.consumer.userId}`}
-											className="underline-offset-2 hover:underline"
-										>
-											{formatPersonName(inv.consumer)}
-										</Link>
-									) : (
-										formatPersonName(inv.consumer)
-									)}
-								</dd>
-							</div>
+						<dl className="space-y-3">
+							<PartyBlock
+								label="Bill to"
+								party={inv.billedTo}
+								isStaff={isStaff}
+							/>
+							<PartyBlock label="For" party={inv.consumer} isStaff={isStaff} />
 						</dl>
 					) : (
 						<dl className="space-y-2">
-							<div>
-								<dt className="text-[var(--muted-foreground)] text-xs">
-									Member
-								</dt>
-								<dd className="text-[var(--foreground)]">
-									{isStaff ? (
-										<Link
-											href={`/clients/${inv.consumer.userId}`}
-											className="underline-offset-2 hover:underline"
-										>
-											{formatPersonName(inv.consumer)}
-										</Link>
-									) : (
-										formatPersonName(inv.consumer)
-									)}
-									{isStaff && inv.consumer.email && (
-										<span className="text-[var(--muted-foreground)]">
-											{" "}
-											· {inv.consumer.email}
-										</span>
-									)}
-								</dd>
-							</div>
+							<PartyBlock
+								label="Member"
+								party={inv.consumer}
+								isStaff={isStaff}
+							/>
 						</dl>
 					)}
 				</div>
@@ -591,6 +657,11 @@ export default function InvoiceDetail({
 													invoiceNumber: inv.invoiceNumber,
 													refundableInCents: p.netInCents,
 													paymentLabel: `${PAYMENT_METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod} · ${formatCents(p.amountInCents)}`,
+													// Phase 12a Round 3 — gates the "Refund to Stripe
+													// card" option in RefundModal. Stripe-collected
+													// payments can be refunded back to the card;
+													// cash/check/etc. cannot.
+													processor: p.processor,
 												})
 											}
 										>

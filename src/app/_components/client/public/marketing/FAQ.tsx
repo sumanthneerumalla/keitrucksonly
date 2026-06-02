@@ -11,11 +11,7 @@ interface FAQProps {
 
 const DEFAULT_ITEMS: Array<[string, string]> = [
 	[
-		'What does "Presence" mean?',
-		"It's the live picture of your facility: who's checked in, what court they're on, what they paid, what's owed. Every screen in the app starts from that one source of truth.",
-	],
-	[
-		"How long is a typical contract?",
+		"How long is a contract?",
 		"Month-to-month after a free first month. No annual lock-in, no setup fees, no termination penalty.",
 	],
 	[
@@ -23,22 +19,18 @@ const DEFAULT_ITEMS: Array<[string, string]> = [
 		"No. We don't take a cut of your bookings or POS sales. Stripe's standard processing rates pass through to you.",
 	],
 	[
-		"What happens to my existing data?",
+		"What about my existing data?",
 		"We migrate it for free. Members, bookings, packages, payment history — verified row-by-row before we cut over.",
 	],
 	[
 		"Is there a member-facing app?",
-		"Yes — iOS and Android, plus a responsive web app. Members book courts, see credits, and check in with QR.",
-	],
-	[
-		"What about compliance?",
-		"SOC 2 Type II, PCI DSS via Stripe, and standard GDPR/CCPA tooling. Audit reports available on request under NDA.",
+		"A member app for iOS and Android is on our roadmap. Today, members book courts, see credits, and check in by QR through a responsive web app.",
 	],
 ];
 
 export function FAQ({
 	num = "06 / FAQ",
-	title = "Six questions buyers actually ask.",
+	title = "Questions buyers actually ask.",
 	items = DEFAULT_ITEMS,
 }: FAQProps) {
 	const [open, setOpen] = useState<number | null>(0);

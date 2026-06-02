@@ -70,6 +70,13 @@ RUN npx prisma generate
 # Build the application (type checking is done separately via npm run typecheck)
 RUN --mount=type=cache,target=/app/.next/cache npm run build
 
+# Prune stage - remove dev dependencies
+FROM node:20-alpine AS pruned
+WORKDIR /app
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+RUN npm prune --production
+
 # Runner stage - production image
 FROM node:20-alpine AS runner
 WORKDIR /app
@@ -85,7 +92,7 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder --chown=nextjs:nodejs /app/next.config.js ./
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
+COPY --from=pruned --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./docker-entrypoint.sh

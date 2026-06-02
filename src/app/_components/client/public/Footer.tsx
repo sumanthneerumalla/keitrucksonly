@@ -17,7 +17,7 @@ const platformLinks = [
 const companyLinks = [
 	{ href: "/about", label: "About" },
 	{ href: "/customers", label: "Customers" },
-	{ href: "/blog", label: "Blog" },
+	{ href: "/articles", label: "Articles" },
 	{ href: "/careers", label: "Careers" },
 	{ href: "/contact", label: "Contact" },
 ];

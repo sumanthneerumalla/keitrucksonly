@@ -13,6 +13,7 @@ import {
 	ChevronDown,
 	LayoutDashboard,
 	Mail,
+	Receipt,
 	Settings,
 	ShoppingCart,
 	User,
@@ -78,6 +79,17 @@ export const navItems: NavItem[] = [
 		label: "Book a Court",
 		href: "/rentals",
 		icon: <CalendarClock size={20} />,
+		userTypes: ALL_TYPES,
+	},
+	{
+		// "My Invoices" (not just "Invoices") signals this is the user's PERSONAL
+		// billing — distinct from staff's /admin/invoices and the per-member
+		// /clients/[userId] panel. Visible to ALL_TYPES because staff/coaches/
+		// admins can themselves be members of the club they work at and may need
+		// to see their own charges.
+		label: "My Invoices",
+		href: "/invoices",
+		icon: <Receipt size={20} />,
 		userTypes: ALL_TYPES,
 	},
 	{
@@ -198,6 +210,44 @@ export const navItems: NavItem[] = [
 				],
 			},
 			{
+				label: "Memberships",
+				href: "/admin/memberships",
+				userTypes: [
+					UserType.PLATFORM_ADMIN,
+					UserType.CLUB_ADMIN,
+					UserType.FACILITY,
+				],
+				children: [
+					{
+						label: "Plans",
+						href: "/admin/memberships/plans",
+						userTypes: [
+							UserType.PLATFORM_ADMIN,
+							UserType.CLUB_ADMIN,
+							UserType.FACILITY,
+						],
+					},
+					{
+						label: "Types",
+						href: "/admin/memberships/types",
+						userTypes: [
+							UserType.PLATFORM_ADMIN,
+							UserType.CLUB_ADMIN,
+							UserType.FACILITY,
+						],
+					},
+					{
+						label: "Preferences",
+						href: "/admin/memberships/preferences",
+						userTypes: [
+							UserType.PLATFORM_ADMIN,
+							UserType.CLUB_ADMIN,
+							UserType.FACILITY,
+						],
+					},
+				],
+			},
+			{
 				label: "Check-in",
 				href: "/admin/checkin",
 				userTypes: [
@@ -216,76 +266,33 @@ export const navItems: NavItem[] = [
 				],
 			},
 			{
-				label: "Documents",
-				href: "/admin#documents",
+				// Promoted out of the old "Billing" placeholder grouping (whose
+				// other children — Uninvoiced: User, Uninvoiced: Location — were
+				// unwired stubs). The matching SectionCard on the admin index
+				// points at the same destination.
+				label: "Billed Invoices",
+				href: "/admin/invoices",
 				userTypes: [
 					UserType.PLATFORM_ADMIN,
 					UserType.CLUB_ADMIN,
 					UserType.FACILITY,
-				],
-				children: [
-					{
-						label: "Document History",
-						href: "/admin#document-history",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-					{
-						label: "Templates",
-						href: "/admin#document-templates",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-				],
-			},
-			{
-				label: "Billing",
-				href: "/admin#billing",
-				userTypes: [
-					UserType.PLATFORM_ADMIN,
-					UserType.CLUB_ADMIN,
-					UserType.FACILITY,
-				],
-				children: [
-					{
-						label: "Uninvoiced: User",
-						href: "/admin#uninvoiced-user",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-					{
-						label: "Uninvoiced: Location",
-						href: "/admin#uninvoiced-location",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
-					{
-						label: "Review Post Billing",
-						href: "/admin#review-post-billing",
-						userTypes: [
-							UserType.PLATFORM_ADMIN,
-							UserType.CLUB_ADMIN,
-							UserType.FACILITY,
-						],
-					},
 				],
 			},
 			{
 				label: "Database",
 				href: "/database",
 				userTypes: [UserType.PLATFORM_ADMIN],
+			},
+			{
+				// Phase 12a Stream 5 — Settings is admin-only (CLUB_ADMIN /
+				// PLATFORM_ADMIN). FACILITY-level staff see the rest of the
+				// Admin tree but not billing-infrastructure settings.
+				// Today the only subsection is Payments, so the nav entry jumps
+				// straight there (no intermediate landing page). Future tiles
+				// can reintroduce a /admin/settings index when there are >1.
+				label: "Settings",
+				href: "/admin/settings/payments",
+				userTypes: [UserType.PLATFORM_ADMIN, UserType.CLUB_ADMIN],
 			},
 		],
 		userTypes: [
@@ -447,7 +454,6 @@ export default function SideNavigation({
 																							>
 																								<SidebarMenuSubButton
 																									asChild
-																									className="text-xs"
 																									isActive={
 																										pathname ===
 																										(gc.href?.split("#")[0] ||
@@ -525,6 +531,7 @@ export default function SideNavigation({
 			{user && (
 				<SidebarFooter className="border-gray-200 border-t">
 					<button
+						type="button"
 						onClick={() => setFacilityModalOpen(true)}
 						className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-gray-700 text-sm transition-colors hover:bg-[var(--accent)]"
 					>

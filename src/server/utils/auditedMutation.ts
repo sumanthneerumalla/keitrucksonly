@@ -69,6 +69,26 @@ export const AUDIT_ACTIONS = {
 	INVOICE_MARKED_DUE: "invoice.marked_due",
 	INVOICE_VOIDED: "invoice.voided",
 	REFUND_ISSUED: "refund.issued",
+	REFUND_ISSUED_AS_CREDIT: "refund.issued_as_credit",
+	// Phase 9a — charge sources beyond package sales (ad-hoc / one-off charges,
+	// event-registration charges for uncovered billable check-ins)
+	ADHOC_CHARGE_ADDED: "charge.adhoc",
+	EVENT_CHARGE_ADDED: "charge.event_registration",
+	// Phase 10a — memberships
+	MEMBERSHIP_SOLD: "membership.sold",
+	MEMBERSHIP_FROZEN: "membership.frozen",
+	MEMBERSHIP_UNFROZEN: "membership.unfrozen",
+	MEMBERSHIP_SUSPENDED: "membership.suspended",
+	MEMBERSHIP_REINSTATED: "membership.reinstated",
+	MEMBERSHIP_CANCELLED: "membership.cancelled",
+	MEMBERSHIP_VOIDED: "membership.voided",
+	// Phase 12a — Stripe Connect lifecycle + checkout + orphan resolution
+	STRIPE_ACCOUNT_CONNECTED: "stripe_account.connected",
+	STRIPE_ACCOUNT_DISCONNECTED: "stripe_account.disconnected",
+	STRIPE_ACCOUNT_UPDATED: "stripe_account.updated",
+	CHECKOUT_STARTED: "checkout.started",
+	CHECKOUT_COMPLETED: "checkout.completed",
+	ORPHAN_RESOLVED: "orphan.resolved",
 } as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
 

@@ -15,7 +15,10 @@ import { buildRuleSetFromEvent } from "~/server/utils/rrule";
 import { formatEventTimeInZone } from "~/server/utils/dateUtils";
 
 // NOTE: structured as per-court helper for future multi-court extension (decision #77)
-async function validateAndCreateBooking(
+// Phase 12a (phase12 §23 #8) — `export` added so the Stripe webhook dispatcher
+// (Round 2) can call this helper to finalize a held rental at payment-success
+// time. Behavior unchanged; one-line addition.
+export async function validateAndCreateBooking(
 	tx: Prisma.TransactionClient,
 	params: {
 		rentalWindowEventId: string;

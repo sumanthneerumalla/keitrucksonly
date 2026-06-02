@@ -2,7 +2,7 @@ const STATS: Array<[string, string]> = [
 	["+34%", "court utilization in 60 days"],
 	["−52%", "front-desk hours per week"],
 	["3.2s", "average member check-in time"],
-	["$18k", "package revenue captured per month"],
+	["$18k", "monthly package revenue"],
 ];
 
 export function Testimonial() {

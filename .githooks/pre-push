@@ -45,6 +45,21 @@ if [ "$read_any" -eq 1 ] && [ "$have_updates" -eq 0 ]; then
 	exit 0
 fi
 
+# Run the unit test suite first — it's fast (~2s) and fails fast, so a broken
+# test aborts the push before we pay for the (much slower) production build.
+# This is also what keeps invariant tests like clubLanding's reserved-segment
+# sync check enforced: next build doesn't run vitest, so without this gate the
+# tests would run nowhere automatically.
+echo "pre-push: running test gate (npm test)…"
+if npm test; then
+	echo "pre-push: tests OK."
+else
+	echo ""
+	echo "pre-push: 'npm test' FAILED — push aborted."
+	echo "  Fix the failing test above and push again, or bypass with: git push --no-verify"
+	exit 1
+fi
+
 echo "pre-push: running build gate (SKIP_ENV_VALIDATION=1 npm run build)…"
 if SKIP_ENV_VALIDATION=1 npm run build; then
 	echo "pre-push: build OK — push allowed."

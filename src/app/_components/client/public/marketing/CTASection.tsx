@@ -28,8 +28,7 @@ export function CTASection() {
 							Run your courts on one platform.
 						</h2>
 						<p className="mt-4 max-w-[520px] text-[18px] text-white/70">
-							Book a 15-minute demo. We'll show you the calendar, the kiosk, and
-							the dashboard with a copy of your real schedule loaded in.
+							15-minute demo with your real schedule loaded in.
 						</p>
 						<div className="mt-7 flex flex-wrap gap-3">
 							<a
@@ -50,13 +49,6 @@ export function CTASection() {
 							>
 								See pricing
 							</Link>
-							<Link
-								href="/features"
-								className="btn btn-text btn-lg"
-								style={{ color: "var(--brand-200)" }}
-							>
-								Browse features
-							</Link>
 						</div>
 						<div className="mt-[18px] flex flex-wrap gap-4 text-[13px] text-white/55">
 							<span>● No credit card</span>
@@ -73,7 +65,7 @@ export function CTASection() {
 							{[
 								"Your real court calendar, dragged in",
 								"QR kiosk on your facility's network",
-								"Package + credit math, end-to-end",
+								"Package + credit math",
 								"An honest answer on price",
 							].map((t) => (
 								<li

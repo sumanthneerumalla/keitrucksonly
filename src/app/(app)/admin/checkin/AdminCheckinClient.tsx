@@ -2,6 +2,7 @@
 
 import { RegistrationStatus } from "@prisma/client";
 import {
+	BadgeCheck,
 	CalendarDays,
 	Check,
 	Clock,
@@ -17,6 +18,10 @@ import { Button } from "~/app/_components/shared/Button";
 import { FacilitySelector } from "~/app/_components/shared/FacilitySelector";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
+import {
+	MEMBERSHIP_TONE_BADGE_STYLES,
+	membershipStatusDisplay,
+} from "~/lib/membershipStatus";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
@@ -106,6 +111,21 @@ type RecentCheckin = {
 	event: { eventId: string; title: string } | null;
 };
 
+// Phase 10a (WP6) — display-only membership row for the check-in card. Mirror
+// of a `MemberMembership` (with plan/type joined) from
+// `api.memberships.listForMember`; declared locally so the card stays typed
+// before the membership router resolves. Matches prisma/schema.prisma.
+type CheckinMembership = {
+	memberMembershipId: string;
+	status: string;
+	startDate: Date | string;
+	endDate: Date | string | null;
+	membershipPlan: {
+		description: string;
+		membershipType: { name: string } | null;
+	} | null;
+};
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
@@ -174,6 +194,17 @@ export default function AdminCheckinClient() {
 			{ userId: selectedUserId!, facilityId },
 			{ enabled: !!selectedUserId && !!facilityId },
 		);
+
+	// Phase 10a (WP6) — membership-aware check-in DISPLAY. Fetch the member's
+	// memberships so we can show a status badge per active/upcoming row. This is
+	// display-only: no access enforcement at check-in in 10a.
+	const { data: membershipData } = api.memberships.listForMember.useQuery(
+		// `enabled` gates this on a non-null id; `?? ""` keeps the input typed as
+		// string without a non-null assertion (lint-clean) and is never queried
+		// when null.
+		{ userId: selectedUserId ?? "" },
+		{ enabled: !!selectedUserId },
+	);
 
 	// Recent check-ins (poll every 3s)
 	const { data: recentData } = api.checkin.getRecentCheckins.useQuery(
@@ -366,6 +397,20 @@ export default function AdminCheckinClient() {
 		(cardData?.todayRegistrations as TodayRegistration[]) ?? [];
 	const nearbyEvents: NearbyEvent[] =
 		(cardData?.nearbyEvents as NearbyEvent[]) ?? [];
+
+	// Active + upcoming memberships only — the badge section is informational at
+	// the desk (decision: 10a check-in is display-only). Expired/cancelled/etc.
+	// stay out of the check-in view; staff see those under the profile tab.
+	const allMemberships: CheckinMembership[] =
+		(membershipData?.memberships as CheckinMembership[]) ?? [];
+	const displayMemberships = allMemberships.filter((m) => {
+		const d = membershipStatusDisplay({
+			status: m.status,
+			startDate: m.startDate,
+			endDate: m.endDate,
+		});
+		return d.effectiveStatus === "active" || d.effectiveStatus === "upcoming";
+	});
 
 	const memberFullName = member
 		? `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() ||
@@ -659,6 +704,56 @@ export default function AdminCheckinClient() {
 									<X size={18} />
 								</button>
 							</div>
+
+							{/* Membership status — Phase 10a display-only (no access
+							    enforcement in 10a). Shows a badge per active/upcoming
+							    membership; omitted entirely when the member holds none. */}
+							{displayMemberships.length > 0 && (
+								<div className="p-4">
+									<h4 className="mb-3 flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
+										<BadgeCheck size={14} />
+										Membership
+									</h4>
+									<div className="space-y-2">
+										{displayMemberships.map((m) => {
+											const display = membershipStatusDisplay({
+												status: m.status,
+												startDate: m.startDate,
+												endDate: m.endDate,
+											});
+											const typeName =
+												m.membershipPlan?.membershipType?.name ?? null;
+											const planName =
+												m.membershipPlan?.description ?? "Membership";
+											return (
+												<div
+													key={m.memberMembershipId}
+													className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)] p-3"
+												>
+													<div className="min-w-0">
+														<p className="truncate font-medium text-[var(--foreground)] text-sm">
+															{typeName ?? planName}
+														</p>
+														{typeName ? (
+															<p className="truncate text-[var(--muted-foreground)] text-xs">
+																{planName}
+															</p>
+														) : null}
+													</div>
+													<span
+														className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 font-medium text-xs ${MEMBERSHIP_TONE_BADGE_STYLES[display.tone]}`}
+													>
+														{display.effectiveStatus === "upcoming" &&
+														m.startDate
+															? `Starts ${new Date(m.startDate).toLocaleDateString()}`
+															: display.label}
+													</span>
+												</div>
+											);
+										})}
+									</div>
+								</div>
+							)}
 
 							{/* Today's Events */}
 							<div className="p-4">

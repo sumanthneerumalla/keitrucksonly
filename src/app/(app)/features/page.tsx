@@ -1,12 +1,12 @@
 import {
-	ArrowRight,
 	BarChart3,
 	Calendar,
 	CheckCircle,
 	CreditCard,
 	LayoutGrid,
 	Mail,
-	Play,
+	Megaphone,
+	Newspaper,
 	QrCode,
 	ShoppingCart,
 	Users,
@@ -28,7 +28,7 @@ import { CALENDLY_URL } from "~/lib/marketing";
 export const metadata: Metadata = {
 	title: "Features | Facility Presence",
 	description:
-		"Eight modules, one platform. Court calendar, self-serve check-in, packages, court rentals, CRM, POS, comms, and reports — built for racquet clubs.",
+		"Ten modules, one platform. Court calendar, check-in, packages, rentals, CRM, POS, comms, reports, articles, and announcements — built for racquet clubs.",
 };
 
 type MockKind =
@@ -39,7 +39,9 @@ type MockKind =
 	| "crm"
 	| "pos"
 	| "comms"
-	| "reports";
+	| "reports"
+	| "articles"
+	| "announcements";
 
 interface Section {
 	id: string;
@@ -323,6 +325,74 @@ const SECTIONS: Section[] = [
 		],
 		mock: "reports",
 	},
+	{
+		id: "articles",
+		num: "09",
+		icon: Newspaper,
+		eyebrow: "Marketing & SEO",
+		title: "Articles your members search for",
+		promise:
+			"Long-form pages that rank — written by your coaches, hosted at your club's URL.",
+		body: 'The thing your facility never had: a real content marketing surface. Every article you publish lives at facilitypresence.com/<your-club>/articles — Google indexes it, prospective members find it, current members come back. Coaches write a piece on serve mechanics; the parents searching "best junior badminton coaching in town" read it; some of them book a tour. The marketing channel that compounds while you sleep.',
+		bullets: [
+			[
+				"Per-club URLs Google ranks",
+				"Each club gets /<short>/articles with its own SEO posture — title, description, JSON-LD, sitemap, RSS feed. No subdomain, no separate site.",
+			],
+			[
+				"Authored in-browser, no deploys",
+				"Your club admin or coach types in a rich editor. Hit publish. Live in 60 seconds. No git, no Wordpress.",
+			],
+			[
+				"Per-author edit trust",
+				"Coaches own what they write; club admins can edit anything in their club. Facility Presence writes our own blog from the same surface.",
+			],
+			[
+				"Tags, cover images, reading time",
+				"Familiar essentials — automatic reading-time estimate, scoped tag taxonomy per club, optional cover image for OpenGraph + Twitter cards.",
+			],
+		],
+		related: [
+			["announcements", "Announcements"],
+			["crm", "Member CRM"],
+			["comms", "Email & SMS"],
+		],
+		mock: "articles",
+	},
+	{
+		id: "announcements",
+		num: "10",
+		icon: Megaphone,
+		eyebrow: "Member experience",
+		title: "Announcements your members can scroll",
+		promise:
+			"Court 3 closed Sunday. Tournament signups open. Holiday hours. One scrollable feed — no inbox to ignore.",
+		body: "Operational comms the way members actually consume them. Each club's notice board lives at facilitypresence.com/<your-club>/announcements — public so drop-ins see it too, scrollable feed-style with no per-post URLs. Front desk, coaches, anyone on staff can post; anyone on staff can edit anyone's notice — because if a coach posts 'tournament Saturday' and the time changes, you don't want to wait for them to be back on shift.",
+		bullets: [
+			[
+				"Public feed, no login wall",
+				"Members and prospective members both see them. Helps the freshness signal Google looks for on your domain.",
+			],
+			[
+				"Any staff can post; any staff can edit",
+				"Collaborative by design — operational comms move fast. Coaches, facility staff, club admins all have edit-anything access within the club.",
+			],
+			[
+				"Optional title, rich body, cover image",
+				"Short notices stay short. Long ones get formatting, links, images — same editor we use for Articles.",
+			],
+			[
+				"Drafts stay private until published",
+				"Authors and admins see drafts in the admin list. Other staff can't peek at unpublished WIP.",
+			],
+		],
+		related: [
+			["articles", "Articles"],
+			["comms", "Email & SMS"],
+			["crm", "Member CRM"],
+		],
+		mock: "announcements",
+	},
 ];
 
 function MockPanel({ kind }: { kind: MockKind }) {
@@ -343,6 +413,12 @@ function MockPanel({ kind }: { kind: MockKind }) {
 			return <CommsMock />;
 		case "reports":
 			return <DashboardMock />;
+		// Phase 15 — placeholder mocks reused from existing components.
+		// Swap to bespoke ArticlesMock / AnnouncementsMock when designed.
+		case "articles":
+			return <DashboardMock />;
+		case "announcements":
+			return <CommsMock />;
 	}
 }
 
@@ -395,15 +471,7 @@ function FeatureSection({ s, idx }: { s: Section; idx: number }) {
 								rel="noopener noreferrer"
 								className="btn btn-primary"
 							>
-								See it live in a demo <span className="arrow">→</span>
-							</a>
-							<a
-								href={CALENDLY_URL}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="btn btn-text"
-							>
-								<Play size={14} /> Watch 30-sec demo
+								Book a 15-min demo <span className="arrow">→</span>
 							</a>
 						</div>
 
@@ -449,7 +517,8 @@ function PageHero() {
 					&nbsp;&nbsp;EVERY MODULE, EXPLAINED
 				</div>
 				<h1 className="mt-3.5 max-w-[1000px]">
-					Eight modules. <span className="accent">One platform.</span>
+					Every module your club needs.{" "}
+					<span className="accent">One platform.</span>
 					<br />
 					Built for racquet clubs, line by line.
 				</h1>

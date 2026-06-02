@@ -11,12 +11,12 @@ const HEADLINES = [
 	{
 		strike: "front-desk chaos",
 		rest: ".",
-		lead: "Members self-check-in. Courts book themselves. Your team finally gets out from behind the desk.",
+		lead: "Members self-check-in. Courts book themselves.",
 	},
 	{
 		strike: "missed revenue",
 		rest: ".",
-		lead: "Capture every booking, every credit, every walk-in. The point-of-sale, court calendar, and league software — finally talking to each other.",
+		lead: "Every booking, credit, and walk-in captured — your POS, court calendar, and league software finally in sync.",
 	},
 ];
 

@@ -1,11 +1,11 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
-import { getClubShortnameFromShortUrlPathname } from "~/lib/clubLanding";
+import { matchClubShortUrlPathname } from "~/lib/clubLanding";
 
 const isAdminRoute = createRouteMatcher(["/admin(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {
-	// Raw path of the incoming request, e.g. "/cba" or "/cba/" or "/dashboard".
+	// Raw path of the incoming request, e.g. "/cba" or "/cba/articles/hello".
 	const { pathname } = req.nextUrl;
 
 	// Protect admin routes at the middleware level so unauthenticated visitors
@@ -17,15 +17,13 @@ export default clerkMiddleware(async (auth, req) => {
 		await auth.protect();
 	}
 
-	// Convert "/cba" (or "/cba/") to a club shortname ("cba") if it matches a known club short URL.
-	const clubShortname = getClubShortnameFromShortUrlPathname(pathname);
-
-	// If this request matches a known club short URL, rewrite it to the internal
-	// dynamic club landing route. Rewrites keep the browser URL as-is (still /cba),
-	// but serve the content from /club/<clubShortname>.
-	if (clubShortname) {
+	// Phase 15 Step 4: match the full short-URL pattern set (bare landing +
+	// /articles surfaces). All URL-shape knowledge lives in clubLanding.ts; the
+	// middleware just unpacks the result and rewrites.
+	const match = matchClubShortUrlPathname(pathname);
+	if (match) {
 		const url = req.nextUrl.clone();
-		url.pathname = `/club/${clubShortname}`;
+		url.pathname = match.rewritePath;
 		return NextResponse.rewrite(url);
 	}
 
