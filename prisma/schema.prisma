@@ -51,6 +51,7 @@ model Club {
   tags              Tag[]
   rentalBookings    RentalBooking[]
   familyGroups      FamilyGroup[]
+  dropInSessions    DropInSession[]
   invoices          Invoice[]
   emailGroups       EmailGroup[]
   auditLogs         AuditLog[]
@@ -140,6 +141,9 @@ model User {
   userTags UserTag[]
 
   rentalBookings RentalBooking[]
+
+  // Drop-in check-ins (designFiles/drop-in) — per-session play state, separate from EventRegistration
+  dropInCheckIns DropInCheckIn[]
 
   // Family group — opt-in grouping for shared package consumption (public-shop.md FAM phase).
   // Two users with the same non-null familyGroupId share package credits via consumeCredit widening.
@@ -375,6 +379,7 @@ enum EventType {
   COACHING_SLOT // Coach-created training slot
   RENTAL_WINDOW // Facility-defined rentable time window
   RENTAL_BOOKING // Member booking within a rental window
+  DROP_IN // Managed drop-in session reserving N courts; mode set on DropInSession (designFiles/drop-in)
 }
 
 enum RegistrationType {
@@ -612,6 +617,7 @@ model CalendarEvent {
   creditUsages         PackageCreditUsage[]
   rentalWindowBookings RentalBooking[]      @relation("RentalWindow")
   bookingBlockEvent    RentalBooking?       @relation("BookingBlock")
+  dropInSessions       DropInSession[]      @relation("DropInEvent")
 
   @@index([clubShortName])
   @@index([resourceId])
@@ -623,6 +629,100 @@ model CalendarEvent {
   @@index([start, end]) // For date-range queries
   @@index([eventType])
   @@index([productId])
+}
+
+// ===========================================================================
+// Drop-In Sessions (designFiles/drop-in). DI-1 adds Session + CheckIn for
+// MANUAL mode. TIMED/MATCH add DropInAssignment + DropInAssignmentParticipant
+// in DI-2/DI-4.
+// ===========================================================================
+
+enum DropInMode {
+  TIMED // clock-driven rotation, no scores
+  MATCH // matchup-driven; scores -> GBR as self-reported 1.0x
+  MANUAL // register/check-in/cancel/waitlist only; no digital match records
+}
+
+enum DropInSessionStatus {
+  SCHEDULED
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum DropInFormat {
+  SINGLES // open 1v1 — any gender vs any gender
+  DOUBLES // open 2v2 — any genders pair freely (app-level default for MATCH/TIMED)
+  MIXED_DOUBLES // strict 1 male + 1 female per pair (optional formal format; enforced via User.gender)
+}
+
+enum DropInPlayerStatus {
+  IDLE // checked in, not in the queue — must "join queue" to play (default)
+  WAITING // in the queue/pool
+  PLAYING // currently on a court
+  AWAITING_RESULT // off court; owes/awaits report or confirm (MATCH); gated from queue
+  DONE
+  LEFT
+  CANCELLED
+}
+
+// One per event occurrence (day). Materialized lazily on first check-in.
+model DropInSession {
+  sessionId      String              @id @default(cuid())
+  clubShortName  String
+  club           Club                @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  eventId        String
+  event          CalendarEvent       @relation("DropInEvent", fields: [eventId], references: [eventId], onDelete: Cascade)
+  occurrenceDate DateTime // which occurrence of a recurring series (date-only semantics)
+  mode           DropInMode
+  format         DropInFormat? // null for MANUAL
+  status         DropInSessionStatus @default(SCHEDULED)
+
+  courtIds              String[] // snapshot of event.resourceIds dedicated to drop-in
+  rotationMinutes       Int? // TIMED: slot length (default 15, max 30, 5-min steps); null otherwise
+  matchTimeLimitMinutes Int? // MATCH (DI-6): optional hard cap per match
+  bestOf                Int?     @default(3) // MATCH: games per match (best 2-of-3)
+  pointsPerGame         Int?     @default(21) // MATCH: points to win a game
+
+  startedAt DateTime?
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  checkIns DropInCheckIn[]
+
+  @@unique([eventId, occurrenceDate]) // one live session per day per series
+  @@index([clubShortName])
+  @@index([status])
+}
+
+// Per-player session state — SEPARATE from EventRegistration / Attendance.
+model DropInCheckIn {
+  checkInId String             @id @default(cuid())
+  sessionId String
+  session   DropInSession      @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  userId    String
+  user      User               @relation(fields: [userId], references: [userId])
+  status    DropInPlayerStatus @default(IDLE)
+
+  // Fairness ordering inputs (queue derived, not a separate table)
+  queuedAt     DateTime  @default(now())
+  gamesPlayed  Int       @default(0)
+  lastPlayedAt DateTime?
+
+  // GBR linkage resolved lazily (DI-5)
+  gbrPlayerId    String?
+  // Billing hook (reuse Phase 8a): the registration that covered the fee, if any
+  registrationId String?
+
+  checkedInAt DateTime  @default(now())
+  leftAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([sessionId, userId])
+  @@index([sessionId, status])
+  @@index([userId])
 }
 
 // Product — a generic purchasable product
