@@ -50,6 +50,12 @@ interface NavItem {
 	label: string;
 	href?: string;
 	icon?: React.ReactNode;
+	// Sub-items for a collapsible group. Don't wrap a single child under a
+	// PLACEHOLDER parent (one with no real page of its own) — that was the awkward
+	// "single-child wrapper" flattened in commit 3edbaac (Billing → Billed Invoices
+	// became a flat sibling). A single child IS fine when the parent has its own
+	// page (href) plus one sub-page, e.g. Database (Studio) → Console. Active
+	// highlighting is per-item and exact-match, so only the page you're on greys.
 	children?: NavItem[];
 	userTypes: UserType[];
 }
@@ -279,9 +285,21 @@ export const navItems: NavItem[] = [
 				],
 			},
 			{
+				// Single child is intentional here: the parent has its OWN page
+				// (Prisma Studio at /database) plus one sub-page (Console). Clicking
+				// "Database" opens Studio; the chevron reveals Console. Each greys
+				// only on its exact route. (Keep the href — without it the trigger
+				// just toggles and never navigates.)
 				label: "Database",
 				href: "/database",
 				userTypes: [UserType.PLATFORM_ADMIN],
+				children: [
+					{
+						label: "Console",
+						href: "/database/console",
+						userTypes: [UserType.PLATFORM_ADMIN],
+					},
+				],
 			},
 			{
 				// Phase 12a Stream 5 — Settings is admin-only (CLUB_ADMIN /
