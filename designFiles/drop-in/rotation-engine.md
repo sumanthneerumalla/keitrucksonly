@@ -120,6 +120,8 @@ Transport: **polling** (D1/G5 — admin check-in already polls ~3s); simplest to
 
 This board is **FP-native** — we do *not* embed GBR's `/live/:sessionId`. GBR is read only for a player's **global rank** (see gbr-integration.md).
 
+**Public (logged-out) viewing (G8):** the event page is **already public-capable** — `EventDetailClient` (`/club/[shortName]/shop/events/[eventId]` + `/events/[eventId]`) renders for logged-out users with no redirect. So we **reuse the public event page, not an iframe embed**: when the event is `isPublic`, a spectator sees a **read-only** board (served by a `publicProcedure`, names per `showRegistrantNames`) with a "sign in to join / report" CTA; interaction stays on `protected`/`facility` procedures. Also add `DROP_IN` to the `calendar.getPublicEvents` filter so drop-ins list publicly. (Lands with standings in DI-4/DI-5; MANUAL has none.)
+
 ---
 
 ## Singles & doubles
