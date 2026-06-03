@@ -7,6 +7,11 @@ import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "~/app/_components/shared/ui/tooltip";
+import {
 	MEMBERSHIP_TONE_BADGE_STYLES,
 	type MembershipStatusInput,
 	membershipStatusDisplay,
@@ -293,70 +298,113 @@ export default function MemberMembershipsCard({
 				<div className="mt-2 flex flex-wrap justify-end gap-1.5">
 					{row.status === "active" && (
 						<>
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={instantActionPending}
-								onClick={() => openRemarkDialog(row, "freeze")}
-							>
-								Freeze
-							</Button>
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={instantActionPending}
-								onClick={() => openRemarkDialog(row, "suspend")}
-							>
-								Suspend
-							</Button>
-							<Button
-								variant="destructive-outline"
-								size="sm"
-								disabled={instantActionPending}
-								onClick={() => openRemarkDialog(row, "cancel")}
-							>
-								Cancel
-							</Button>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={instantActionPending}
+										onClick={() => openRemarkDialog(row, "freeze")}
+									>
+										Freeze
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="max-w-xs">
+									{REMARK_ACTION_COPY.freeze.description}
+								</TooltipContent>
+							</Tooltip>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={instantActionPending}
+										onClick={() => openRemarkDialog(row, "suspend")}
+									>
+										Suspend
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="max-w-xs">
+									{REMARK_ACTION_COPY.suspend.description}
+								</TooltipContent>
+							</Tooltip>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										variant="destructive-outline"
+										size="sm"
+										disabled={instantActionPending}
+										onClick={() => openRemarkDialog(row, "cancel")}
+									>
+										Cancel
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="max-w-xs">
+									{REMARK_ACTION_COPY.cancel.description}
+								</TooltipContent>
+							</Tooltip>
 						</>
 					)}
 					{row.status === "frozen" && (
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={unfreezeMutation.isPending}
-							onClick={() =>
-								unfreezeMutation.mutate({
-									memberMembershipId: row.memberMembershipId,
-								})
-							}
-						>
-							Unfreeze
-						</Button>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={unfreezeMutation.isPending}
+									onClick={() =>
+										unfreezeMutation.mutate({
+											memberMembershipId: row.memberMembershipId,
+										})
+									}
+								>
+									Unfreeze
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="top" className="max-w-xs">
+								Resume the membership. The end date has been extended by the
+								duration of the freeze.
+							</TooltipContent>
+						</Tooltip>
 					)}
 					{row.status === "suspended" && (
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={reinstateMutation.isPending}
-							onClick={() =>
-								reinstateMutation.mutate({
-									memberMembershipId: row.memberMembershipId,
-								})
-							}
-						>
-							Reinstate
-						</Button>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={reinstateMutation.isPending}
+									onClick={() =>
+										reinstateMutation.mutate({
+											memberMembershipId: row.memberMembershipId,
+										})
+									}
+								>
+									Reinstate
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="top" className="max-w-xs">
+								Resume this suspended membership. The end date stays the same.
+							</TooltipContent>
+						</Tooltip>
 					)}
 					{/* Void — admin only, any non-voided row (mistakes happen post-cancel too) */}
 					{canVoid && row.status !== "voided" && (
-						<Button
-							variant="destructive-outline"
-							size="sm"
-							disabled={instantActionPending}
-							onClick={() => openRemarkDialog(row, "void")}
-						>
-							Void
-						</Button>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="destructive-outline"
+									size="sm"
+									disabled={instantActionPending}
+									onClick={() => openRemarkDialog(row, "void")}
+								>
+									Void
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="top" className="max-w-xs">
+								{REMARK_ACTION_COPY.void.description}
+							</TooltipContent>
+						</Tooltip>
 					)}
 				</div>
 			</div>
