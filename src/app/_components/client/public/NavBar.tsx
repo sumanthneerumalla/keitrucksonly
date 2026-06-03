@@ -28,6 +28,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "~/app/_components/shared/ui/sheet";
+import { matchClubShortUrlPathname } from "~/lib/clubLanding";
 import { CALENDLY_URL } from "~/lib/marketing";
 import { cn } from "~/lib/utils";
 import { api } from "~/trpc/react";
@@ -78,13 +79,20 @@ export function NavBar({ clubShortName }: NavBarProps) {
 
 	const showPublicNav = !isLoaded || pathname === "/" || !isSignedIn;
 
+	// Short URLs (e.g. /pioneer-badminton) are rewritten to /club/<short> by the
+	// middleware, but usePathname() reports the browser path — so match the
+	// short-URL shape here too (the same matcher the middleware uses) to keep the
+	// public/marketing chrome consistent with the canonical /club/* path.
+	const isClubPage =
+		pathname.startsWith("/club/") ||
+		matchClubShortUrlPathname(pathname) !== null;
 	// On authed app pages (not public), MobileAuthedHeader provides the hamburger.
 	// NavBar hamburger only needed on public pages (/, /resources/*, /club/*, /events/*).
 	// /rentals is public for unauthenticated visitors; authenticated users get the authed layout.
 	const isPublicPage =
 		pathname === "/" ||
 		pathname.startsWith("/resources") ||
-		pathname.startsWith("/club/") ||
+		isClubPage ||
 		pathname.startsWith("/events/") ||
 		(pathname.startsWith("/rentals") && !isSignedIn);
 	const showMobileHamburger = !isSignedIn || isPublicPage;
@@ -96,7 +104,7 @@ export function NavBar({ clubShortName }: NavBarProps) {
 		pathname === "/" ||
 		pathname === "/features" ||
 		pathname === "/pricing" ||
-		pathname.startsWith("/club/");
+		isClubPage;
 
 	return (
 		<header

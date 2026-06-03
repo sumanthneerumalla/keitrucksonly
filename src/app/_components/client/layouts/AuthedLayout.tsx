@@ -9,6 +9,7 @@ import SideNavigation from "~/app/_components/client/authed/SideNavigation";
 import { NavBar } from "~/app/_components/client/public/NavBar";
 import { Strip } from "~/app/_components/client/public/Strip";
 import { SidebarProvider } from "~/app/_components/shared/ui/sidebar";
+import { matchClubShortUrlPathname } from "~/lib/clubLanding";
 import { api } from "~/trpc/react";
 
 // User types that get the sidebar on event detail pages so they can navigate
@@ -53,15 +54,23 @@ export default function AuthedLayout({
 	// With a server-provided initialUser the nav can render immediately.
 	const sidebarLoading = isLoading && !user;
 
-	// Check if we're on the landing page or resources pages (no sidebar needed)
-	// Short URLs (e.g. /cba) are rewritten to /club/<shortname> by middleware,
-	// so by the time this component renders, club landing pages always appear
-	// as /club/* — no need to check the hardcoded shortname list here.
+	// Decide page chrome (public/no-sidebar vs. authed/sidebar).
+	//
+	// Club pages are reachable via the canonical /club/<short>/... path AND via a
+	// short URL (e.g. /pioneer-badminton) that the middleware rewrites to
+	// /club/<short>. That rewrite is server-side and invisible to usePathname(),
+	// which still reports the browser path — so matching only "/club/" here would
+	// let the authed sidebar render over the public club page. We reuse
+	// matchClubShortUrlPathname (the same pure matcher the middleware uses) so the
+	// two can never drift.
+	//
 	// Note: /rentals is public for unauthenticated visitors (no sidebar) but
 	// authenticated users see the sidebar so they can navigate elsewhere after booking.
 	// /events/* has the same dual treatment: public-style for students and
 	// unauthenticated visitors (the page is shareable), sidebar for admin-like
 	// roles (COACH, FACILITY, CLUB_ADMIN, PLATFORM_ADMIN) who manage events.
+	const clubShortMatch = matchClubShortUrlPathname(pathname);
+	const isClubPage = pathname.startsWith("/club/") || clubShortMatch !== null;
 	const isRentalsPage = pathname.startsWith("/rentals");
 	const isEventsPage = pathname.startsWith("/events/");
 	const eventSidebarUser =
@@ -71,7 +80,7 @@ export default function AuthedLayout({
 		pathname === "/features" ||
 		pathname === "/pricing" ||
 		pathname.startsWith("/resources") ||
-		pathname.startsWith("/club/") ||
+		isClubPage ||
 		(isEventsPage && !eventSidebarUser) ||
 		(isRentalsPage && !isSignedIn);
 
@@ -88,6 +97,9 @@ export default function AuthedLayout({
 		// /club/[clubShortName] or /club/[clubShortName]/... format
 		const match = pathname.match(/^\/club\/([^/]+)/);
 		clubShortName = match?.[1];
+	} else {
+		// Short URL form (e.g. /pioneer-badminton) — reuse the matcher result.
+		clubShortName = clubShortMatch?.shortname;
 	}
 
 	// Marketing pages render the announcement strip above the NavBar so it lives
@@ -97,7 +109,7 @@ export default function AuthedLayout({
 		pathname === "/" ||
 		pathname === "/features" ||
 		pathname === "/pricing" ||
-		pathname.startsWith("/club/");
+		isClubPage;
 
 	return (
 		<>
