@@ -8,6 +8,7 @@ import { clubsRouter } from "~/server/api/routers/clubs";
 import { coachesRouter } from "~/server/api/routers/coaches";
 import { coachingNotesRouter } from "~/server/api/routers/coachingNotes";
 import { contentImageRouter } from "~/server/api/routers/contentImage";
+import { dropInRouter } from "~/server/api/routers/dropIn";
 import { emailGroupsRouter } from "~/server/api/routers/emailGroups";
 import { emailSendRouter } from "~/server/api/routers/emailSend";
 import { membershipsRouter } from "~/server/api/routers/memberships";
@@ -46,6 +47,7 @@ export const appRouter = createTRPCRouter({
 	articles: articlesRouter,
 	announcements: announcementsRouter,
 	contentImage: contentImageRouter,
+	dropIn: dropInRouter,
 	emailGroups: emailGroupsRouter,
 	emailSend: emailSendRouter,
 });
