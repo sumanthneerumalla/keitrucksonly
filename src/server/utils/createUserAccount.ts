@@ -23,7 +23,7 @@
  */
 
 import { clerkClient } from "@clerk/nextjs/server";
-import type { Prisma, PrismaClient, UserType } from "@prisma/client";
+import type { Gender, Prisma, PrismaClient, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -134,6 +134,8 @@ export interface FindOrCreateLocalUserAccountInput {
 	email: string;
 	firstName: string;
 	lastName: string;
+	/** Optional gender (B1) — set on the new User row when creating a fresh local account. */
+	gender?: Gender;
 	clubShortName: string;
 	role: UserType;
 	/**
@@ -176,6 +178,7 @@ export async function findOrCreateLocalUserAccount({
 	email,
 	firstName,
 	lastName,
+	gender,
 	clubShortName,
 	role,
 	facilityId,
@@ -223,6 +226,7 @@ export async function findOrCreateLocalUserAccount({
 				firstName,
 				lastName,
 				email,
+				gender,
 				userType: role,
 				clubShortName,
 				activeFacilityId: resolvedFacilityId,

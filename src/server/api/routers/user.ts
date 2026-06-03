@@ -1,4 +1,4 @@
-import { Prisma, UserType } from "@prisma/client";
+import { Gender, Prisma, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
@@ -132,6 +132,8 @@ const updateProfileSchema = z.object({
 		.regex(/^[\p{L}\p{M}' -]+$/u, "Name contains invalid characters")
 		.optional(),
 	email: z.string().email().optional(),
+	// Gender is set-once (B1): the mutation only persists it when currently null.
+	gender: z.nativeEnum(Gender).optional(),
 	profileImage: z.string().url().optional(),
 	timeZone: z
 		.string()
@@ -464,12 +466,23 @@ export const userRouter = createTRPCRouter({
 	updateProfile: protectedProcedure
 		.input(updateProfileSchema)
 		.mutation(async ({ ctx, input }) => {
+			// Gender is set-once (B1): only persist it if the user hasn't set it yet.
+			// Once set, the UI locks it and we ignore any incoming change here.
+			// Admins can still correct it directly in the DB if ever needed.
+			const existing = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { gender: true },
+			});
+
 			const dataToUpdate = {
 				firstName: input.firstName,
 				lastName: input.lastName,
 				email: input.email,
 				profileImage: input.profileImage,
 				timeZone: input.timeZone,
+				...(existing?.gender == null && input.gender
+					? { gender: input.gender }
+					: {}),
 			};
 
 			const user = await ctx.db.user.update({
@@ -1333,6 +1346,7 @@ export const userRouter = createTRPCRouter({
 				firstName: z.string().min(1).max(100).trim(),
 				lastName: z.string().min(1).max(100).trim(),
 				email: z.string().email(),
+				gender: z.nativeEnum(Gender),
 				role: z.nativeEnum(UserType),
 				facilityId: z.string().optional(),
 				newClub: z
@@ -1436,6 +1450,7 @@ export const userRouter = createTRPCRouter({
 					email: input.email,
 					firstName: input.firstName,
 					lastName: input.lastName,
+					gender: input.gender,
 					clubShortName,
 					role: input.role,
 					facilityId,

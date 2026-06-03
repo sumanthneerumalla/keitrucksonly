@@ -150,6 +150,10 @@ model User {
   // Date of birth — promoted from StudentProfile.profileData JSON blob for indexed age-range queries
   dateOfBirth DateTime?
 
+  // Gender — set-once (immutable for the user once set), required at onboarding (B1).
+  // Feeds GBR's rating category; mapped to GBR's lowercase male/female at provision.
+  gender Gender?
+
   // Articles (Facility Presence marketing articles) — author bio shown on article pages, plus authored articles
   authorBio     String?            @db.Text
   articles      Article[]          @relation("ArticleAuthor")
@@ -203,6 +207,12 @@ enum UserType {
   FACILITY
   CLUB_ADMIN
   PLATFORM_ADMIN
+}
+
+// Gender — matches GBR's `gender_type` enum ('male','female') for the FP↔GBR stitch.
+enum Gender {
+  MALE
+  FEMALE
 }
 
 // UserClub — per-facility membership: one row per user per facility, with facility-specific role.
