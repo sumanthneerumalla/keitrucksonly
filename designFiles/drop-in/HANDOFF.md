@@ -63,6 +63,19 @@ Then **DI-1d**: `npm run typecheck` (host) + `npx biome check --write` the touch
 
 ---
 
+## ⚠ Open loops surfaced in audit (2026-06-03) — don't let these slip
+
+Things we touched but did NOT fully close while moving fast. Resolve as part of the phase noted.
+
+1. **Drop-in registration + FEE are not wired (DI-1c/DI-4).** A5 = a drop-in pays like any event (optional linked product; register+pay via Stripe or front-desk). But today: (a) the existing "Register" UI + `calendar.getPublicEvents` filter are **`BOOKABLE`-only**, so a `DROP_IN` event isn't registrable/payable through the normal flow; (b) `dropIn.checkIn` only records *presence* — it doesn't charge and doesn't set `DropInCheckIn.registrationId`. **To close:** reuse the bookable registration/checkout for `DROP_IN` (add `DROP_IN` to the register-button branch + the public-list filter — overlaps G8), and **decide whether play check-in requires a paid registration** (then link `registrationId`) or whether front-desk handles payment out-of-band and check-in is presence-only.
+2. **`occurrenceDate` normalization (DI-1c).** `DropInSession`'s unique key is `(eventId, occurrenceDate: DateTime)`. A RECURRING "daily league" event must compute a **consistent** occurrenceDate (date-only / facility-tz normalized) or you'll create duplicate sessions. Non-recurring = `event.start`. Pin the rule in DI-1c (the page passes occurrenceDate to `dropIn.getSession`/`startSession`).
+3. **Member self-check-in vs staff-only (DI-1c).** `dropIn.checkIn` is `facilityProcedure` (front-desk, per G2). MANUAL has no member self-check-in; TIMED/MATCH (G1) add member self-join (logged in). Confirm DI-1 is staff-only and note it's a SEPARATE system from the existing Phase-6 member self-check-in (`checkin` router) — don't conflate them.
+4. **Admin user-detail page doesn't show gender (B1 gap, low pri).** B1 added gender to the self-profile form + Create Client, but `clients/[userId]` (`ProfileFieldsCard`/`StudentDetailClient`) doesn't display it. Add a read-only gender display (admins edit via DB per B7).
+5. **Guest-registered users get `gender = null` (known, OK).** `shop.guestRegisterForFreeEvent` doesn't collect gender; those users fill it at onboarding (consistent with the hard cutover). Just known behavior, not a bug.
+6. **a11y `noLabelWithoutControl` (+2, accepted).** The new gender `<label>`s match the file's existing bare-label convention (16 pre-existing). Left as-is; do a broader a11y pass only if desired.
+7. **DI-2 schema not migrated.** `DropInAssignment` + `DropInAssignmentParticipant` (+ enums `DropInAssignmentStatus`/`DropInSide`/`GbrSyncStatus`) are documented in [data-model.md](./data-model.md) §5/§5b but NOT in the schema/DB — they land with DI-2 (TIMED) / DI-4 (MATCH).
+8. **Broader GBR↔FP stitch (original ask #1) — keep the thread.** The "embed GBR in FP" investigation concluded: **3 channels** — URL+postMessage for embedded views, server-to-server edge functions for identity/results, and GBR's own public pages for rankings — NOT a generic iframe. DI-5 is the first concrete stitch. Full context: memory `project_fp_gbr_stitching` + [gbr-integration.md](./gbr-integration.md).
+
 ## Gotchas (carry into every session)
 
 - **Migrations run INSIDE the dev container:** `docker exec shuttlementor-app-dev npx prisma migrate dev --name X` (or hand-write SQL + `migrate deploy` for enum renames — `migrate dev` needs a TTY and balks at enum-value removal). DB is only reachable as `db:5432` from inside the container, **not from the host**. Run `npx prisma generate` on the **host** after a schema change, and `docker restart shuttlementor-app-dev` after migrating.
