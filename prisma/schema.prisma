@@ -34,44 +34,46 @@ model Club {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  users             User[]
-  memberships       UserClub[]
-  facilities        ClubFacility[]
-  resourceTypes     ClubResourceType[]
-  resources         ClubResource[]
-  calendarEvents    CalendarEvent[]
-  products          Product[]
-  productCategories ProductCategory[]
-  revenueCategories RevenueCategory[]
-  taxRates          TaxRate[]
-  attendances       Attendance[]
-  statusLogs        RegistrationStatusLog[]
-  packagePlans      PackagePlan[]
-  memberPackages    MemberPackage[]
-  tags              Tag[]
-  rentalBookings    RentalBooking[]
-  familyGroups      FamilyGroup[]
-  dropInSessions    DropInSession[]
-  invoices          Invoice[]
-  emailGroups       EmailGroup[]
-  auditLogs         AuditLog[]
+  users              User[]
+  memberships        UserClub[]
+  // Per-club member records (legal-isolation boundary). See per-club-profiles.md.
+  memberClubProfiles MemberClubProfile[]
+  facilities         ClubFacility[]
+  resourceTypes      ClubResourceType[]
+  resources          ClubResource[]
+  calendarEvents     CalendarEvent[]
+  products           Product[]
+  productCategories  ProductCategory[]
+  revenueCategories  RevenueCategory[]
+  taxRates           TaxRate[]
+  attendances        Attendance[]
+  statusLogs         RegistrationStatusLog[]
+  packagePlans       PackagePlan[]
+  memberPackages     MemberPackage[]
+  tags               Tag[]
+  rentalBookings     RentalBooking[]
+  familyGroups       FamilyGroup[]
+  dropInSessions     DropInSession[]
+  invoices           Invoice[]
+  emailGroups        EmailGroup[]
+  auditLogs          AuditLog[]
   // Phase 10a — Memberships
-  membershipTypes   MembershipType[]
-  membershipPlans   MembershipPlan[]
-  memberMemberships MemberMembership[]
+  membershipTypes    MembershipType[]
+  membershipPlans    MembershipPlan[]
+  memberMemberships  MemberMembership[]
   // Phase 15 Stage 2 — Articles scoped per-club (clubShortName=null is platform)
-  articles          Article[]               @relation("ClubArticles")
-  articleTags       ArticleTag[]            @relation("ClubArticleTags")
+  articles           Article[]               @relation("ClubArticles")
+  articleTags        ArticleTag[]            @relation("ClubArticleTags")
   // Phase 15 Step 6 — Club-scoped short-form announcements feed.
-  announcements     ClubAnnouncement[]      @relation("ClubAnnouncements")
+  announcements      ClubAnnouncement[]      @relation("ClubAnnouncements")
   // Phase 12a — Stripe Connect (per-processor connection state). 1:1; club may
   // hold at most one ClubStripeAccount row. Future processors (Paysafe, Valor)
   // get their own tables — `getProviderForClub` resolves the active one.
-  stripeAccount     ClubStripeAccount?
+  stripeAccount      ClubStripeAccount?
   // Phase 12a — local mirror of provider checkout sessions opened against this club.
-  checkoutSessions  CheckoutSession[]
+  checkoutSessions   CheckoutSession[]
   // Phase 12a — dead-letter queue for webhook failures scoped to this club.
-  orphanedPurchases OrphanedPurchase[]
+  orphanedPurchases  OrphanedPurchase[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -136,6 +138,10 @@ model User {
 
   // Multi-club membership registry
   clubMemberships UserClub[]
+
+  // Per-club member records — one row per club this user belongs to (legal-isolation
+  // boundary; replaces the global StudentProfile.profileData blob). See per-club-profiles.md.
+  memberClubProfiles MemberClubProfile[]
 
   // User tags
   userTags UserTag[]
@@ -275,6 +281,49 @@ model CoachProfile {
   isVerified       Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+// Per-club member record — everything a single club specifically collects/knows
+// about a member, scoped to (userId, clubShortName). THE legal-isolation boundary:
+// each club is a separate LLC/data controller, so Club B's staff must never see
+// what Club A wrote here. Replaces the global StudentProfile.profileData JSON blob.
+// See designFiles/per-club-profiles.md. Grain is CLUB (the LLC), not facility.
+// NOTE: skillLevel intentionally NOT here — it stays global + member-editable on
+// StudentProfile. dateOfBirth stays global on User. Membership tier lives in
+// Phase-10a MemberMembership (fetched by query, not duplicated here).
+model MemberClubProfile {
+  memberClubProfileId String @id @default(cuid())
+  userId              String
+  user                User   @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  clubShortName       String
+  club                Club   @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+
+  // Contact (per-club; staff- or member-editable). Caps match the app-level
+  // validation that the old studentProfileDataSchema enforced.
+  phone                        String? @db.VarChar(32)
+  streetAddress                String? @db.VarChar(200)
+  city                         String? @db.VarChar(100)
+  state                        String? @db.VarChar(50)
+  zipCode                      String? @db.VarChar(20)
+  emergencyContactName         String? @db.VarChar(120)
+  emergencyContactPhone        String? @db.VarChar(32)
+  emergencyContactRelationship String? @db.VarChar(50)
+
+  // Marketing attribution (set at join)
+  referralSource String? @db.VarChar(120)
+  howHeard       String? @db.VarChar(120)
+
+  // Operational / sensitive (staff-authored; the isolation-sensitive fields)
+  medicalNotes String? @db.VarChar(2000)
+  allergies    String? @db.VarChar(1000)
+  generalNotes String? @db.VarChar(5000)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, clubShortName])
+  @@index([userId])
+  @@index([clubShortName])
 }
 
 model Post {
