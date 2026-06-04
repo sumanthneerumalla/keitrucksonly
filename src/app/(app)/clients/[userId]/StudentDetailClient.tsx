@@ -52,7 +52,7 @@ export default function StudentDetailClient({
 		);
 	}
 
-	const { user, studentProfile, tags } = data;
+	const { user, studentProfile, profileData, tags } = data;
 	const fullName =
 		`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "Unnamed";
 	const firstLetter = (user.firstName ?? user.lastName ?? "?")
@@ -60,7 +60,6 @@ export default function StudentDetailClient({
 		.charAt(0)
 		.toUpperCase();
 	const profileImage = studentProfile?.profileImage ?? null;
-	const profileData = studentProfile?.profileData ?? {};
 	// DOB is global (User.dateOfBirth); format to YYYY-MM-DD for the date input.
 	const dateOfBirth = user.dateOfBirth
 		? new Date(user.dateOfBirth).toISOString().slice(0, 10)

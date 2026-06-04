@@ -2,7 +2,6 @@ import { type Prisma, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import dayjs from "~/lib/dayjs-config";
-import { phoneFromProfileData } from "~/lib/studentProfile";
 import {
 	clubAdminProcedure,
 	createTRPCRouter,
@@ -27,6 +26,20 @@ import {
 	isPlatformAdmin,
 	isSameClub,
 } from "~/server/utils/utils";
+
+/**
+ * Phone now lives per-club on MemberClubProfile (per-club-profiles.md). Prisma
+ * can't filter a nested relation by a sibling column (the invoice's club) in one
+ * query, so we fetch the user's club rows and pick the matching one here.
+ */
+function phoneForClub(
+	profiles: { clubShortName: string; phone: string | null }[] | undefined,
+	clubShortName: string,
+): string | null {
+	return (
+		profiles?.find((p) => p.clubShortName === clubShortName)?.phone ?? null
+	);
+}
 
 /**
  * Phase 9 billing router.
@@ -325,10 +338,12 @@ export const billingRouter = createTRPCRouter({
 							lastName: true,
 							email: true,
 							// Phase 9b — surface phone on the invoice detail view + PDF
-							// "Bill to / For" blocks. Phone lives in the JSON
-							// profileData blob (TD-1); we read it raw here and parse
-							// safely below. Address is reserved (no column yet).
-							studentProfile: { select: { profileData: true } },
+							// "Bill to / For" blocks. Phone is now per-club on
+							// MemberClubProfile (per-club-profiles.md); picked for the
+							// invoice's club via phoneForClub() below.
+							memberClubProfiles: {
+								select: { clubShortName: true, phone: true },
+							},
 						},
 					},
 					billedToUser: {
@@ -337,7 +352,9 @@ export const billingRouter = createTRPCRouter({
 							firstName: true,
 							lastName: true,
 							email: true,
-							studentProfile: { select: { profileData: true } },
+							memberClubProfiles: {
+								select: { clubShortName: true, phone: true },
+							},
 						},
 					},
 					closedByUser: {
@@ -458,9 +475,11 @@ export const billingRouter = createTRPCRouter({
 					firstName: invoice.user.firstName,
 					lastName: invoice.user.lastName,
 					email: invoice.user.email,
-					// Phase 9b — phone read defensively from the StudentProfile
-					// JSON blob (TD-1; same shape ProfileFieldsCard uses).
-					phone: phoneFromProfileData(invoice.user.studentProfile?.profileData),
+					// Phase 9b — phone for THIS invoice's club (per-club-profiles.md).
+					phone: phoneForClub(
+						invoice.user.memberClubProfiles,
+						invoice.clubShortName,
+					),
 				},
 				billedTo: invoice.billedToUser
 					? {
@@ -468,8 +487,9 @@ export const billingRouter = createTRPCRouter({
 							firstName: invoice.billedToUser.firstName,
 							lastName: invoice.billedToUser.lastName,
 							email: invoice.billedToUser.email,
-							phone: phoneFromProfileData(
-								invoice.billedToUser.studentProfile?.profileData,
+							phone: phoneForClub(
+								invoice.billedToUser.memberClubProfiles,
+								invoice.clubShortName,
 							),
 						}
 					: null,

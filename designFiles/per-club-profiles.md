@@ -1,10 +1,12 @@
 # Per-Club Member Profile — Foundation Design (Models 1–3)
 
-> Status: **FOUNDATION BUILT** (2026-06-04) — `MemberClubProfile` table + migration
-> `20260604222752_add_member_club_profile` applied on dev. The data backfill lives **inside the
-> migration SQL** (no separate script), so it runs automatically on `migrate deploy` in dev/prod;
-> it is idempotent (deterministic ids + `ON CONFLICT`). App-logic rebind (readers/writers still use
-> the `profileData` blob), the DOB fix, and the new-field UI remain TODO — see §10.
+> Status: **BUILT + REBOUND** (2026-06-04) — `MemberClubProfile` table + migration
+> `20260604222752_add_member_club_profile` applied on dev (backfill lives **inside the migration
+> SQL**, idempotent via deterministic ids + `ON CONFLICT`, runs automatically on `migrate deploy`).
+> **PR1 (DOB consolidation)** and **PR2 (per-club rebind)** are done: the staff card + invoice
+> phone + email age-filter now read/write `MemberClubProfile`/`User.dateOfBirth`, NOT the blob.
+> Remaining: **PR3 cutover** (drop the now-unused `StudentProfile.profileData` column, ~2 weeks
+> after stable) and the **new-field UI** (address/emergency/referral). See §10.
 > Scope: data-model foundation only. **No** waiver/consent/signature system and **no**
 > onboarding wizard this round (both deferred — see "Out of scope").
 
@@ -280,13 +282,16 @@ handled above. Safe to build post-stabilization.
 - **DOB:** **fix now as a standalone PR** ahead of the migration (§4b).
 
 **Build sequence:**
-1. **DOB fix (standalone, soon):** dual-write `User.dateOfBirth` from `updateStudentProfileData`;
-   point the card + `getStudentDetail` at the column. No migration. Resolves a live bug (§4b).
-2. **Per-club migration (after Phase 9a/10a/12a stabilize):** create `MemberClubProfile`, backfill
-   (§5), rebind the **blob fields only** (phone/medical/allergies/generalNotes) onto it, apply the
-   missing-row contract (§6). `skillLevel` is untouched. Then cutover-drop `profileData` only
-   (~2 weeks later); `StudentProfile.skillLevel` is kept.
-3. **Later pass:** build the form UI for the 8 new contact/emergency/referral fields.
+1. ✅ **DOB fix (DONE — commit d00f4e1):** DOB written to `User.dateOfBirth` from
+   `updateStudentProfileData`; card + `getStudentDetail` + email age-filter read the column. No migration.
+2. ✅ **Per-club migration + rebind (DONE — migration `20260604222752`; rebind this commit):**
+   `MemberClubProfile` created, backfill in-migration (§5). `updateStudentProfileData` upserts the
+   per-club row; `getStudentDetail` returns top-level `profileData` from it (missing row → all-null);
+   invoice phone (`billing.ts`, `assemble.ts`) reads `MemberClubProfile.phone` for the invoice's club.
+   `phoneFromProfileData`/`src/lib/studentProfile.ts` retired. `skillLevel` untouched.
+3. ⬜ **PR3 cutover (~2 weeks after stable):** drop the now-unused `StudentProfile.profileData` column
+   (migration) — the app no longer reads or writes it. `StudentProfile.skillLevel` is kept.
+4. ⬜ **Later pass:** build the form UI for the 8 new contact/emergency/referral fields.
 
 **Carry-over to verify at build time:** every reader tolerates a NULL `MemberClubProfile`
 (all-fields-null, no throw); backfill iterates `UserClub`, excludes primary from the placeholder

@@ -132,7 +132,7 @@ export default function ProfileFieldsCard({
 								value={phone}
 								onChange={(e) => setPhone(e.target.value)}
 								placeholder="e.g. +1 555 123 4567"
-								maxLength={40}
+								maxLength={32}
 							/>
 						</div>
 						<div className="space-y-1">

@@ -186,27 +186,21 @@ const getStudentDetailSchema = z.object({
 	userId: z.string(),
 });
 
-// Shape of the StudentProfile.profileData JSON blob (TD-1). Validated here at
+// Input shape for the per-club member record (MemberClubProfile). Validated at
 // the mutation boundary; the client-side ProfileFieldsCard owns its own matching
 // shape — small duplication is cheaper than a shared file.
-// NOTE: dateOfBirth is NOT here — it was promoted to the global User.dateOfBirth
-// column (see designFiles/per-club-profiles.md §4b). It rides as a sibling field
-// on updateStudentProfileDataSchema below and is written straight to User.
+// NOTE: dateOfBirth is NOT here — it is global on User.dateOfBirth (see
+// designFiles/per-club-profiles.md §4b). It rides as a sibling field on
+// updateStudentProfileDataSchema below and is written straight to User.
+// Caps match the MemberClubProfile columns (per-club-profiles.md §4).
 const studentProfileDataSchema = z
 	.object({
-		phone: z.string().trim().max(40).optional(),
+		phone: z.string().trim().max(32).optional(),
 		medicalNotes: z.string().max(2000).optional(),
 		allergies: z.string().max(1000).optional(),
 		generalNotes: z.string().max(5000).optional(),
 	})
 	.partial();
-
-type StudentProfileData = z.infer<typeof studentProfileDataSchema>;
-
-function parseStudentProfileData(raw: unknown): StudentProfileData {
-	const result = studentProfileDataSchema.safeParse(raw ?? {});
-	return result.success ? result.data : {};
-}
 
 const updateStudentProfileDataSchema = z.object({
 	userId: z.string(),
@@ -2119,11 +2113,22 @@ export const userRouter = createTRPCRouter({
 					dateOfBirth: true,
 					studentProfile: {
 						select: {
-							profileData: true,
 							profileImage: true,
 							profileImageType: true,
 							skillLevel: true,
 							bio: true,
+						},
+					},
+					// Per-club contact + sensitive notes for THIS club only — the
+					// legal-isolation boundary (per-club-profiles.md). Filtered by the
+					// caller's club, so other clubs' data is never returned. Zero or one row.
+					memberClubProfiles: {
+						where: { clubShortName: ctx.user.clubShortName },
+						select: {
+							phone: true,
+							medicalNotes: true,
+							allergies: true,
+							generalNotes: true,
 						},
 					},
 					userTags: {
@@ -2139,6 +2144,9 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
+			// Missing-row contract: no MemberClubProfile yet → all fields null/absent.
+			const memberClubProfile = user.memberClubProfiles[0];
+
 			return {
 				user: {
 					userId: user.userId,
@@ -2153,9 +2161,6 @@ export const userRouter = createTRPCRouter({
 				},
 				studentProfile: user.studentProfile
 					? {
-							profileData: parseStudentProfileData(
-								user.studentProfile.profileData,
-							),
 							profileImage: binaryToBase64DataUrl(
 								user.studentProfile.profileImage,
 								user.studentProfile.profileImageType ?? "image/png",
@@ -2165,6 +2170,15 @@ export const userRouter = createTRPCRouter({
 							bio: user.studentProfile.bio,
 						}
 					: null,
+				// Per-club member data (phone + notes), sourced from MemberClubProfile
+				// for the caller's club. Top-level (not under studentProfile) because it
+				// is independent of whether a StudentProfile exists.
+				profileData: {
+					phone: memberClubProfile?.phone ?? undefined,
+					medicalNotes: memberClubProfile?.medicalNotes ?? undefined,
+					allergies: memberClubProfile?.allergies ?? undefined,
+					generalNotes: memberClubProfile?.generalNotes ?? undefined,
+				},
 				tags: user.userTags.map((ut) => ({
 					tagId: ut.tag.tagId,
 					name: ut.tag.name,
@@ -2174,11 +2188,11 @@ export const userRouter = createTRPCRouter({
 			};
 		}),
 
-	// Upsert the StudentProfile.profileData JSON blob for a student in the
-	// caller's club. Full replace — the UI sends the whole object each save.
-	// Named `updateStudentProfileData` to avoid collision with the existing
-	// self-serve `updateStudentProfile` mutation (bio/skillLevel/avatar).
-	// See designFiles/roadmap/customer-feedback-ui-sprint.md (TD-1).
+	// Upsert the per-club member record (MemberClubProfile) for a student in the
+	// caller's club — the legal-isolation boundary (per-club-profiles.md). Writes
+	// phone + sensitive notes scoped to ctx.user.clubShortName; DOB is global and
+	// written to User.dateOfBirth. Named `updateStudentProfileData` to avoid
+	// collision with the self-serve `updateStudentProfile` (bio/skillLevel/avatar).
 	updateStudentProfileData: facilityProcedure
 		.input(updateStudentProfileDataSchema)
 		.mutation(async ({ ctx, input }) => {
@@ -2197,15 +2211,27 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
-			const upsertProfile = ctx.db.studentProfile.upsert({
-				where: { userId: target.userId },
+			// Only the fields the staff card edits today; the 8 new contact fields
+			// (address/emergency/referral) keep their existing values (deferred UI).
+			const memberData = {
+				phone: input.profileData.phone ?? null,
+				medicalNotes: input.profileData.medicalNotes ?? null,
+				allergies: input.profileData.allergies ?? null,
+				generalNotes: input.profileData.generalNotes ?? null,
+			};
+			const upsertProfile = ctx.db.memberClubProfile.upsert({
+				where: {
+					userId_clubShortName: {
+						userId: target.userId,
+						clubShortName: ctx.user.clubShortName,
+					},
+				},
 				create: {
 					userId: target.userId,
-					profileData: input.profileData,
+					clubShortName: ctx.user.clubShortName,
+					...memberData,
 				},
-				update: {
-					profileData: input.profileData,
-				},
+				update: memberData,
 			});
 
 			// Date of birth is global. Parse at UTC-midnight to avoid TZ off-by-one.

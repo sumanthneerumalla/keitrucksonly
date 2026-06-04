@@ -30,7 +30,6 @@
 
 import { TRPCError } from "@trpc/server";
 import { invoiceStatusDisplay } from "~/lib/invoiceStatus";
-import { phoneFromProfileData } from "~/lib/studentProfile";
 import { db } from "~/server/db";
 import {
 	KIND_LABELS,
@@ -40,6 +39,18 @@ import {
 	type RenderableInvoiceLine,
 	type RenderableInvoiceParty,
 } from "./types";
+
+// Phone is per-club on MemberClubProfile (per-club-profiles.md). Prisma can't
+// filter a nested relation by a sibling column (the invoice's club) in one query,
+// so we pick the matching club row here.
+function phoneForClub(
+	profiles: { clubShortName: string; phone: string | null }[] | undefined,
+	clubShortName: string,
+): string | null {
+	return (
+		profiles?.find((p) => p.clubShortName === clubShortName)?.phone ?? null
+	);
+}
 
 function formatPersonName(p: {
 	firstName: string | null;
@@ -99,7 +110,9 @@ export async function assembleRenderableInvoice(
 					firstName: true,
 					lastName: true,
 					email: true,
-					studentProfile: { select: { profileData: true } },
+					memberClubProfiles: {
+						select: { clubShortName: true, phone: true },
+					},
 				},
 			},
 			billedToUser: {
@@ -108,7 +121,9 @@ export async function assembleRenderableInvoice(
 					firstName: true,
 					lastName: true,
 					email: true,
-					studentProfile: { select: { profileData: true } },
+					memberClubProfiles: {
+						select: { clubShortName: true, phone: true },
+					},
 				},
 			},
 			lineItems: {
@@ -174,7 +189,7 @@ export async function assembleRenderableInvoice(
 		userId: invoice.user.userId,
 		fullName: formatPersonName(invoice.user),
 		email: invoice.user.email,
-		phone: phoneFromProfileData(invoice.user.studentProfile?.profileData),
+		phone: phoneForClub(invoice.user.memberClubProfiles, invoice.clubShortName),
 		address: null,
 	};
 
@@ -187,8 +202,9 @@ export async function assembleRenderableInvoice(
 					userId: invoice.billedToUser.userId,
 					fullName: formatPersonName(invoice.billedToUser),
 					email: invoice.billedToUser.email,
-					phone: phoneFromProfileData(
-						invoice.billedToUser.studentProfile?.profileData,
+					phone: phoneForClub(
+						invoice.billedToUser.memberClubProfiles,
+						invoice.clubShortName,
 					),
 					address: null,
 				}
