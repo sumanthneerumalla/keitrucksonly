@@ -86,8 +86,12 @@ export async function POST(request: Request): Promise<Response> {
 	const timeout = mode === "read" ? READ_TIMEOUT : WRITE_TIMEOUT;
 	const sql = postgres(url, { max: 1 });
 	try {
+		// Rows are returned POSITIONALLY (array of value-arrays aligned to
+		// `columns`) via postgres.js `.values()`, not as objects. This preserves
+		// duplicate column names (e.g. `SELECT a.id, b.id` from a join) — an object
+		// would collapse them to one key — and lets the UI render/key by position.
 		let captured: {
-			rows: Record<string, unknown>[];
+			rows: unknown[][];
 			count: number;
 			columns: string[];
 		};
@@ -101,9 +105,9 @@ export async function POST(request: Request): Promise<Response> {
 			try {
 				await sql.begin(async (tx) => {
 					await tx.unsafe(`SET LOCAL statement_timeout = '${timeout}'`);
-					const res = await tx.unsafe(sqlText);
+					const res = await tx.unsafe(sqlText).values();
 					preview = {
-						rows: Array.from(res) as Record<string, unknown>[],
+						rows: Array.from(res) as unknown[][],
 						count: res.count,
 						columns: res.columns?.map((c) => c.name) ?? [],
 					};
@@ -118,9 +122,9 @@ export async function POST(request: Request): Promise<Response> {
 			captured = await sql.begin(async (tx) => {
 				if (mode === "read") await tx.unsafe("SET TRANSACTION READ ONLY");
 				await tx.unsafe(`SET LOCAL statement_timeout = '${timeout}'`);
-				const res = await tx.unsafe(sqlText);
+				const res = await tx.unsafe(sqlText).values();
 				return {
-					rows: Array.from(res) as Record<string, unknown>[],
+					rows: Array.from(res) as unknown[][],
 					count: res.count,
 					columns: res.columns?.map((c) => c.name) ?? [],
 				};

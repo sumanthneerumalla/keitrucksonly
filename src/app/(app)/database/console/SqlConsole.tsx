@@ -11,7 +11,7 @@ interface RunResult {
 	persisted?: boolean;
 	rowCount?: number;
 	columns?: string[];
-	rows?: Record<string, unknown>[];
+	rows?: unknown[][];
 	truncated?: boolean;
 	error?: string;
 }
@@ -20,12 +20,6 @@ function formatCell(value: unknown): string {
 	if (value === null || value === undefined) return "∅";
 	if (typeof value === "object") return JSON.stringify(value);
 	return String(value);
-}
-
-// Stable, content-derived row key (avoids array-index keys per biome). Identical
-// rows colliding only triggers a harmless React dev warning, never a write hazard.
-function rowKey(row: Record<string, unknown>, columns: string[]): string {
-	return columns.map((c) => formatCell(row[c])).join("");
 }
 
 export default function SqlConsole() {
@@ -60,9 +54,15 @@ export default function SqlConsole() {
 	}
 
 	async function copyResults() {
-		if (!result?.rows) return;
+		if (!result?.rows || !result.columns) return;
+		const cols = result.columns;
+		// Rebuild row objects (column names × positional values) so the copied JSON
+		// is the familiar array-of-objects shape for pasting into issues/debugging.
+		const objects = result.rows.map((row) =>
+			Object.fromEntries(cols.map((c, i) => [c, row[i]])),
+		);
 		try {
-			await navigator.clipboard.writeText(JSON.stringify(result.rows, null, 2));
+			await navigator.clipboard.writeText(JSON.stringify(objects, null, 2));
 			setCopied(true);
 			setTimeout(() => setCopied(false), 1500);
 		} catch {
@@ -229,9 +229,10 @@ export default function SqlConsole() {
 							<table className="w-full border-collapse text-left text-sm">
 								<thead className="sticky top-0 bg-gray-100">
 									<tr>
-										{result.columns.map((c) => (
+										{result.columns.map((c, ci) => (
 											<th
-												key={c}
+												// biome-ignore lint/suspicious/noArrayIndexKey: SQL can return duplicate column names; column position is the stable identity
+												key={ci}
 												className="border-gray-200 border-b px-3 py-2 font-medium"
 											>
 												{c}
@@ -240,17 +241,16 @@ export default function SqlConsole() {
 									</tr>
 								</thead>
 								<tbody>
-									{result.rows.map((row) => (
-										<tr
-											key={rowKey(row, result.columns ?? [])}
-											className="odd:bg-white even:bg-gray-50"
-										>
-											{(result.columns ?? []).map((c) => (
+									{result.rows.map((row, i) => (
+										// biome-ignore lint/suspicious/noArrayIndexKey: result rows are a static, fully-replaced snapshot — index is stable and unique
+										<tr key={i} className="odd:bg-white even:bg-gray-50">
+											{row.map((cell, ci) => (
 												<td
-													key={c}
+													// biome-ignore lint/suspicious/noArrayIndexKey: column position is the stable identity (duplicate names possible)
+													key={ci}
 													className="border-gray-100 border-b px-3 py-1.5 align-top font-mono text-xs"
 												>
-													{formatCell(row[c])}
+													{formatCell(cell)}
 												</td>
 											))}
 										</tr>
