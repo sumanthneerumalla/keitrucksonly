@@ -5,14 +5,21 @@ import { Button } from "~/app/_components/shared/Button";
 
 type Mode = "read" | "write";
 
+interface StatementResult {
+	ok: boolean;
+	sql: string;
+	columns?: string[];
+	rows?: unknown[][];
+	rowCount?: number;
+	truncated?: boolean;
+	error?: string;
+}
+
 interface RunResult {
 	ok?: boolean;
 	mode?: Mode;
 	persisted?: boolean;
-	rowCount?: number;
-	columns?: string[];
-	rows?: unknown[][];
-	truncated?: boolean;
+	statements?: StatementResult[];
 	error?: string;
 }
 
@@ -22,17 +29,78 @@ function formatCell(value: unknown): string {
 	return String(value);
 }
 
+function oneLine(sql: string): string {
+	return sql.replace(/\s+/g, " ").trim();
+}
+
+// Rebuild row objects (column names × positional values) for the friendly
+// array-of-objects copy shape.
+function rowsToObjects(st: StatementResult): Record<string, unknown>[] {
+	const cols = st.columns ?? [];
+	return (st.rows ?? []).map((row) =>
+		Object.fromEntries(cols.map((c, i) => [c, row[i]])),
+	);
+}
+
+function ResultGrid({
+	columns,
+	rows,
+}: {
+	columns: string[];
+	rows: unknown[][];
+}) {
+	return (
+		<table className="w-full border-collapse text-left text-sm">
+			<thead className="sticky top-0 bg-gray-100">
+				<tr>
+					{columns.map((c, ci) => (
+						<th
+							// biome-ignore lint/suspicious/noArrayIndexKey: SQL can return duplicate column names; column position is the stable identity
+							key={ci}
+							className="border-gray-200 border-b px-3 py-2 font-medium"
+						>
+							{c}
+						</th>
+					))}
+				</tr>
+			</thead>
+			<tbody>
+				{rows.map((row, i) => (
+					// biome-ignore lint/suspicious/noArrayIndexKey: result rows are a static, fully-replaced snapshot — index is stable and unique
+					<tr key={i} className="odd:bg-white even:bg-gray-50">
+						{row.map((cell, ci) => (
+							<td
+								// biome-ignore lint/suspicious/noArrayIndexKey: column position is the stable identity (duplicate names possible)
+								key={ci}
+								className="border-gray-100 border-b px-3 py-1.5 align-top font-mono text-xs"
+							>
+								{formatCell(cell)}
+							</td>
+						))}
+					</tr>
+				))}
+			</tbody>
+		</table>
+	);
+}
+
 export default function SqlConsole() {
 	const [sql, setSql] = useState("");
 	const [mode, setMode] = useState<Mode>("read");
 	const [ackWrite, setAckWrite] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [result, setResult] = useState<RunResult | null>(null);
-	const [copied, setCopied] = useState(false);
-	// The exact SQL text of the last successful dry run. The Commit button only
-	// shows while this still matches the textarea — editing the query invalidates
-	// the preview so you can never commit something other than what you previewed.
+	// Key of the most-recently-copied block ("all" or "stmt-N"), for the button
+	// "Copied!" flash.
+	const [copied, setCopied] = useState<string | null>(null);
+	// SQL text of the last successful dry run; the Commit button only shows while
+	// it still matches the textarea (editing invalidates the preview).
 	const [previewSql, setPreviewSql] = useState<string | null>(null);
+
+	const statements = result?.statements ?? [];
+	const multi = statements.length > 1;
+	const previewClean = statements.length > 0 && statements.every((s) => s.ok);
+	const totalAffected = statements.reduce((s, st) => s + (st.rowCount ?? 0), 0);
 
 	const canRun =
 		sql.trim().length > 0 && !loading && (mode === "read" || ackWrite);
@@ -40,7 +108,8 @@ export default function SqlConsole() {
 		mode === "write" &&
 		previewSql === sql &&
 		result?.ok === true &&
-		result?.persisted === false;
+		result?.persisted === false &&
+		previewClean;
 
 	function selectMode(next: Mode) {
 		setMode(next);
@@ -53,21 +122,22 @@ export default function SqlConsole() {
 		setPreviewSql(null);
 	}
 
-	async function copyResults() {
-		if (!result?.rows || !result.columns) return;
-		const cols = result.columns;
-		// Rebuild row objects (column names × positional values) so the copied JSON
-		// is the familiar array-of-objects shape for pasting into issues/debugging.
-		const objects = result.rows.map((row) =>
-			Object.fromEntries(cols.map((c, i) => [c, row[i]])),
-		);
+	async function copyText(text: string, key: string) {
 		try {
-			await navigator.clipboard.writeText(JSON.stringify(objects, null, 2));
-			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
+			await navigator.clipboard.writeText(text);
+			setCopied(key);
+			setTimeout(() => setCopied((k) => (k === key ? null : k)), 1500);
 		} catch {
 			// Clipboard can be unavailable (non-secure context) — ignore silently.
 		}
+	}
+
+	function copyAll() {
+		const payload = statements.map((st) => ({
+			sql: oneLine(st.sql),
+			...(st.error ? { error: st.error } : { rows: rowsToObjects(st) }),
+		}));
+		copyText(JSON.stringify(payload, null, 2), "all");
 	}
 
 	async function run(commit: boolean) {
@@ -83,7 +153,6 @@ export default function SqlConsole() {
 			});
 			const data = (await res.json()) as RunResult;
 			setResult(data);
-			// Remember the dry run so its Commit button stays bound to this exact SQL.
 			setPreviewSql(mode === "write" && !commit && data.ok ? sql : null);
 		} catch (err) {
 			setResult({ error: err instanceof Error ? err.message : String(err) });
@@ -98,8 +167,10 @@ export default function SqlConsole() {
 			<div>
 				<h1 className="font-semibold text-xl">SQL Console</h1>
 				<p className="text-[var(--muted-foreground)] text-sm">
-					Read-only by default. In write mode, Preview runs your statement and
-					rolls it back so you can see what it would change before committing.
+					Read-only by default. Separate multiple statements with{" "}
+					<code className="font-mono">;</code> to run them as one batch — you
+					get a result grid per statement. In write mode, Preview runs the batch
+					and rolls it back so you see what it would change before committing.
 				</p>
 			</div>
 
@@ -153,7 +224,7 @@ export default function SqlConsole() {
 						checked={ackWrite}
 						onChange={(e) => setAckWrite(e.target.checked)}
 					/>
-					I understand this query can modify or delete data.
+					I understand these queries can modify or delete data.
 				</label>
 			)}
 
@@ -175,9 +246,7 @@ export default function SqlConsole() {
 							onClick={() => run(true)}
 							disabled={loading}
 						>
-							{loading
-								? "Committing…"
-								: `Commit ${result?.rowCount ?? 0} change(s)`}
+							{loading ? "Committing…" : `Commit ${totalAffected} change(s)`}
 						</Button>
 						<Button variant="outline" onClick={discard} disabled={loading}>
 							Discard
@@ -193,76 +262,92 @@ export default function SqlConsole() {
 				</div>
 			)}
 
-			{result?.ok && (
-				<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-gray-200">
-					<div
-						className={
-							result.mode === "write" && result.persisted
-								? "flex items-center justify-between gap-2 border-green-200 border-b bg-green-50 px-3 py-2 text-green-800 text-xs"
-								: result.mode === "write"
-									? "flex items-center justify-between gap-2 border-amber-200 border-b bg-amber-50 px-3 py-2 text-amber-800 text-xs"
-									: "flex items-center justify-between gap-2 border-gray-200 border-b bg-gray-50 px-3 py-2 text-gray-600 text-xs"
-						}
-					>
-						<span>
-							{result.mode === "write" && result.persisted
-								? `Committed — ${result.rowCount} row(s) changed.`
-								: result.mode === "write"
-									? `Dry run — would affect ${result.rowCount} row(s). Rolled back, nothing saved.`
-									: `${result.rowCount} row(s)`}
-							{result.truncated
-								? ` · showing first ${result.rows?.length}`
-								: ""}
-						</span>
-						{result.rows && result.rows.length > 0 && (
-							<button
-								type="button"
-								onClick={copyResults}
-								className="shrink-0 rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50"
+			{result?.ok && statements.length > 0 && (
+				<div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+					{(result.mode === "write" || multi) && (
+						<div
+							className={
+								result.mode === "write" && result.persisted
+									? "flex items-center justify-between gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-green-800 text-xs"
+									: result.mode === "write"
+										? "flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800 text-xs"
+										: "flex items-center justify-between gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-gray-600 text-xs"
+							}
+						>
+							<span>
+								{result.mode === "write"
+									? result.persisted
+										? `Committed — ${totalAffected} row(s) across ${statements.length} statement(s).`
+										: `Dry run — ${totalAffected} row(s) across ${statements.length} statement(s). Rolled back, nothing saved.`
+									: `${statements.length} statements`}
+							</span>
+							{multi && (
+								<button
+									type="button"
+									onClick={copyAll}
+									className="shrink-0 rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50"
+								>
+									{copied === "all" ? "Copied!" : "Copy all"}
+								</button>
+							)}
+						</div>
+					)}
+
+					{statements.map((st, si) => {
+						const key = `stmt-${si}`;
+						const hasRows = !st.error && (st.rows?.length ?? 0) > 0;
+						return (
+							<div
+								key={key}
+								className="flex flex-col overflow-hidden rounded-md border border-gray-200"
 							>
-								{copied ? "Copied!" : "Copy JSON"}
-							</button>
-						)}
-					</div>
-					<div className="min-h-0 flex-1 overflow-auto">
-						{result.rows && result.rows.length > 0 && result.columns ? (
-							<table className="w-full border-collapse text-left text-sm">
-								<thead className="sticky top-0 bg-gray-100">
-									<tr>
-										{result.columns.map((c, ci) => (
-											<th
-												// biome-ignore lint/suspicious/noArrayIndexKey: SQL can return duplicate column names; column position is the stable identity
-												key={ci}
-												className="border-gray-200 border-b px-3 py-2 font-medium"
+								<div className="flex items-center justify-between gap-2 border-gray-200 border-b bg-gray-50 px-3 py-2 text-gray-600 text-xs">
+									<span className="truncate font-mono" title={st.sql}>
+										{multi
+											? `${si + 1}. ${oneLine(st.sql).slice(0, 160)}`
+											: st.error
+												? "Error"
+												: `${st.rowCount ?? 0} row(s)${st.truncated ? ` · showing first ${st.rows?.length}` : ""}`}
+									</span>
+									<span className="flex shrink-0 items-center gap-2">
+										{multi && !st.error && (
+											<span>
+												{st.rowCount ?? 0} row(s)
+												{st.truncated ? ` · first ${st.rows?.length}` : ""}
+											</span>
+										)}
+										{hasRows && (
+											<button
+												type="button"
+												onClick={() =>
+													copyText(
+														JSON.stringify(rowsToObjects(st), null, 2),
+														key,
+													)
+												}
+												className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50"
 											>
-												{c}
-											</th>
-										))}
-									</tr>
-								</thead>
-								<tbody>
-									{result.rows.map((row, i) => (
-										// biome-ignore lint/suspicious/noArrayIndexKey: result rows are a static, fully-replaced snapshot — index is stable and unique
-										<tr key={i} className="odd:bg-white even:bg-gray-50">
-											{row.map((cell, ci) => (
-												<td
-													// biome-ignore lint/suspicious/noArrayIndexKey: column position is the stable identity (duplicate names possible)
-													key={ci}
-													className="border-gray-100 border-b px-3 py-1.5 align-top font-mono text-xs"
-												>
-													{formatCell(cell)}
-												</td>
-											))}
-										</tr>
-									))}
-								</tbody>
-							</table>
-						) : (
-							<div className="px-3 py-4 text-gray-500 text-sm">
-								No rows returned.
+												{copied === key ? "Copied!" : "Copy JSON"}
+											</button>
+										)}
+									</span>
+								</div>
+								{st.error ? (
+									<div className="whitespace-pre-wrap bg-red-50 p-3 font-mono text-red-800 text-sm">
+										{st.error}
+									</div>
+								) : hasRows && st.columns ? (
+									<div className="overflow-auto">
+										<ResultGrid columns={st.columns} rows={st.rows ?? []} />
+									</div>
+								) : (
+									<div className="px-3 py-4 text-gray-500 text-sm">
+										No rows returned.
+									</div>
+								)}
 							</div>
-						)}
-					</div>
+						);
+					})}
 				</div>
 			)}
 		</div>

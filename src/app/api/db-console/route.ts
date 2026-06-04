@@ -7,20 +7,24 @@ export const dynamic = "force-dynamic";
 // page). Deliberately separate from /api/studio (the Prisma Studio embed, which
 // must stay read/write for its cell-edits).
 //
-// Three execution phases, all wrapped in a transaction:
-//   • read             — SET TRANSACTION READ ONLY; a fat-fingered UPDATE errors
-//                        at the database, not via a bypassable keyword blocklist.
-//   • write dry run    — run the statement, then ROLLBACK. Reports the real
-//     (commit:false)     would-be affected-row count (+ any RETURNING rows)
-//                        WITHOUT saving. This is the default for write mode.
-//   • write commit     — run the statement and COMMIT. Nothing persists unless
-//     (commit:true)      the caller explicitly opts in, so writes are
-//                        preview-by-default.
+// Execution model — the whole request runs in ONE transaction:
+//   • read           — SET TRANSACTION READ ONLY; a fat-fingered UPDATE errors at
+//                      the database, not via a bypassable keyword blocklist.
+//   • write dry run  — run, then ROLLBACK. Reports the real would-be affected-row
+//     (commit:false)   counts (+ any RETURNING rows) WITHOUT saving. Default.
+//   • write commit   — run and COMMIT. Nothing persists unless commit === true.
+//     (commit:true)
 //
-// Caveat: a dry run and its commit execute the statement twice (once rolled back,
-// once for real), so the committed row count is authoritative — the data could
-// shift between the two. We deliberately do NOT hold a transaction open across
-// requests, which would keep row locks held during admin "think time".
+// Multiple `;`-separated statements run in order in that single transaction and
+// each gets its own result; the first statement error rolls the whole batch back
+// (so a multi-statement write is all-or-nothing). Rows come back POSITIONALLY
+// (value-arrays aligned to `columns`) via postgres.js `.values()` rather than as
+// objects, which preserves duplicate column names from joins.
+//
+// Caveat: a dry run and its commit execute the batch twice (once rolled back,
+// once for real), so the committed counts are authoritative. We deliberately do
+// NOT hold a transaction open across requests (that would keep locks held during
+// admin "think time").
 
 const MAX_ROWS = 1000;
 const READ_TIMEOUT = "8s";
@@ -45,6 +49,86 @@ function toJsonSafe(value: unknown): unknown {
 			return v;
 		}),
 	);
+}
+
+// True when `stmt` carries no SQL once comments and whitespace are stripped.
+function isBlank(stmt: string): boolean {
+	const noComments = stmt
+		.replace(/--[^\n]*/g, "")
+		.replace(/\/\*[\s\S]*?\*\//g, "");
+	return noComments.trim().length === 0;
+}
+
+// Split a SQL script into individual statements on TOP-LEVEL semicolons, leaving
+// semicolons inside '…'/"…" quotes, -- line comments, /* … */ (nestable) block
+// comments, and $tag$…$tag$ dollar-quotes untouched. Comment-only segments are
+// dropped. This lets the console run a multi-statement script and show a grid per
+// statement, rather than relying on the driver (which returns only the last
+// result for a multi-statement query).
+function splitStatements(input: string): string[] {
+	const out: string[] = [];
+	let buf = "";
+	let i = 0;
+	const n = input.length;
+	while (i < n) {
+		const ch = input[i];
+		const next = input[i + 1];
+		if (ch === "-" && next === "-") {
+			const nl = input.indexOf("\n", i);
+			const stop = nl === -1 ? n : nl;
+			buf += input.slice(i, stop);
+			i = stop;
+		} else if (ch === "/" && next === "*") {
+			let depth = 1;
+			let j = i + 2;
+			while (j < n && depth > 0) {
+				if (input[j] === "/" && input[j + 1] === "*") {
+					depth++;
+					j += 2;
+				} else if (input[j] === "*" && input[j + 1] === "/") {
+					depth--;
+					j += 2;
+				} else j++;
+			}
+			buf += input.slice(i, j);
+			i = j;
+		} else if (ch === "'" || ch === '"') {
+			let j = i + 1;
+			while (j < n) {
+				if (input[j] === ch) {
+					if (input[j + 1] === ch) {
+						j += 2; // escaped quote ('' or "")
+						continue;
+					}
+					j++;
+					break;
+				}
+				j++;
+			}
+			buf += input.slice(i, j);
+			i = j;
+		} else if (ch === "$") {
+			const tag = /^\$[A-Za-z0-9_]*\$/.exec(input.slice(i))?.[0];
+			if (tag) {
+				const close = input.indexOf(tag, i + tag.length);
+				const stop = close === -1 ? n : close + tag.length;
+				buf += input.slice(i, stop);
+				i = stop;
+			} else {
+				buf += ch;
+				i++;
+			}
+		} else if (ch === ";") {
+			if (!isBlank(buf)) out.push(buf.trim());
+			buf = "";
+			i++;
+		} else {
+			buf += ch;
+			i++;
+		}
+	}
+	if (!isBlank(buf)) out.push(buf.trim());
+	return out;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -74,6 +158,11 @@ export async function POST(request: Request): Promise<Response> {
 		return Response.json({ error: "sql is required" }, { status: 400 });
 	}
 
+	const statements = splitStatements(sqlText);
+	if (statements.length === 0) {
+		return Response.json({ error: "No SQL statement found." }, { status: 400 });
+	}
+
 	const url = process.env.DATABASE_URL;
 	if (!url) {
 		return Response.json(
@@ -82,73 +171,86 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
+	type StmtResult =
+		| {
+				ok: true;
+				sql: string;
+				columns: string[];
+				rows: unknown[][];
+				rowCount: number;
+				truncated: boolean;
+		  }
+		| { ok: false; sql: string; error: string };
+
 	const actor = admin.user.email ?? admin.user.userId;
 	const timeout = mode === "read" ? READ_TIMEOUT : WRITE_TIMEOUT;
+	const results: StmtResult[] = [];
 	const sql = postgres(url, { max: 1 });
 	try {
-		// Rows are returned POSITIONALLY (array of value-arrays aligned to
-		// `columns`) via postgres.js `.values()`, not as objects. This preserves
-		// duplicate column names (e.g. `SELECT a.id, b.id` from a join) — an object
-		// would collapse them to one key — and lets the UI render/key by position.
-		let captured: {
-			rows: unknown[][];
-			count: number;
-			columns: string[];
-		};
-
-		if (mode === "write" && !commit) {
-			// DRY RUN: execute the write, capture the result, then force a ROLLBACK
-			// by throwing a sentinel so nothing persists — we only report what the
-			// statement *would* do.
-			const ROLLBACK = Symbol("db-console-preview-rollback");
-			let preview: typeof captured | undefined;
-			try {
-				await sql.begin(async (tx) => {
-					await tx.unsafe(`SET LOCAL statement_timeout = '${timeout}'`);
-					const res = await tx.unsafe(sqlText).values();
-					preview = {
-						rows: Array.from(res) as unknown[][],
-						count: res.count,
-						columns: res.columns?.map((c) => c.name) ?? [],
-					};
-					throw ROLLBACK;
-				});
-			} catch (e) {
-				if (e !== ROLLBACK) throw e;
-			}
-			captured = preview ?? { rows: [], count: 0, columns: [] };
-		} else {
-			// READ (read-only tx) or committed WRITE (begin commits on success).
-			captured = await sql.begin(async (tx) => {
+		const ROLLBACK = Symbol("db-console-preview-rollback");
+		try {
+			await sql.begin(async (tx) => {
 				if (mode === "read") await tx.unsafe("SET TRANSACTION READ ONLY");
 				await tx.unsafe(`SET LOCAL statement_timeout = '${timeout}'`);
-				const res = await tx.unsafe(sqlText).values();
-				return {
-					rows: Array.from(res) as unknown[][],
-					count: res.count,
-					columns: res.columns?.map((c) => c.name) ?? [],
-				};
+				for (const stmt of statements) {
+					const res = await tx.unsafe(stmt).values();
+					const all = Array.from(res) as unknown[][];
+					const truncated = all.length > MAX_ROWS;
+					results.push({
+						ok: true,
+						sql: stmt,
+						columns: res.columns?.map((c) => c.name) ?? [],
+						rows: truncated ? all.slice(0, MAX_ROWS) : all,
+						rowCount: res.count,
+						truncated,
+					});
+				}
+				// Dry run (write preview): discard the whole batch.
+				if (mode === "write" && !commit) throw ROLLBACK;
 			});
+		} catch (e) {
+			if (e !== ROLLBACK) {
+				// A statement (or the connection) errored; the transaction rolled
+				// back. `results` holds the statements that ran before it.
+				results.push({
+					ok: false,
+					sql: statements[results.length] ?? "",
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
 		}
 
-		const persisted = mode === "write" && commit;
-		const truncated = captured.rows.length > MAX_ROWS;
-		const rows = truncated ? captured.rows.slice(0, MAX_ROWS) : captured.rows;
-
+		const batchFailed = results.some((r) => !r.ok);
+		const persisted = mode === "write" && commit && !batchFailed;
 		const phase =
-			mode === "read" ? "read" : persisted ? "write-commit" : "write-preview";
-		const auditLine = `[db-console] actor=${actor} phase=${phase} rows=${captured.count} sql=${JSON.stringify(sqlText)}`;
-		if (persisted) console.warn(auditLine);
+			mode === "read"
+				? "read"
+				: persisted
+					? "write-commit"
+					: batchFailed
+						? "write-error"
+						: "write-preview";
+		const totalRows = results.reduce((s, r) => s + (r.ok ? r.rowCount : 0), 0);
+		const auditLine = `[db-console] actor=${actor} phase=${phase} statements=${statements.length} rows=${totalRows} sql=${JSON.stringify(sqlText)}`;
+		if (mode === "write" && commit) console.warn(auditLine);
 		else console.info(auditLine);
 
 		return Response.json({
 			ok: true,
 			mode,
 			persisted,
-			rowCount: captured.count,
-			columns: captured.columns,
-			rows: toJsonSafe(rows),
-			truncated,
+			statements: results.map((r) =>
+				r.ok
+					? {
+							ok: true,
+							sql: r.sql,
+							columns: r.columns,
+							rows: toJsonSafe(r.rows),
+							rowCount: r.rowCount,
+							truncated: r.truncated,
+						}
+					: { ok: false, sql: r.sql, error: r.error },
+			),
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
