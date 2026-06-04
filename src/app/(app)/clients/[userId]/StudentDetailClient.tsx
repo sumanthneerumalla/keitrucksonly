@@ -61,6 +61,10 @@ export default function StudentDetailClient({
 		.toUpperCase();
 	const profileImage = studentProfile?.profileImage ?? null;
 	const profileData = studentProfile?.profileData ?? {};
+	// DOB is global (User.dateOfBirth); format to YYYY-MM-DD for the date input.
+	const dateOfBirth = user.dateOfBirth
+		? new Date(user.dateOfBirth).toISOString().slice(0, 10)
+		: null;
 
 	return (
 		<div className="mx-auto max-w-4xl space-y-6 p-6">
@@ -122,6 +126,7 @@ export default function StudentDetailClient({
 			<ProfileFieldsCard
 				userId={user.userId}
 				email={user.email}
+				dateOfBirth={dateOfBirth}
 				profileData={profileData}
 			/>
 

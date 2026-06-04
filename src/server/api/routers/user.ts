@@ -188,15 +188,13 @@ const getStudentDetailSchema = z.object({
 
 // Shape of the StudentProfile.profileData JSON blob (TD-1). Validated here at
 // the mutation boundary; the client-side ProfileFieldsCard owns its own matching
-// shape — small duplication is cheaper than a shared file for 5 fields.
+// shape — small duplication is cheaper than a shared file.
+// NOTE: dateOfBirth is NOT here — it was promoted to the global User.dateOfBirth
+// column (see designFiles/per-club-profiles.md §4b). It rides as a sibling field
+// on updateStudentProfileDataSchema below and is written straight to User.
 const studentProfileDataSchema = z
 	.object({
 		phone: z.string().trim().max(40).optional(),
-		dateOfBirth: z
-			.string()
-			.trim()
-			.regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
-			.optional(),
 		medicalNotes: z.string().max(2000).optional(),
 		allergies: z.string().max(1000).optional(),
 		generalNotes: z.string().max(5000).optional(),
@@ -213,6 +211,14 @@ function parseStudentProfileData(raw: unknown): StudentProfileData {
 const updateStudentProfileDataSchema = z.object({
 	userId: z.string(),
 	profileData: studentProfileDataSchema,
+	// Date of birth is global (User.dateOfBirth). A YYYY-MM-DD string sets it;
+	// null clears it; undefined (key absent) leaves it untouched.
+	dateOfBirth: z
+		.string()
+		.trim()
+		.regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
+		.nullable()
+		.optional(),
 });
 
 // ============================================================
@@ -2110,6 +2116,7 @@ export const userRouter = createTRPCRouter({
 					profileImage: true,
 					userType: true,
 					createdAt: true,
+					dateOfBirth: true,
 					studentProfile: {
 						select: {
 							profileData: true,
@@ -2141,6 +2148,8 @@ export const userRouter = createTRPCRouter({
 					profileImage: user.profileImage,
 					userType: user.userType,
 					createdAt: user.createdAt,
+					// Global single source of truth (see per-club-profiles.md §4b).
+					dateOfBirth: user.dateOfBirth,
 				},
 				studentProfile: user.studentProfile
 					? {
@@ -2188,7 +2197,7 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
-			await ctx.db.studentProfile.upsert({
+			const upsertProfile = ctx.db.studentProfile.upsert({
 				where: { userId: target.userId },
 				create: {
 					userId: target.userId,
@@ -2198,6 +2207,23 @@ export const userRouter = createTRPCRouter({
 					profileData: input.profileData,
 				},
 			});
+
+			// Date of birth is global. Parse at UTC-midnight to avoid TZ off-by-one.
+			// undefined → leave untouched; null → clear; "YYYY-MM-DD" → set.
+			const dob = input.dateOfBirth;
+			if (dob !== undefined) {
+				await ctx.db.$transaction([
+					upsertProfile,
+					ctx.db.user.update({
+						where: { userId: target.userId },
+						data: {
+							dateOfBirth: dob ? new Date(`${dob}T00:00:00.000Z`) : null,
+						},
+					}),
+				]);
+			} else {
+				await upsertProfile;
+			}
 
 			return { success: true as const };
 		}),

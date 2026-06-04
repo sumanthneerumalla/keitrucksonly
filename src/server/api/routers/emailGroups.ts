@@ -36,17 +36,9 @@ function computeAge(dateOfBirth: Date): number {
 // ─── Helper: get users matching filters at a facility ──────────────────────
 
 function getDateOfBirth(user: any): Date | null {
-	// Prefer the promoted User.dateOfBirth column
-	if (user.dateOfBirth) return new Date(user.dateOfBirth);
-
-	// Fall back to StudentProfile.profileData JSON blob
-	const profileData = user.studentProfile?.profileData;
-	if (profileData && typeof profileData === "object" && profileData.dateOfBirth) {
-		const parsed = new Date(profileData.dateOfBirth);
-		if (!Number.isNaN(parsed.getTime())) return parsed;
-	}
-
-	return null;
+	// DOB is global on User.dateOfBirth (the staff card now writes it there; see
+	// designFiles/per-club-profiles.md §4b). No more profileData fallback.
+	return user.dateOfBirth ? new Date(user.dateOfBirth) : null;
 }
 
 async function getUsersMatchingFilters(
@@ -69,7 +61,6 @@ async function getUsersMatchingFilters(
 					firstName: true,
 					lastName: true,
 					dateOfBirth: true,
-					studentProfile: { select: { profileData: true } },
 					userTags: { select: { tagId: true } },
 				},
 			},

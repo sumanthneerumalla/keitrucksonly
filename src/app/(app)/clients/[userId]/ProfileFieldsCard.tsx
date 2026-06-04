@@ -8,11 +8,10 @@ import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 
 // Client-side shape of StudentProfile.profileData (TD-1). Matches the Zod
-// schema in `src/server/api/routers/user.ts` — kept as a separate local type
-// on purpose: small duplication beats a shared types file for 5 fields.
+// schema in `src/server/api/routers/user.ts`. dateOfBirth is NOT here — it is
+// global (User.dateOfBirth) and arrives as its own prop.
 type ProfileData = {
 	phone?: string;
-	dateOfBirth?: string;
 	medicalNotes?: string;
 	allergies?: string;
 	generalNotes?: string;
@@ -32,19 +31,22 @@ function calculateAge(dateOfBirth: string | undefined): number | null {
 interface ProfileFieldsCardProps {
 	userId: string;
 	email: string | null;
+	// Global DOB (User.dateOfBirth) as a YYYY-MM-DD string, or null.
+	dateOfBirth: string | null;
 	profileData: ProfileData;
 }
 
 export default function ProfileFieldsCard({
 	userId,
 	email,
+	dateOfBirth,
 	profileData,
 }: ProfileFieldsCardProps) {
 	const utils = api.useUtils();
 	const { toast } = useToast();
 	const [editing, setEditing] = useState(false);
 	const [phone, setPhone] = useState(profileData.phone ?? "");
-	const [dateOfBirth, setDateOfBirth] = useState(profileData.dateOfBirth ?? "");
+	const [dob, setDob] = useState(dateOfBirth ?? "");
 	const [medicalNotes, setMedicalNotes] = useState(
 		profileData.medicalNotes ?? "",
 	);
@@ -66,7 +68,7 @@ export default function ProfileFieldsCard({
 
 	function handleCancel() {
 		setPhone(profileData.phone ?? "");
-		setDateOfBirth(profileData.dateOfBirth ?? "");
+		setDob(dateOfBirth ?? "");
 		setMedicalNotes(profileData.medicalNotes ?? "");
 		setAllergies(profileData.allergies ?? "");
 		setGeneralNotes(profileData.generalNotes ?? "");
@@ -78,15 +80,16 @@ export default function ProfileFieldsCard({
 			userId,
 			profileData: {
 				phone: phone.trim() || undefined,
-				dateOfBirth: dateOfBirth.trim() || undefined,
 				medicalNotes: medicalNotes.trim() || undefined,
 				allergies: allergies.trim() || undefined,
 				generalNotes: generalNotes.trim() || undefined,
 			},
+			// Global DOB, written straight to User.dateOfBirth ("" clears it).
+			dateOfBirth: dob.trim() || null,
 		});
 	}
 
-	const age = calculateAge(profileData.dateOfBirth);
+	const age = calculateAge(dateOfBirth ?? undefined);
 	const textareaClass =
 		"flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-[var(--foreground)] text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50";
 
@@ -138,8 +141,8 @@ export default function ProfileFieldsCard({
 							</label>
 							<Input
 								type="date"
-								value={dateOfBirth}
-								onChange={(e) => setDateOfBirth(e.target.value)}
+								value={dob}
+								onChange={(e) => setDob(e.target.value)}
 							/>
 						</div>
 						<div className="space-y-1">
@@ -148,8 +151,8 @@ export default function ProfileFieldsCard({
 							</label>
 							<Input
 								value={
-									calculateAge(dateOfBirth) !== null
-										? String(calculateAge(dateOfBirth))
+									calculateAge(dob) !== null
+										? String(calculateAge(dob))
 										: ""
 								}
 								disabled
@@ -222,10 +225,7 @@ export default function ProfileFieldsCard({
 				<dl className="grid grid-cols-1 gap-y-3 text-sm sm:grid-cols-2 sm:gap-x-6">
 					<ReadField label="Email" value={email} />
 					<ReadField label="Phone" value={profileData.phone ?? null} />
-					<ReadField
-						label="Date of birth"
-						value={profileData.dateOfBirth ?? null}
-					/>
+					<ReadField label="Date of birth" value={dateOfBirth} />
 					<ReadField
 						label="Age"
 						value={age !== null ? String(age) : null}

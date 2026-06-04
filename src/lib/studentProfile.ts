@@ -8,7 +8,8 @@
 
 export type StudentProfileData = {
 	phone?: string;
-	dateOfBirth?: string;
+	// dateOfBirth removed — promoted to the global User.dateOfBirth column
+	// (see designFiles/per-club-profiles.md §4b).
 	medicalNotes?: string;
 	allergies?: string;
 	generalNotes?: string;
