@@ -515,31 +515,106 @@ export default function GroupDetailClient({
 						Send History
 					</h2>
 				</div>
-				<div className="max-h-60 overflow-y-auto">
-					{historyQuery.data && historyQuery.data.length > 0 ? (
-						historyQuery.data.map((log: any) => (
-							<div
-								key={log.sendLogId}
-								className="border-b px-4 py-3 last:border-b-0"
-							>
-								<div className="flex items-center justify-between">
-									<span className="text-sm font-medium">{log.subject}</span>
-									<span className="text-xs text-muted-foreground">
-										{new Date(log.sentAt).toLocaleDateString()}
-									</span>
-								</div>
-								<p className="mt-0.5 text-xs text-muted-foreground">
-									Sent by {log.sender.firstName} {log.sender.lastName} to{" "}
-									{log.recipientCount} recipients
-								</p>
-							</div>
-						))
-					) : (
-						<p className="px-4 py-6 text-center text-sm text-muted-foreground">
-							No emails sent yet.
-						</p>
-					)}
-				</div>
+				{historyQuery.data && historyQuery.data.length > 0 ? (
+					<div className="overflow-x-auto">
+						<table className="w-full text-sm">
+							<thead>
+								<tr className="border-b bg-accent/30 text-xs font-medium text-muted-foreground">
+									<th className="px-4 py-2.5 text-left">Resend ID</th>
+									<th className="px-4 py-2.5 text-left">Subject</th>
+									<th className="px-4 py-2.5 text-left">Recipients</th>
+									<th className="px-4 py-2.5 text-left">Status</th>
+									<th className="px-4 py-2.5 text-left">Sent</th>
+								</tr>
+							</thead>
+							<tbody>
+								{historyQuery.data.map((log: any) => (
+									<tr
+										key={log.sendLogId}
+										className="border-b last:border-b-0 hover:bg-accent/20"
+									>
+										{/* Resend ID */}
+										<td className="px-4 py-3">
+											{log.resendId ? (
+												<span
+													title={log.resendId}
+													className="font-mono text-xs text-muted-foreground"
+												>
+													{log.resendId.slice(0, 16)}…
+												</span>
+											) : (
+												<span className="text-xs text-muted-foreground/50">—</span>
+											)}
+										</td>
+										{/* Subject */}
+										<td className="px-4 py-3">
+											<span className="font-medium">{log.subject}</span>
+										</td>
+										{/* Group name + recipient count */}
+										<td className="px-4 py-3 text-muted-foreground">
+											{log.emailGroup?.name ?? group.name}
+											<span className="ml-1 text-xs">
+												· {log.recipientCount} sent
+												{log.skippedCount > 0 && (
+													<span className="ml-1 text-amber-600">
+														/ {log.skippedCount} skipped
+													</span>
+												)}
+											</span>
+										</td>
+										{/* Status badge */}
+										<td className="px-4 py-3">
+											<div className="flex flex-wrap gap-1">
+												{log.status === "sent" && (
+													<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+														sent
+													</span>
+												)}
+												{log.status === "partial_failure" && (
+													<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+														partial
+													</span>
+												)}
+												{log.status === "failed" && (
+													<span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+														API rejected
+													</span>
+												)}
+												{log.status === "sending" && (
+													<span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+														sending
+													</span>
+												)}
+												{!log.status && (
+													<span className="rounded-full bg-accent px-2 py-0.5 text-xs text-muted-foreground">
+														—
+													</span>
+												)}
+												{(log._count?.recipients ?? 0) > 0 && (
+													<span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+														{log._count.recipients} bounced
+													</span>
+												)}
+											</div>
+										</td>
+										{/* Sent date */}
+										<td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+											{new Date(log.sentAt).toLocaleDateString(undefined, {
+												day: "numeric",
+												month: "short",
+												year: "numeric",
+											})}
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				) : (
+					<p className="px-4 py-6 text-center text-sm text-muted-foreground">
+						No emails sent yet.
+					</p>
+				)}
 			</div>
 			{/* Add Members Modal */}
 			<Dialog open={showAddModal} onOpenChange={setShowAddModal}>
