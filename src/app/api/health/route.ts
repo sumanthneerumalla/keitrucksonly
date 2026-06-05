@@ -30,9 +30,7 @@ let cachedAt = 0;
 async function readDeployInfo(): Promise<unknown> {
 	if (Date.now() - cachedAt < 1000) return cachedDeploy;
 	try {
-		cachedDeploy = JSON.parse(
-			await readFile("/tmp/.deploy-info.json", "utf8"),
-		);
+		cachedDeploy = JSON.parse(await readFile("/tmp/.deploy-info.json", "utf8"));
 	} catch {
 		// File missing — pick the most informative status.
 		const hasBuildSha =

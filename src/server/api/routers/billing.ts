@@ -9,6 +9,11 @@ import {
 	protectedProcedure,
 } from "~/server/api/trpc";
 import {
+	getFromAddress,
+	getResendClient,
+} from "~/server/services/email/resend";
+import { getOrRenderInvoicePdf } from "~/server/services/invoiceRenderer/getOrRender";
+import {
 	AUDIT_ACTIONS,
 	AUDIT_SOURCES,
 	buildPartyAuditEntries,
@@ -26,11 +31,6 @@ import {
 	isPlatformAdmin,
 	isSameClub,
 } from "~/server/utils/utils";
-import { getOrRenderInvoicePdf } from "~/server/services/invoiceRenderer/getOrRender";
-import {
-	getResendClient,
-	getFromAddress,
-} from "~/server/services/email/resend";
 
 /**
  * Phone now lives per-club on MemberClubProfile (per-club-profiles.md). Prisma
@@ -2545,7 +2545,10 @@ export const billingRouter = createTRPCRouter({
 			});
 
 			if (!invoice) {
-				throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found",
+				});
 			}
 
 			// Club admins are scoped to their own club; platform admins may send
@@ -2569,9 +2572,7 @@ export const billingRouter = createTRPCRouter({
 			const hasSeparatePayer =
 				invoice.billedToUser !== null &&
 				invoice.billedToUser.userId !== invoice.user.userId;
-			const recipient = hasSeparatePayer
-				? invoice.billedToUser
-				: invoice.user;
+			const recipient = hasSeparatePayer ? invoice.billedToUser : invoice.user;
 
 			if (!recipient?.email) {
 				throw new TRPCError({

@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { api } from "~/trpc/react";
-import { isAnyAdmin } from "~/lib/utils";
+import { History, Mail, Plus, RefreshCw, Users } from "lucide-react";
 import Link from "next/link";
-import { Plus, Users, Mail, RefreshCw, History } from "lucide-react";
+import { useState } from "react";
+import { isAnyAdmin } from "~/lib/utils";
+import { api } from "~/trpc/react";
 
 interface Props {
 	userType: string;
@@ -37,14 +37,14 @@ export default function EmailGroupsClient({
 		<div className="mx-auto max-w-4xl p-6">
 			<div className="mb-6 flex items-center justify-between">
 				<div>
-					<h1 className="text-2xl font-bold">Email Groups</h1>
-					<p className="text-sm text-muted-foreground">
+					<h1 className="font-bold text-2xl">Email Groups</h1>
+					<p className="text-muted-foreground text-sm">
 						Create and manage email groups to communicate with facility members
 					</p>
 				</div>
 				<Link
 					href="/email-groups/new"
-					className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+					className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 				>
 					<Plus className="h-4 w-4" />
 					New Group
@@ -60,13 +60,14 @@ export default function EmailGroupsClient({
 			{groups.data && groups.data.length === 0 && (
 				<div className="rounded-lg border border-dashed p-12 text-center">
 					<Users className="mx-auto h-12 w-12 text-muted-foreground/50" />
-					<h3 className="mt-4 text-lg font-medium">No email groups yet</h3>
-					<p className="mt-2 text-sm text-muted-foreground">
-						Create your first email group to start communicating with facility members.
+					<h3 className="mt-4 font-medium text-lg">No email groups yet</h3>
+					<p className="mt-2 text-muted-foreground text-sm">
+						Create your first email group to start communicating with facility
+						members.
 					</p>
 					<Link
 						href="/email-groups/new"
-						className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+						className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						<Plus className="h-4 w-4" />
 						Create Group
@@ -85,17 +86,16 @@ export default function EmailGroupsClient({
 							<div className="flex items-center justify-between">
 								<div>
 									<h3 className="font-medium">{group.name}</h3>
-									<div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
+									<div className="mt-1 flex items-center gap-3 text-muted-foreground text-sm">
 										<span className="flex items-center gap-1">
 											<Users className="h-3.5 w-3.5" />
 											{group._count?.members ?? 0} members
 										</span>
-										{group.facility && (
-											<span>{group.facility.name}</span>
-										)}
+										{group.facility && <span>{group.facility.name}</span>}
 										{group.createdByUser && (
 											<span>
-												by {group.createdByUser.firstName} {group.createdByUser.lastName}
+												by {group.createdByUser.firstName}{" "}
+												{group.createdByUser.lastName}
 											</span>
 										)}
 									</div>
@@ -121,7 +121,7 @@ export default function EmailGroupsClient({
 					</div>
 				)}
 				{allHistoryQuery.data && allHistoryQuery.data.length === 0 && (
-					<p className="px-4 py-8 text-center text-sm text-muted-foreground">
+					<p className="px-4 py-8 text-center text-muted-foreground text-sm">
 						No emails sent yet.
 					</p>
 				)}
@@ -129,7 +129,7 @@ export default function EmailGroupsClient({
 					<div className="overflow-x-auto">
 						<table className="w-full text-sm">
 							<thead>
-								<tr className="border-b bg-accent/30 text-xs font-medium text-muted-foreground">
+								<tr className="border-b bg-accent/30 font-medium text-muted-foreground text-xs">
 									<th className="px-4 py-2.5 text-left">Resend ID</th>
 									<th className="px-4 py-2.5 text-left">Subject</th>
 									<th className="px-4 py-2.5 text-left">Recipients</th>
@@ -148,12 +148,14 @@ export default function EmailGroupsClient({
 											{log.resendId ? (
 												<span
 													title={log.resendId}
-													className="font-mono text-xs text-muted-foreground"
+													className="font-mono text-muted-foreground text-xs"
 												>
 													{log.resendId.slice(0, 16)}…
 												</span>
 											) : (
-												<span className="text-xs text-muted-foreground/50">—</span>
+												<span className="text-muted-foreground/50 text-xs">
+													—
+												</span>
 											)}
 										</td>
 										{/* Subject */}
@@ -181,39 +183,39 @@ export default function EmailGroupsClient({
 										<td className="px-4 py-3">
 											<div className="flex flex-wrap gap-1">
 												{log.status === "sent" && (
-													<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+													<span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700 text-xs">
 														sent
 													</span>
 												)}
 												{log.status === "partial_failure" && (
-													<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+													<span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-700 text-xs">
 														partial
 													</span>
 												)}
 												{log.status === "failed" && (
-													<span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+													<span className="rounded-full bg-red-100 px-2 py-0.5 font-medium text-red-700 text-xs">
 														API rejected
 													</span>
 												)}
 												{log.status === "sending" && (
-													<span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+													<span className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-700 text-xs">
 														sending
 													</span>
 												)}
 												{!log.status && (
-													<span className="rounded-full bg-accent px-2 py-0.5 text-xs text-muted-foreground">
+													<span className="rounded-full bg-accent px-2 py-0.5 text-muted-foreground text-xs">
 														—
 													</span>
 												)}
 												{(log._count?.recipients ?? 0) > 0 && (
-													<span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+													<span className="rounded-full bg-orange-100 px-2 py-0.5 font-medium text-orange-700 text-xs">
 														{log._count.recipients} bounced
 													</span>
 												)}
 											</div>
 										</td>
 										{/* Date */}
-										<td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
+										<td className="whitespace-nowrap px-4 py-3 text-muted-foreground text-xs">
 											{new Date(log.sentAt).toLocaleDateString(undefined, {
 												day: "numeric",
 												month: "short",

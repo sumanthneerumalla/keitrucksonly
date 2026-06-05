@@ -73,7 +73,7 @@ export default function ShopClient({
 		<div className="mx-auto max-w-5xl space-y-8 p-6">
 			{/* Header */}
 			<header className="space-y-1">
-				<h1 className="font-bold text-[var(--foreground)] text-2xl">
+				<h1 className="font-bold text-2xl text-[var(--foreground)]">
 					{clubName}
 				</h1>
 				<p className="text-[var(--muted-foreground)] text-sm">
@@ -134,9 +134,7 @@ export default function ShopClient({
 												)}
 											</p>
 										) : (
-											<p className="font-medium text-green-600 text-xs">
-												Free
-											</p>
+											<p className="font-medium text-green-600 text-xs">Free</p>
 										)}
 									</div>
 								</Link>

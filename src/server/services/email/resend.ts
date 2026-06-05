@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { Resend } from "resend";
-import DOMPurify from "isomorphic-dompurify";
 import { convert } from "html-to-text";
+import DOMPurify from "isomorphic-dompurify";
+import { Resend } from "resend";
 import { env } from "~/env";
 
 // ─── Client ─────────────────────────────────────────────────────────────────
@@ -53,14 +53,11 @@ export async function withRetry<T>(
 		try {
 			return await fn();
 		} catch (err: any) {
-			const status =
-				err?.statusCode ?? err?.status ?? err?.response?.status;
+			const status = err?.statusCode ?? err?.status ?? err?.response?.status;
 			if (status !== 429) throw err;
 			lastError = err;
 			if (attempt < maxAttempts - 1) {
-				await new Promise((res) =>
-					setTimeout(res, RETRY_DELAYS_MS[attempt]),
-				);
+				await new Promise((res) => setTimeout(res, RETRY_DELAYS_MS[attempt]));
 			}
 		}
 	}
@@ -89,15 +86,45 @@ export function extractBatchEmailIds(data: unknown): (string | null)[] {
 // ─── HTML sanitization ───────────────────────────────────────────────────────
 
 const ALLOWED_TAGS = [
-	"p", "br", "strong", "b", "em", "i", "u", "s",
-	"h1", "h2", "h3", "h4",
-	"ul", "ol", "li",
-	"a", "img",
-	"blockquote", "hr",
-	"span", "div", "table", "thead", "tbody", "tr", "th", "td",
+	"p",
+	"br",
+	"strong",
+	"b",
+	"em",
+	"i",
+	"u",
+	"s",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"ul",
+	"ol",
+	"li",
+	"a",
+	"img",
+	"blockquote",
+	"hr",
+	"span",
+	"div",
+	"table",
+	"thead",
+	"tbody",
+	"tr",
+	"th",
+	"td",
 ];
 
-const ALLOWED_ATTR = ["href", "src", "alt", "target", "rel", "style", "width", "height"];
+const ALLOWED_ATTR = [
+	"href",
+	"src",
+	"alt",
+	"target",
+	"rel",
+	"style",
+	"width",
+	"height",
+];
 
 export function sanitizeEmailHtml(html: string): string {
 	return DOMPurify.sanitize(html, {

@@ -2,8 +2,8 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { CheckCircle, Clock, LogIn } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
@@ -145,7 +145,7 @@ function EventCard({
 			<div className="flex items-start justify-between gap-2">
 				<h3 className="font-medium text-[var(--foreground)]">{event.title}</h3>
 				{status === "CHECKED_IN" && (
-					<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-green-700 text-xs font-medium">
+					<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 font-medium text-green-700 text-xs">
 						<CheckCircle size={14} />
 						Checked in
 					</span>
@@ -301,7 +301,6 @@ export default function CheckinClient({
 
 	return (
 		<div className="mx-auto min-h-dvh max-w-lg px-4 py-6">
-
 			{/* Confirm dialog */}
 			{confirmReg && (
 				<ConfirmDialog
@@ -330,11 +329,7 @@ export default function CheckinClient({
 			<section className="mt-6 flex flex-col items-center">
 				{/* TODO (Phase 6c): upgrade to rotating signed JWT token */}
 				<div className="rounded-xl border border-[var(--border)] bg-white p-4">
-					<QRCodeSVG
-						value={member.userId}
-						size={qrSize}
-						level="M"
-					/>
+					<QRCodeSVG value={member.userId} size={qrSize} level="M" />
 				</div>
 				<p className="mt-3 font-medium text-[var(--foreground)] text-sm">
 					{member.firstName} {member.lastName}

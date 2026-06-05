@@ -37,10 +37,7 @@ interface PaginationControlsProps {
  * Always shows first, last, and up to 2 pages around current.
  * Uses null to represent ellipsis gaps.
  */
-function getPageNumbers(
-	page: number,
-	pageCount: number,
-): (number | null)[] {
+function getPageNumbers(page: number, pageCount: number): (number | null)[] {
 	if (pageCount <= 7) {
 		return Array.from({ length: pageCount }, (_, i) => i + 1);
 	}
@@ -78,8 +75,8 @@ export function PaginationControls({
 		<div className="mt-4 flex flex-wrap items-center justify-between gap-3">
 			{total !== undefined && limit !== undefined ? (
 				<span className="text-[var(--muted-foreground)] text-sm">
-					Showing {(page - 1) * limit + 1}–
-					{Math.min(page * limit, total)} of {total}
+					Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of{" "}
+					{total}
 				</span>
 			) : (
 				<span />

@@ -123,8 +123,7 @@ const timingMiddleware = t.middleware(async ({ next, path, ctx, input }) => {
 				userId,
 				code: error instanceof TRPCError ? error.code : "UNKNOWN",
 				message: error.message,
-				cause:
-					error.cause instanceof Error ? error.cause.message : undefined,
+				cause: error.cause instanceof Error ? error.cause.message : undefined,
 				input,
 				stack: error.stack,
 			});

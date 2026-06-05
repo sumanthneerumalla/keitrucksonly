@@ -91,9 +91,7 @@ function ResourceTypeForm({
 	const [useCustomColors, setUseCustomColors] = useState(
 		initial?.color != null,
 	);
-	const [color, setColor] = useState(
-		initial?.color ?? DEFAULT_COLOR,
-	);
+	const [color, setColor] = useState(initial?.color ?? DEFAULT_COLOR);
 	const [backgroundColor, setBackgroundColor] = useState(
 		initial?.backgroundColor ?? DEFAULT_BG_COLOR,
 	);
@@ -983,8 +981,8 @@ export default function ResourceManagerClient() {
 								/>
 								Customize colors
 								<span className="text-[var(--muted-foreground)] text-xs">
-									(otherwise uses the type's default, or neutral if the type
-									has none)
+									(otherwise uses the type's default, or neutral if the type has
+									none)
 								</span>
 							</label>
 							{useCustomResColors && (

@@ -34,11 +34,7 @@ export async function reconcileSendLogStatus(sendLogId: string): Promise<{
 
 	// No "sent" rows at all (including the zero-rows crash case) → failed.
 	const status =
-		sentCount === 0
-			? "failed"
-			: failedCount === 0
-				? "sent"
-				: "partial_failure";
+		sentCount === 0 ? "failed" : failedCount === 0 ? "sent" : "partial_failure";
 
 	await db.emailSendLog.update({
 		where: { sendLogId },
@@ -61,7 +57,12 @@ export async function reconcileSendLogStatus(sendLogId: string): Promise<{
  * No-op (single cheap filter) when nothing is stale, which is the common case.
  */
 export async function reconcileStaleSendLogs<
-	T extends { sendLogId: string; status: string | null; sentAt: Date; recipientCount: number },
+	T extends {
+		sendLogId: string;
+		status: string | null;
+		sentAt: Date;
+		recipientCount: number;
+	},
 >(logs: T[]): Promise<T[]> {
 	const cutoff = Date.now() - STALE_SENDING_MS;
 	const stale = logs.filter(

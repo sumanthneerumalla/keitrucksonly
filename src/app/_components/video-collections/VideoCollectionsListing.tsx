@@ -4,8 +4,8 @@ import { UserType } from "@prisma/client";
 import { Search } from "lucide-react";
 import Link from "next/link";
 import { useUrlPagination } from "~/app/_components/hooks/use-url-pagination";
-import { Select } from "~/app/_components/shared/ui/select";
 import { PaginationControls } from "~/app/_components/shared/ui/pagination-controls";
+import { Select } from "~/app/_components/shared/ui/select";
 import { hasCoachingAccess, isFacilityOrAbove } from "~/lib/utils";
 import { getYouTubeThumbnailUrl } from "~/lib/videoUtils";
 import { api } from "~/trpc/react";
@@ -22,7 +22,13 @@ export function VideoCollectionsListing({
 	userId,
 }: VideoCollectionsListingProps) {
 	const {
-		page, limit, search, searchInput, setSearchInput, setPage, setLimit,
+		page,
+		limit,
+		search,
+		searchInput,
+		setSearchInput,
+		setPage,
+		setLimit,
 	} = useUrlPagination({ defaultLimit: 12, validLimits: PAGE_SIZE_OPTIONS });
 
 	const { data, isLoading } = api.videoCollection.getAll.useQuery({

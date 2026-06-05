@@ -65,15 +65,11 @@ export default function MemberPackagesCard({
 		<>
 			<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
 				<div className="mb-3 flex items-center justify-between">
-					<h4 className="flex items-center gap-2 font-semibold text-sm text-[var(--foreground)]">
+					<h4 className="flex items-center gap-2 font-semibold text-[var(--foreground)] text-sm">
 						<Package size={14} />
 						Packages
 					</h4>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() => setSellOpen(true)}
-					>
+					<Button variant="outline" size="sm" onClick={() => setSellOpen(true)}>
 						<Plus size={14} />
 						Sell Package
 					</Button>
@@ -82,9 +78,7 @@ export default function MemberPackagesCard({
 				{isLoading ? (
 					<p className="text-[var(--muted-foreground)] text-xs">Loading...</p>
 				) : activePackages.length === 0 && inactivePackages.length === 0 ? (
-					<p className="text-[var(--muted-foreground)] text-xs">
-						No packages
-					</p>
+					<p className="text-[var(--muted-foreground)] text-xs">No packages</p>
 				) : (
 					<div className="space-y-2">
 						{activePackages.map((p) => {

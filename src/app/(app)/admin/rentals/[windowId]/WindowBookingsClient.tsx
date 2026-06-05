@@ -4,11 +4,11 @@ import { ArrowLeft, CalendarDays, Clock, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
+import { formatTime } from "~/app/(app)/rentals/utils";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
-import { formatTime } from "~/app/(app)/rentals/utils";
 import { api } from "~/trpc/react";
 
 export default function WindowBookingsClient() {
@@ -111,7 +111,6 @@ export default function WindowBookingsClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-
 			{/* Back + Header */}
 			<div className="mb-6">
 				<Link
@@ -182,7 +181,7 @@ export default function WindowBookingsClient() {
 										{formatTime(b.startTime)} – {formatTime(b.endTime)}
 									</td>
 									<td className="px-4 py-3">
-										<span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+										<span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700 text-xs">
 											Confirmed
 										</span>
 									</td>
@@ -240,7 +239,7 @@ export default function WindowBookingsClient() {
 											{formatTime(b.startTime)} – {formatTime(b.endTime)}
 										</td>
 										<td className="px-4 py-3">
-											<span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+											<span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 font-medium text-red-700 text-xs">
 												Cancelled
 											</span>
 										</td>

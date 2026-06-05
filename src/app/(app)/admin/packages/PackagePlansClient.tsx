@@ -19,10 +19,11 @@ export default function PackagePlansClient() {
 
 	const { data: user, isLoading: isUserLoading } =
 		api.user.getOrCreateProfile.useQuery();
-	const { data: plansData, isLoading } =
-		api.packages.listPackagePlans.useQuery({
+	const { data: plansData, isLoading } = api.packages.listPackagePlans.useQuery(
+		{
 			...(showInactive ? {} : { isActive: true }),
-		});
+		},
+	);
 
 	const utils = api.useUtils();
 
@@ -101,7 +102,6 @@ export default function PackagePlansClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<div>
@@ -109,7 +109,8 @@ export default function PackagePlansClient() {
 						Package Plans
 					</h1>
 					<p className="mt-1 text-[var(--muted-foreground)] text-sm">
-						Create and manage credit package plans that staff can sell to members
+						Create and manage credit package plans that staff can sell to
+						members
 					</p>
 				</div>
 				<div className="flex flex-wrap items-center gap-3">
@@ -151,212 +152,220 @@ export default function PackagePlansClient() {
 					</div>
 				</div>
 			) : (
-			<>
-				{/* Mobile: stacked cards */}
-				<div className="space-y-3 md:hidden">
-					{plans.map((plan) => {
-						const eligibility = plan.isGeneralDropIn
-							? "General open play"
-							: (plan.product?.name ?? "—");
-						return (
-							<div
-								key={plan.packagePlanId}
-								className={`rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 ${!plan.isActive ? "opacity-60" : ""}`}
-							>
-								<div className="flex items-start justify-between gap-3">
-									<div className="min-w-0 flex-1">
-										<div className="font-medium text-[var(--foreground)]">
-											{plan.name}
-										</div>
-										{plan.description && (
-											<div className="mt-0.5 line-clamp-2 text-[var(--muted-foreground)] text-xs">
-												{plan.description}
-											</div>
-										)}
-									</div>
-									{plan.isActive ? (
-										<span className="inline-flex shrink-0 items-center gap-1 text-green-600 text-xs">
-											<span className="h-2 w-2 rounded-full bg-green-600" />
-											Active
-										</span>
-									) : (
-										<span className="inline-flex shrink-0 items-center gap-1 text-[var(--muted-foreground)] text-xs">
-											<span className="h-2 w-2 rounded-full bg-gray-400" />
-											Inactive
-										</span>
-									)}
-								</div>
-								<dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-									<div>
-										<dt className="text-[var(--muted-foreground)] text-xs">
-											Eligibility
-										</dt>
-										<dd className="text-[var(--foreground)]">{eligibility}</dd>
-									</div>
-									<div>
-										<dt className="text-[var(--muted-foreground)] text-xs">
-											Credits
-										</dt>
-										<dd className="text-[var(--foreground)]">
-											{plan.sessionCount ?? "Unlimited"}
-										</dd>
-									</div>
-									<div>
-										<dt className="text-[var(--muted-foreground)] text-xs">
-											Price
-										</dt>
-										<dd className="text-[var(--foreground)]">
-											{formatPrice(plan.priceInCents)}
-										</dd>
-									</div>
-									<div>
-										<dt className="text-[var(--muted-foreground)] text-xs">
-											Valid For
-										</dt>
-										<dd className="text-[var(--foreground)]">
-											{formatValidity(plan.durationValue, plan.durationUnit)}
-										</dd>
-									</div>
-									<div className="col-span-2">
-										<dt className="text-[var(--muted-foreground)] text-xs">
-											Active Sales
-										</dt>
-										<dd className="text-[var(--foreground)]">
-											{plan._count.memberPackages} active
-										</dd>
-									</div>
-								</dl>
-								{canManagePlans && (
-									<div className="mt-3 flex justify-end gap-2 border-[var(--border)] border-t pt-3">
-										<Link href={`/admin/packages/${plan.packagePlanId}/edit`}>
-											<Button
-												variant="ghost"
-												size="sm"
-												aria-label="Edit package plan"
-											>
-												<Pencil size={14} />
-												Edit
-											</Button>
-										</Link>
-										{plan.isActive && (
-											<Button
-												variant="ghost"
-												size="sm"
-												onClick={() =>
-													handleArchive(plan.packagePlanId, plan.name)
-												}
-												aria-label="Archive package plan"
-												className="hover:bg-red-50 hover:text-red-600"
-											>
-												<Archive size={14} />
-												Archive
-											</Button>
-										)}
-									</div>
-								)}
-							</div>
-						);
-					})}
-				</div>
-
-				{/* Desktop: table */}
-				<div className="hidden overflow-hidden rounded-lg border border-[var(--border)] md:block">
-					<table className="w-full">
-						<thead className="bg-[var(--muted)] text-left text-sm">
-							<tr>
-								<th className="px-4 py-3 font-medium">Name</th>
-								<th className="px-4 py-3 font-medium">Eligibility</th>
-								<th className="px-4 py-3 font-medium">Credits</th>
-								<th className="px-4 py-3 font-medium">Price</th>
-								<th className="px-4 py-3 font-medium">Valid For</th>
-								<th className="px-4 py-3 font-medium">Active Sales</th>
-								<th className="px-4 py-3 font-medium">Status</th>
-								{canManagePlans && <th className="px-4 py-3 text-right font-medium">Actions</th>}
-							</tr>
-						</thead>
-						<tbody className="divide-y divide-[var(--border)] bg-[var(--card)]">
-							{plans.map((plan) => {
-								const eligibility = plan.isGeneralDropIn
-									? "General open play"
-									: (plan.product?.name ?? "—");
-								return (
-									<tr
-										key={plan.packagePlanId}
-										className={`hover:bg-[var(--accent)] ${!plan.isActive ? "opacity-50" : ""}`}
-									>
-										<td className="px-4 py-3">
+				<>
+					{/* Mobile: stacked cards */}
+					<div className="space-y-3 md:hidden">
+						{plans.map((plan) => {
+							const eligibility = plan.isGeneralDropIn
+								? "General open play"
+								: (plan.product?.name ?? "—");
+							return (
+								<div
+									key={plan.packagePlanId}
+									className={`rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 ${!plan.isActive ? "opacity-60" : ""}`}
+								>
+									<div className="flex items-start justify-between gap-3">
+										<div className="min-w-0 flex-1">
 											<div className="font-medium text-[var(--foreground)]">
 												{plan.name}
 											</div>
 											{plan.description && (
-												<div className="mt-0.5 line-clamp-1 text-[var(--muted-foreground)] text-xs">
+												<div className="mt-0.5 line-clamp-2 text-[var(--muted-foreground)] text-xs">
 													{plan.description}
 												</div>
 											)}
-										</td>
-										<td className="px-4 py-3 text-[var(--foreground)] text-sm">
-											{eligibility}
-										</td>
-										<td className="px-4 py-3 text-[var(--foreground)] text-sm">
-											{plan.sessionCount ?? "Unlimited"}
-										</td>
-										<td className="px-4 py-3 text-[var(--foreground)] text-sm">
-											{formatPrice(plan.priceInCents)}
-										</td>
-										<td className="px-4 py-3 text-[var(--foreground)] text-sm">
-											{formatValidity(plan.durationValue, plan.durationUnit)}
-										</td>
-										<td className="px-4 py-3 text-[var(--muted-foreground)] text-sm">
-											{plan._count.memberPackages} active
-										</td>
-										<td className="px-4 py-3">
-											{plan.isActive ? (
-												<span className="inline-flex items-center gap-1 text-green-600 text-xs">
-													<span className="h-2 w-2 rounded-full bg-green-600" />
-													Active
-												</span>
-											) : (
-												<span className="inline-flex items-center gap-1 text-[var(--muted-foreground)] text-xs">
-													<span className="h-2 w-2 rounded-full bg-gray-400" />
-													Inactive
-												</span>
-											)}
-										</td>
-										{canManagePlans && (
-											<td className="px-4 py-3">
-												<div className="flex justify-end gap-2">
-													<Link href={`/admin/packages/${plan.packagePlanId}/edit`}>
-														<Button
-															variant="ghost"
-															size="icon"
-															aria-label="Edit package plan"
-														>
-															<Pencil size={16} />
-														</Button>
-													</Link>
-													{plan.isActive && (
-														<Button
-															variant="ghost"
-															size="icon"
-															onClick={() =>
-																handleArchive(plan.packagePlanId, plan.name)
-															}
-															aria-label="Archive package plan"
-															className="hover:bg-red-50 hover:text-red-600"
-														>
-															<Archive size={16} />
-														</Button>
-													)}
-												</div>
-											</td>
+										</div>
+										{plan.isActive ? (
+											<span className="inline-flex shrink-0 items-center gap-1 text-green-600 text-xs">
+												<span className="h-2 w-2 rounded-full bg-green-600" />
+												Active
+											</span>
+										) : (
+											<span className="inline-flex shrink-0 items-center gap-1 text-[var(--muted-foreground)] text-xs">
+												<span className="h-2 w-2 rounded-full bg-gray-400" />
+												Inactive
+											</span>
 										)}
-									</tr>
-								);
-							})}
-						</tbody>
-					</table>
-				</div>
-			</>
+									</div>
+									<dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+										<div>
+											<dt className="text-[var(--muted-foreground)] text-xs">
+												Eligibility
+											</dt>
+											<dd className="text-[var(--foreground)]">
+												{eligibility}
+											</dd>
+										</div>
+										<div>
+											<dt className="text-[var(--muted-foreground)] text-xs">
+												Credits
+											</dt>
+											<dd className="text-[var(--foreground)]">
+												{plan.sessionCount ?? "Unlimited"}
+											</dd>
+										</div>
+										<div>
+											<dt className="text-[var(--muted-foreground)] text-xs">
+												Price
+											</dt>
+											<dd className="text-[var(--foreground)]">
+												{formatPrice(plan.priceInCents)}
+											</dd>
+										</div>
+										<div>
+											<dt className="text-[var(--muted-foreground)] text-xs">
+												Valid For
+											</dt>
+											<dd className="text-[var(--foreground)]">
+												{formatValidity(plan.durationValue, plan.durationUnit)}
+											</dd>
+										</div>
+										<div className="col-span-2">
+											<dt className="text-[var(--muted-foreground)] text-xs">
+												Active Sales
+											</dt>
+											<dd className="text-[var(--foreground)]">
+												{plan._count.memberPackages} active
+											</dd>
+										</div>
+									</dl>
+									{canManagePlans && (
+										<div className="mt-3 flex justify-end gap-2 border-[var(--border)] border-t pt-3">
+											<Link href={`/admin/packages/${plan.packagePlanId}/edit`}>
+												<Button
+													variant="ghost"
+													size="sm"
+													aria-label="Edit package plan"
+												>
+													<Pencil size={14} />
+													Edit
+												</Button>
+											</Link>
+											{plan.isActive && (
+												<Button
+													variant="ghost"
+													size="sm"
+													onClick={() =>
+														handleArchive(plan.packagePlanId, plan.name)
+													}
+													aria-label="Archive package plan"
+													className="hover:bg-red-50 hover:text-red-600"
+												>
+													<Archive size={14} />
+													Archive
+												</Button>
+											)}
+										</div>
+									)}
+								</div>
+							);
+						})}
+					</div>
+
+					{/* Desktop: table */}
+					<div className="hidden overflow-hidden rounded-lg border border-[var(--border)] md:block">
+						<table className="w-full">
+							<thead className="bg-[var(--muted)] text-left text-sm">
+								<tr>
+									<th className="px-4 py-3 font-medium">Name</th>
+									<th className="px-4 py-3 font-medium">Eligibility</th>
+									<th className="px-4 py-3 font-medium">Credits</th>
+									<th className="px-4 py-3 font-medium">Price</th>
+									<th className="px-4 py-3 font-medium">Valid For</th>
+									<th className="px-4 py-3 font-medium">Active Sales</th>
+									<th className="px-4 py-3 font-medium">Status</th>
+									{canManagePlans && (
+										<th className="px-4 py-3 text-right font-medium">
+											Actions
+										</th>
+									)}
+								</tr>
+							</thead>
+							<tbody className="divide-y divide-[var(--border)] bg-[var(--card)]">
+								{plans.map((plan) => {
+									const eligibility = plan.isGeneralDropIn
+										? "General open play"
+										: (plan.product?.name ?? "—");
+									return (
+										<tr
+											key={plan.packagePlanId}
+											className={`hover:bg-[var(--accent)] ${!plan.isActive ? "opacity-50" : ""}`}
+										>
+											<td className="px-4 py-3">
+												<div className="font-medium text-[var(--foreground)]">
+													{plan.name}
+												</div>
+												{plan.description && (
+													<div className="mt-0.5 line-clamp-1 text-[var(--muted-foreground)] text-xs">
+														{plan.description}
+													</div>
+												)}
+											</td>
+											<td className="px-4 py-3 text-[var(--foreground)] text-sm">
+												{eligibility}
+											</td>
+											<td className="px-4 py-3 text-[var(--foreground)] text-sm">
+												{plan.sessionCount ?? "Unlimited"}
+											</td>
+											<td className="px-4 py-3 text-[var(--foreground)] text-sm">
+												{formatPrice(plan.priceInCents)}
+											</td>
+											<td className="px-4 py-3 text-[var(--foreground)] text-sm">
+												{formatValidity(plan.durationValue, plan.durationUnit)}
+											</td>
+											<td className="px-4 py-3 text-[var(--muted-foreground)] text-sm">
+												{plan._count.memberPackages} active
+											</td>
+											<td className="px-4 py-3">
+												{plan.isActive ? (
+													<span className="inline-flex items-center gap-1 text-green-600 text-xs">
+														<span className="h-2 w-2 rounded-full bg-green-600" />
+														Active
+													</span>
+												) : (
+													<span className="inline-flex items-center gap-1 text-[var(--muted-foreground)] text-xs">
+														<span className="h-2 w-2 rounded-full bg-gray-400" />
+														Inactive
+													</span>
+												)}
+											</td>
+											{canManagePlans && (
+												<td className="px-4 py-3">
+													<div className="flex justify-end gap-2">
+														<Link
+															href={`/admin/packages/${plan.packagePlanId}/edit`}
+														>
+															<Button
+																variant="ghost"
+																size="icon"
+																aria-label="Edit package plan"
+															>
+																<Pencil size={16} />
+															</Button>
+														</Link>
+														{plan.isActive && (
+															<Button
+																variant="ghost"
+																size="icon"
+																onClick={() =>
+																	handleArchive(plan.packagePlanId, plan.name)
+																}
+																aria-label="Archive package plan"
+																className="hover:bg-red-50 hover:text-red-600"
+															>
+																<Archive size={16} />
+															</Button>
+														)}
+													</div>
+												</td>
+											)}
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
+				</>
 			)}
 
 			<AlertDialog

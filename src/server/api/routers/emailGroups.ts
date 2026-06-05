@@ -4,12 +4,13 @@
 // this migration. Remove @ts-nocheck only after addressing those upstream first.
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import {
-	createTRPCRouter,
-	staffProcedure,
-} from "~/server/api/trpc";
-import { getCurrentUser, isAnyAdmin, isPlatformAdmin } from "~/server/utils/utils";
+import { createTRPCRouter, staffProcedure } from "~/server/api/trpc";
 import { reconcileStaleSendLogs } from "~/server/services/email/sendLog";
+import {
+	getCurrentUser,
+	isAnyAdmin,
+	isPlatformAdmin,
+} from "~/server/utils/utils";
 
 // Ensures the caller is allowed to read data scoped to `facilityId`. Platform
 // admins may target any facility; everyone else is confined to facilities that
@@ -135,7 +136,12 @@ export const emailGroupsRouter = createTRPCRouter({
 
 			// Verify user belongs to this facility
 			const membership = await ctx.db.userClub.findUnique({
-				where: { userId_facilityId: { userId: user.userId, facilityId: input.facilityId } },
+				where: {
+					userId_facilityId: {
+						userId: user.userId,
+						facilityId: input.facilityId,
+					},
+				},
 			});
 			if (!membership && !isAnyAdmin(user)) {
 				throw new TRPCError({
@@ -196,7 +202,10 @@ export const emailGroupsRouter = createTRPCRouter({
 
 			// Only creator or admins can update
 			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can edit this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can edit this group",
+				});
 			}
 
 			const updated = await ctx.db.emailGroup.update({
@@ -221,8 +230,14 @@ export const emailGroupsRouter = createTRPCRouter({
 				});
 
 				// Add new matched users
-				const matchedUsers = await getUsersMatchingFilters(ctx.db, group.facilityId, input.filterConfig);
-				const usersToAdd = matchedUsers.filter((u) => !excludedUserIds.has(u.userId));
+				const matchedUsers = await getUsersMatchingFilters(
+					ctx.db,
+					group.facilityId,
+					input.filterConfig,
+				);
+				const usersToAdd = matchedUsers.filter(
+					(u) => !excludedUserIds.has(u.userId),
+				);
 
 				if (usersToAdd.length > 0) {
 					await ctx.db.emailGroupMember.createMany({
@@ -252,7 +267,10 @@ export const emailGroupsRouter = createTRPCRouter({
 			}
 
 			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can delete this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can delete this group",
+				});
 			}
 
 			await ctx.db.emailGroup.update({
@@ -288,7 +306,10 @@ export const emailGroupsRouter = createTRPCRouter({
 		.query(async ({ ctx, input }) => {
 			const user = await getCurrentUser(ctx);
 			if (!isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Admin access required",
+				});
 			}
 			// Cross-tenant guard: a club admin must not read another club's facility.
 			await assertFacilityInCallerClub(ctx, user, input.facilityId);
@@ -315,16 +336,31 @@ export const emailGroupsRouter = createTRPCRouter({
 					members: {
 						include: {
 							user: {
-								select: { userId: true, email: true, firstName: true, lastName: true, profileImage: true },
+								select: {
+									userId: true,
+									email: true,
+									firstName: true,
+									lastName: true,
+									profileImage: true,
+								},
 							},
 						},
 					},
 					exclusions: {
 						include: {
-							user: { select: { userId: true, email: true, firstName: true, lastName: true } },
+							user: {
+								select: {
+									userId: true,
+									email: true,
+									firstName: true,
+									lastName: true,
+								},
+							},
 						},
 					},
-					createdByUser: { select: { userId: true, firstName: true, lastName: true } },
+					createdByUser: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
 					facility: { select: { facilityId: true, name: true } },
 					_count: { select: { sendLogs: true } },
 				},
@@ -337,7 +373,10 @@ export const emailGroupsRouter = createTRPCRouter({
 			// Check access: must be member or admin
 			const isMember = group.members.some((m) => m.userId === user.userId);
 			if (!isMember && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not a member of this group",
+				});
 			}
 
 			return group;
@@ -357,7 +396,10 @@ export const emailGroupsRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
 			}
 			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can sync members" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can sync members",
+				});
 			}
 
 			const filterConfig = group.filterConfig as FilterConfig | null;
@@ -372,10 +414,16 @@ export const emailGroupsRouter = createTRPCRouter({
 				return { added: 0, removed: 0 };
 			}
 
-			const matchedUsers = await getUsersMatchingFilters(ctx.db, group.facilityId, filterConfig);
+			const matchedUsers = await getUsersMatchingFilters(
+				ctx.db,
+				group.facilityId,
+				filterConfig,
+			);
 
 			// Only add users who are not excluded
-			const usersToAdd = matchedUsers.filter((u) => !excludedUserIds.has(u.userId));
+			const usersToAdd = matchedUsers.filter(
+				(u) => !excludedUserIds.has(u.userId),
+			);
 
 			if (usersToAdd.length > 0) {
 				await ctx.db.emailGroupMember.createMany({
@@ -408,7 +456,10 @@ export const emailGroupsRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
 			}
 			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can add members" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can add members",
+				});
 			}
 
 			// Remove any exclusions for these users (they're being re-added)
@@ -448,7 +499,10 @@ export const emailGroupsRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
 			}
 			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can remove members" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can remove members",
+				});
 			}
 
 			// Delete membership rows
@@ -486,7 +540,10 @@ export const emailGroupsRouter = createTRPCRouter({
 			// Add exclusion
 			await ctx.db.emailGroupExclusion.upsert({
 				where: {
-					emailGroupId_userId: { emailGroupId: input.emailGroupId, userId: user.userId },
+					emailGroupId_userId: {
+						emailGroupId: input.emailGroupId,
+						userId: user.userId,
+					},
 				},
 				create: {
 					emailGroupId: input.emailGroupId,
@@ -513,7 +570,10 @@ export const emailGroupsRouter = createTRPCRouter({
 			// Add back as member
 			await ctx.db.emailGroupMember.upsert({
 				where: {
-					emailGroupId_userId: { emailGroupId: input.emailGroupId, userId: user.userId },
+					emailGroupId_userId: {
+						emailGroupId: input.emailGroupId,
+						userId: user.userId,
+					},
 				},
 				create: {
 					emailGroupId: input.emailGroupId,
@@ -535,7 +595,11 @@ export const emailGroupsRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const users = await getUsersMatchingFilters(ctx.db, input.facilityId, input.filterConfig);
+			const users = await getUsersMatchingFilters(
+				ctx.db,
+				input.facilityId,
+				input.filterConfig,
+			);
 			return {
 				count: users.length,
 				users: users.map((u) => ({
@@ -597,10 +661,18 @@ export const emailGroupsRouter = createTRPCRouter({
 
 			// Verify membership or admin
 			const membership = await ctx.db.emailGroupMember.findUnique({
-				where: { emailGroupId_userId: { emailGroupId: input.emailGroupId, userId: user.userId } },
+				where: {
+					emailGroupId_userId: {
+						emailGroupId: input.emailGroupId,
+						userId: user.userId,
+					},
+				},
 			});
 			if (!membership && !isAnyAdmin(user.userType)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not a member of this group",
+				});
 			}
 
 			const logs = await ctx.db.emailSendLog.findMany({

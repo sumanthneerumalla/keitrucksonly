@@ -81,7 +81,7 @@ export default function ProductDetailClient({
 
 			{/* Title + price */}
 			<div className="space-y-2">
-				<h1 className="font-bold text-[var(--foreground)] text-2xl">
+				<h1 className="font-bold text-2xl text-[var(--foreground)]">
 					{data.name}
 				</h1>
 				<p className="font-semibold text-[var(--primary)] text-xl">

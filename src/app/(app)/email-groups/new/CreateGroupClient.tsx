@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
-import { api } from "~/trpc/react";
-import { ArrowLeft, Search, Users, Filter, X, Check } from "lucide-react";
+import { ArrowLeft, Check, Filter, Search, Users, X } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
+import { api } from "~/trpc/react";
 
 type Mode = "filter" | "manual";
 
@@ -66,7 +66,12 @@ export default function CreateGroupClient({
 		[selectedUsers],
 	);
 
-	const toggleUser = (u: { userId: string; firstName: string; lastName: string; email: string }) => {
+	const toggleUser = (u: {
+		userId: string;
+		firstName: string;
+		lastName: string;
+		email: string;
+	}) => {
 		setSelectedUsers((prev) =>
 			prev.some((x) => x.userId === u.userId)
 				? prev.filter((x) => x.userId !== u.userId)
@@ -80,7 +85,9 @@ export default function CreateGroupClient({
 
 	const toggleTag = (tagId: string) => {
 		setSelectedTagIds((prev) =>
-			prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId],
+			prev.includes(tagId)
+				? prev.filter((id) => id !== tagId)
+				: [...prev, tagId],
 		);
 	};
 
@@ -91,7 +98,8 @@ export default function CreateGroupClient({
 			const group = await createMutation.mutateAsync({
 				facilityId: activeFacilityId,
 				name: name.trim(),
-				filterConfig: mode === "filter" && hasFilters ? filterConfig : undefined,
+				filterConfig:
+					mode === "filter" && hasFilters ? filterConfig : undefined,
 			});
 			if (mode === "manual" && selectedUsers.length > 0) {
 				await addMembersMutation.mutateAsync({
@@ -115,18 +123,18 @@ export default function CreateGroupClient({
 			<div className="mb-6">
 				<Link
 					href="/email-groups"
-					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+					className="inline-flex items-center gap-1 text-muted-foreground text-sm hover:text-foreground"
 				>
 					<ArrowLeft className="h-4 w-4" />
 					Back to groups
 				</Link>
 			</div>
 
-			<h1 className="mb-6 text-2xl font-bold">Create Email Group</h1>
+			<h1 className="mb-6 font-bold text-2xl">Create Email Group</h1>
 
 			{/* Group Name */}
 			<div className="mb-6">
-				<label className="mb-2 block text-sm font-medium">Group Name</label>
+				<label className="mb-2 block font-medium text-sm">Group Name</label>
 				<input
 					type="text"
 					value={name}
@@ -142,7 +150,7 @@ export default function CreateGroupClient({
 				<button
 					type="button"
 					onClick={() => setMode("filter")}
-					className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+					className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 font-medium text-sm transition-colors ${
 						mode === "filter"
 							? "bg-primary text-primary-foreground"
 							: "text-muted-foreground hover:text-foreground"
@@ -154,7 +162,7 @@ export default function CreateGroupClient({
 				<button
 					type="button"
 					onClick={() => setMode("manual")}
-					className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+					className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 font-medium text-sm transition-colors ${
 						mode === "manual"
 							? "bg-primary text-primary-foreground"
 							: "text-muted-foreground hover:text-foreground"
@@ -169,32 +177,37 @@ export default function CreateGroupClient({
 			{mode === "filter" && (
 				<>
 					<div className="mb-6 rounded-lg border p-4">
-						<h2 className="mb-4 flex items-center gap-2 text-base font-medium">
+						<h2 className="mb-4 flex items-center gap-2 font-medium text-base">
 							<Filter className="h-4 w-4" />
 							Filters
 						</h2>
 
 						{/* Tag Filter */}
 						<div className="mb-4">
-							<label className="mb-2 block text-sm font-medium">User Tags</label>
+							<label className="mb-2 block font-medium text-sm">
+								User Tags
+							</label>
 							<div className="flex flex-wrap gap-2">
 								{tagsQuery?.data?.map((tag: any) => (
 									<button
 										key={tag.tagId}
 										type="button"
 										onClick={() => toggleTag(tag.tagId)}
-										className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+										className={`rounded-full px-3 py-1 font-medium text-xs transition-colors ${
 											selectedTagIds.includes(tag.tagId)
 												? "ring-2 ring-primary ring-offset-1"
 												: "opacity-70 hover:opacity-100"
 										}`}
-										style={{ backgroundColor: tag.bgColor, color: tag.textColor }}
+										style={{
+											backgroundColor: tag.bgColor,
+											color: tag.textColor,
+										}}
 									>
 										{tag.name}
 									</button>
 								))}
 								{tagsQuery?.data?.length === 0 && (
-									<p className="text-sm text-muted-foreground">
+									<p className="text-muted-foreground text-sm">
 										No tags available. Create tags in the admin panel first.
 									</p>
 								)}
@@ -203,7 +216,9 @@ export default function CreateGroupClient({
 
 						{/* Age Range */}
 						<div>
-							<label className="mb-2 block text-sm font-medium">Age Range</label>
+							<label className="mb-2 block font-medium text-sm">
+								Age Range
+							</label>
 							<div className="flex items-center gap-2">
 								<input
 									type="number"
@@ -224,20 +239,20 @@ export default function CreateGroupClient({
 									max={100}
 									className="w-20 rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
 								/>
-								<span className="text-sm text-muted-foreground">years old</span>
+								<span className="text-muted-foreground text-sm">years old</span>
 							</div>
 						</div>
 					</div>
 
 					{hasFilters && (
 						<div className="mb-6 rounded-lg border bg-accent/30 p-4">
-							<h3 className="mb-2 flex items-center gap-2 text-sm font-medium">
+							<h3 className="mb-2 flex items-center gap-2 font-medium text-sm">
 								<Users className="h-4 w-4" />
 								Preview: {previewQuery.data?.count ?? "..."} users match
 							</h3>
 							{previewQuery.data && previewQuery.data.users.length > 0 && (
 								<div className="max-h-40 overflow-y-auto">
-									<ul className="space-y-1 text-sm text-muted-foreground">
+									<ul className="space-y-1 text-muted-foreground text-sm">
 										{previewQuery.data.users.slice(0, 20).map((u: any) => (
 											<li key={u.userId}>
 												{u.firstName} {u.lastName} — {u.email}
@@ -261,13 +276,13 @@ export default function CreateGroupClient({
 				<div className="mb-6 space-y-4">
 					{/* Search input */}
 					<div className="relative">
-						<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+						<Search className="-translate-y-1/2 absolute top-1/2 left-3 h-4 w-4 text-muted-foreground" />
 						<input
 							type="text"
 							value={search}
 							onChange={(e) => setSearch(e.target.value)}
 							placeholder="Search by name or email…"
-							className="w-full rounded-md border py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+							className="w-full rounded-md border py-2 pr-3 pl-9 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
 						/>
 					</div>
 
@@ -275,10 +290,14 @@ export default function CreateGroupClient({
 					{search.length >= 1 && (
 						<div className="rounded-md border">
 							{searchQuery.isLoading && (
-								<p className="px-4 py-3 text-sm text-muted-foreground">Searching…</p>
+								<p className="px-4 py-3 text-muted-foreground text-sm">
+									Searching…
+								</p>
 							)}
 							{searchQuery.data?.users?.length === 0 && (
-								<p className="px-4 py-3 text-sm text-muted-foreground">No users found.</p>
+								<p className="px-4 py-3 text-muted-foreground text-sm">
+									No users found.
+								</p>
 							)}
 							{searchQuery.data?.users?.map((u: any) => {
 								const selected = selectedUserIds.has(u.userId);
@@ -295,7 +314,7 @@ export default function CreateGroupClient({
 											<span className="font-medium">
 												{u.firstName} {u.lastName}
 											</span>
-											<span className="ml-2 text-xs text-muted-foreground">
+											<span className="ml-2 text-muted-foreground text-xs">
 												{u.email}
 											</span>
 										</div>
@@ -309,14 +328,14 @@ export default function CreateGroupClient({
 					{/* Selected users */}
 					{selectedUsers.length > 0 && (
 						<div>
-							<p className="mb-2 text-sm font-medium">
+							<p className="mb-2 font-medium text-sm">
 								Selected ({selectedUsers.length})
 							</p>
 							<div className="flex flex-wrap gap-2">
 								{selectedUsers.map((u) => (
 									<span
 										key={u.userId}
-										className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+										className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 font-medium text-primary text-xs"
 									>
 										{u.firstName} {u.lastName}
 										<button
@@ -333,7 +352,7 @@ export default function CreateGroupClient({
 					)}
 
 					{selectedUsers.length === 0 && search.length === 0 && (
-						<p className="text-sm text-muted-foreground">
+						<p className="text-muted-foreground text-sm">
 							Search for members to add them to this group.
 						</p>
 					)}
@@ -344,7 +363,7 @@ export default function CreateGroupClient({
 			<div className="flex justify-end gap-3">
 				<Link
 					href="/email-groups"
-					className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-accent"
+					className="rounded-md border px-4 py-2 font-medium text-sm hover:bg-accent"
 				>
 					Cancel
 				</Link>
@@ -352,14 +371,14 @@ export default function CreateGroupClient({
 					type="button"
 					onClick={handleCreate}
 					disabled={!canCreate || isCreating}
-					className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+					className="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50"
 				>
 					{isCreating ? "Creating…" : "Create Group"}
 				</button>
 			</div>
 
 			{(createMutation.error ?? addMembersMutation.error) && (
-				<p className="mt-4 text-sm text-destructive">
+				<p className="mt-4 text-destructive text-sm">
 					{(createMutation.error ?? addMembersMutation.error)?.message}
 				</p>
 			)}

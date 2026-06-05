@@ -1,6 +1,6 @@
 import BillingPanel from "~/app/(app)/clients/[userId]/BillingPanel";
-import { getOnboardedUserOrRedirect } from "~/app/_components/server/OnboardedGuard";
 import ResumeCheckoutBanner from "~/app/_components/client/shared/ResumeCheckoutBanner";
+import { getOnboardedUserOrRedirect } from "~/app/_components/server/OnboardedGuard";
 import { db } from "~/server/db";
 
 /**

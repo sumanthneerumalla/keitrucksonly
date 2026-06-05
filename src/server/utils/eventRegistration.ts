@@ -19,18 +19,13 @@ import { consumeCredit } from "./consumeCredit";
 type TxClient = Prisma.TransactionClient;
 type DbClient = PrismaClient | TxClient;
 
-export type RegistrationSource =
-	| "self_service"
-	| "admin_dashboard"
-	| "system";
+export type RegistrationSource = "self_service" | "admin_dashboard" | "system";
 
 /**
  * The shape returned by `assertRegistrable` — the event row with a `_count` of
  * active registrations already baked in. Callers use this in the tx body.
  */
-export type RegistrableEvent = Awaited<
-	ReturnType<typeof loadEventWithCount>
->;
+export type RegistrableEvent = Awaited<ReturnType<typeof loadEventWithCount>>;
 
 async function loadEventWithCount(db: DbClient, eventId: string) {
 	return db.calendarEvent.findUnique({

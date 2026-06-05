@@ -262,9 +262,9 @@ export default function FacilityManagerClient() {
 								))}
 							</Select>
 							<p className="mt-1 text-[var(--muted-foreground)] text-xs">
-								Used for displaying event times and calculating package
-								expiry. Leave as default unless this facility is in a
-								different time zone than the rest of your club.
+								Used for displaying event times and calculating package expiry.
+								Leave as default unless this facility is in a different time
+								zone than the rest of your club.
 							</p>
 						</div>
 						{error && <p className="text-red-500 text-xs">{error.message}</p>}

@@ -214,7 +214,7 @@ export default function BillingPanel({
 		},
 	});
 	const startingInvoiceId = startInvoiceCheckout.isPending
-		? startInvoiceCheckout.variables?.invoiceId ?? null
+		? (startInvoiceCheckout.variables?.invoiceId ?? null)
 		: null;
 
 	const [paymentInvoice, setPaymentInvoice] = useState<InvoiceRow | null>(null);
@@ -486,9 +486,7 @@ export default function BillingPanel({
 																		<Button
 																			variant="default"
 																			size="sm"
-																			disabled={
-																				startInvoiceCheckout.isPending
-																			}
+																			disabled={startInvoiceCheckout.isPending}
 																			onClick={() =>
 																				startInvoiceCheckout.mutate({
 																					invoiceId: inv.invoiceId,

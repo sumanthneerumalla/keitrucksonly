@@ -9,10 +9,10 @@ import {
 	protectedProcedure,
 	publicProcedure,
 } from "~/server/api/trpc";
-import { getCurrentUser, isFacilityOrAbove } from "~/server/utils/utils";
+import { formatEventTimeInZone } from "~/server/utils/dateUtils";
 import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
 import { buildRuleSetFromEvent } from "~/server/utils/rrule";
-import { formatEventTimeInZone } from "~/server/utils/dateUtils";
+import { getCurrentUser, isFacilityOrAbove } from "~/server/utils/utils";
 
 // NOTE: structured as per-court helper for future multi-court extension (decision #77)
 // Phase 12a (phase12 §23 #8) — `export` added so the Stripe webhook dispatcher
@@ -145,8 +145,7 @@ export async function validateAndCreateBooking(
 	if (existingBooking) {
 		throw new TRPCError({
 			code: "CONFLICT",
-			message:
-				"You already have an overlapping booking on this court.",
+			message: "You already have an overlapping booking on this court.",
 		});
 	}
 
@@ -256,8 +255,7 @@ export const rentalsRouter = createTRPCRouter({
 			if (courts.length !== courtIds.length) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message:
-						"One or more courts do not belong to this facility or club.",
+					message: "One or more courts do not belong to this facility or club.",
 				});
 			}
 
@@ -412,8 +410,7 @@ export const rentalsRouter = createTRPCRouter({
 					let covered = false;
 					if (!newRuleSet) {
 						// Non-recurring after update: single occurrence == the base window.
-						covered =
-							b.startTime >= newStart && b.endTime <= newEnd;
+						covered = b.startTime >= newStart && b.endTime <= newEnd;
 					} else {
 						// Look one duration back so we catch occurrences that start before
 						// the booking but still contain it.
@@ -893,12 +890,13 @@ export const rentalsRouter = createTRPCRouter({
 			}
 
 			// Cancellation cutoff (decision #74): members only
-			if (!isStaff && booking.rentalWindowEvent.earlyCancelCutoffHours != null) {
+			if (
+				!isStaff &&
+				booking.rentalWindowEvent.earlyCancelCutoffHours != null
+			) {
 				const cutoffMs =
 					booking.rentalWindowEvent.earlyCancelCutoffHours * 3600000;
-				const cutoffTime = new Date(
-					booking.startTime.getTime() - cutoffMs,
-				);
+				const cutoffTime = new Date(booking.startTime.getTime() - cutoffMs);
 				if (new Date() > cutoffTime) {
 					throw new TRPCError({
 						code: "BAD_REQUEST",

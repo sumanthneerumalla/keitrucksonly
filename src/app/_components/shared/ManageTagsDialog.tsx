@@ -54,8 +54,9 @@ function DeleteTagConfirmation({
 				<DialogHeader>
 					<DialogTitle>Delete Tag</DialogTitle>
 					<DialogDescription>
-						Delete &lsquo;<span className="capitalize">{tag.name}</span>&rsquo;? This will remove it from{" "}
-						{tag._count.userTags} user{tag._count.userTags !== 1 ? "s" : ""}.
+						Delete &lsquo;<span className="capitalize">{tag.name}</span>&rsquo;?
+						This will remove it from {tag._count.userTags} user
+						{tag._count.userTags !== 1 ? "s" : ""}.
 					</DialogDescription>
 				</DialogHeader>
 				<DialogFooter className="gap-2">
@@ -171,9 +172,7 @@ function ColorPickerRow({
 					className="flex h-5 w-5 items-center justify-center rounded-full border border-gray-200 transition-transform hover:scale-110"
 					style={{ backgroundColor: c.bg }}
 				>
-					{c.bg === currentBg && (
-						<Check size={12} style={{ color: c.text }} />
-					)}
+					{c.bg === currentBg && <Check size={12} style={{ color: c.text }} />}
 				</button>
 			))}
 		</div>
@@ -268,9 +267,7 @@ export default function ManageTagsDialog({
 											<div className="min-w-0 flex-1">
 												<InlineTagName
 													tag={tag}
-													onRename={(name) =>
-														handleRename(tag.tagId, name)
-													}
+													onRename={(name) => handleRename(tag.tagId, name)}
 												/>
 											</div>
 											<span className="shrink-0 text-[var(--muted-foreground)] text-xs">

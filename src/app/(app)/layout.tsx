@@ -1,5 +1,5 @@
-import { auth } from "@clerk/nextjs/server";
 import { ClerkProvider } from "@clerk/nextjs";
+import { auth } from "@clerk/nextjs/server";
 import { cache } from "react";
 import AuthedLayout from "~/app/_components/client/layouts/AuthedLayout";
 import { Footer } from "~/app/_components/client/public/Footer";

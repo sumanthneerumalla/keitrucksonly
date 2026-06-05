@@ -19,7 +19,12 @@ const SUBCATEGORIES = [
 	{ name: "Coaching Slots", sortOrder: 2 },
 ];
 
-async function ensureCategory(clubShortName, name, parentCategoryId, sortOrder) {
+async function ensureCategory(
+	clubShortName,
+	name,
+	parentCategoryId,
+	sortOrder,
+) {
 	const existing = await prisma.productCategory.findFirst({
 		where: {
 			clubShortName,
@@ -58,12 +63,22 @@ async function main() {
 		console.log(`Club: ${club.clubName} (${club.clubShortName})`);
 
 		// Top-level: Credits
-		const credits = await ensureCategory(club.clubShortName, "Credits", null, 0);
+		const credits = await ensureCategory(
+			club.clubShortName,
+			"Credits",
+			null,
+			0,
+		);
 		console.log(`  Credits (${credits.categoryId})`);
 
 		// Subcategories under Credits
 		for (const sub of SUBCATEGORIES) {
-			const cat = await ensureCategory(club.clubShortName, sub.name, credits.categoryId, sub.sortOrder);
+			const cat = await ensureCategory(
+				club.clubShortName,
+				sub.name,
+				credits.categoryId,
+				sub.sortOrder,
+			);
 			console.log(`    ${sub.name} (${cat.categoryId})`);
 		}
 	}

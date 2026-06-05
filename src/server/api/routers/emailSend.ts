@@ -1,21 +1,18 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import {
-	createTRPCRouter,
-	staffProcedure,
-} from "~/server/api/trpc";
-import { getCurrentUser, isAnyAdmin } from "~/server/utils/utils";
 import { env } from "~/env";
+import { createTRPCRouter, staffProcedure } from "~/server/api/trpc";
 import {
-	getResendClient,
-	getFromAddress,
-	getDisplayName,
-	withRetry,
-	sanitizeEmailHtml,
-	htmlToText,
 	extractBatchEmailIds,
+	getDisplayName,
+	getFromAddress,
+	getResendClient,
+	htmlToText,
+	sanitizeEmailHtml,
+	withRetry,
 } from "~/server/services/email/resend";
 import { reconcileSendLogStatus } from "~/server/services/email/sendLog";
+import { getCurrentUser, isAnyAdmin } from "~/server/utils/utils";
 
 export const emailSendRouter = createTRPCRouter({
 	// Send a test email to the sender's own address. Logged as an EmailSendLog
@@ -216,7 +213,11 @@ export const emailSendRouter = createTRPCRouter({
 
 					const batchEmails = batch.map((m: any) => ({
 						from,
-						to: [env.RESEND_FROM_EMAIL?.includes("resend.dev") ? (env.RESEND_TEST_TO_EMAIL ?? "delivered@resend.dev") : m.user.email],
+						to: [
+							env.RESEND_FROM_EMAIL?.includes("resend.dev")
+								? (env.RESEND_TEST_TO_EMAIL ?? "delivered@resend.dev")
+								: m.user.email,
+						],
 						subject: input.subject,
 						html: safeHtml,
 						text: bodyText,
@@ -345,12 +346,18 @@ export const emailSendRouter = createTRPCRouter({
 			});
 
 			if (!sendLog) {
-				throw new TRPCError({ code: "NOT_FOUND", message: "Send log not found" });
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Send log not found",
+				});
 			}
 
 			// Only original sender or admin can retry
 			if (sendLog.senderUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Not authorised to retry this send" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Not authorised to retry this send",
+				});
 			}
 
 			const failedRecipients = sendLog.recipients.filter(
@@ -428,6 +435,10 @@ export const emailSendRouter = createTRPCRouter({
 			// initial send path so the two can't compute it differently).
 			await reconcileSendLogStatus(input.sendLogId);
 
-			return { retriedCount: failedRecipients.length, successCount, failedCount };
+			return {
+				retriedCount: failedRecipients.length,
+				successCount,
+				failedCount,
+			};
 		}),
 });

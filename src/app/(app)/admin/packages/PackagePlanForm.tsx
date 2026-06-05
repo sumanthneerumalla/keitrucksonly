@@ -235,7 +235,6 @@ export default function PackagePlanForm({
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-
 			{/* Header */}
 			<div className="mb-6">
 				<h1 className="font-bold text-2xl text-[var(--foreground)]">
@@ -313,9 +312,9 @@ export default function PackagePlanForm({
 							disabled={saving}
 						/>
 						<p className="text-[var(--muted-foreground)] text-xs">
-							Each registration or check-in consumes 1 credit by default (or more
-							if the event sets a higher credit cost). Unlimited packages will be
-							added in Phase 8b.
+							Each registration or check-in consumes 1 credit by default (or
+							more if the event sets a higher credit cost). Unlimited packages
+							will be added in Phase 8b.
 						</p>
 					</div>
 				</section>
@@ -387,7 +386,10 @@ export default function PackagePlanForm({
 										>
 											{selectedProductName}
 										</span>
-										<ChevronsUpDown size={14} className="ml-2 shrink-0 opacity-50" />
+										<ChevronsUpDown
+											size={14}
+											className="ml-2 shrink-0 opacity-50"
+										/>
 									</button>
 								</PopoverTrigger>
 								<PopoverContent

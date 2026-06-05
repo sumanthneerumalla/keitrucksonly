@@ -1,6 +1,13 @@
 "use client";
 
-import { Pencil, Plus, Search, ToggleLeft, ToggleRight, Trash2 } from "lucide-react";
+import {
+	Pencil,
+	Plus,
+	Search,
+	ToggleLeft,
+	ToggleRight,
+	Trash2,
+} from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ProductFormModal from "~/app/(app)/products/ProductFormModal";
@@ -66,7 +73,8 @@ export default function ProductsClient() {
 	);
 
 	// Queries
-	const { data: user, isLoading: isUserLoading } = api.user.getOrCreateProfile.useQuery();
+	const { data: user, isLoading: isUserLoading } =
+		api.user.getOrCreateProfile.useQuery();
 	const { data: categoriesData } = api.categories.listCategories.useQuery();
 
 	const queryInput = useMemo(
@@ -80,15 +88,21 @@ export default function ProductsClient() {
 		[page, limit, showInactive, categoryFilter, search],
 	);
 
-	const { data: productsData, isLoading } = api.products.getProducts.useQuery(queryInput, {
-		staleTime: 30_000,
-	});
+	const { data: productsData, isLoading } = api.products.getProducts.useQuery(
+		queryInput,
+		{
+			staleTime: 30_000,
+		},
+	);
 
 	const utils = api.useUtils();
 
 	// Prefetch next page
 	useEffect(() => {
-		if (productsData && productsData.pagination.page < productsData.pagination.pageCount) {
+		if (
+			productsData &&
+			productsData.pagination.page < productsData.pagination.pageCount
+		) {
 			void utils.products.getProducts.prefetch(
 				{ ...queryInput, page: page + 1 },
 				{ staleTime: 30_000 },
@@ -206,7 +220,6 @@ export default function ProductsClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<div>

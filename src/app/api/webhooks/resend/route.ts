@@ -16,8 +16,8 @@
  */
 
 import { Webhook } from "svix";
-import { db } from "~/server/db";
 import { env } from "~/env";
+import { db } from "~/server/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

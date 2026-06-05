@@ -9,7 +9,12 @@ const config = {
 	// Allow the dev server to accept requests from the Caddy reverse proxy domain.
 	// Without this, Next.js 15.2.2+ warns on cross-origin /_next/* requests,
 	// and Next.js 16 will block them by default.
-	allowedDevOrigins: ["www.dev.shuttlementor.com", "dev.shuttlementor.com", "www.dev.facilitypresence.com", "dev.facilitypresence.com"],
+	allowedDevOrigins: [
+		"www.dev.shuttlementor.com",
+		"dev.shuttlementor.com",
+		"www.dev.facilitypresence.com",
+		"dev.facilitypresence.com",
+	],
 	// Phase 15: isomorphic-dompurify wraps jsdom, which expects relative CSS paths
 	// (`browser/default-stylesheet.css`) that don't survive Next.js' default server
 	// bundling. Listing the package as external lets it resolve normally from

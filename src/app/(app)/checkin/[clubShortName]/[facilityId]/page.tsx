@@ -6,5 +6,7 @@ export default async function CheckinPage({
 	params: Promise<{ clubShortName: string; facilityId: string }>;
 }) {
 	const { clubShortName, facilityId } = await params;
-	return <CheckinClient clubShortName={clubShortName} facilityId={facilityId} />;
+	return (
+		<CheckinClient clubShortName={clubShortName} facilityId={facilityId} />
+	);
 }

@@ -37,9 +37,11 @@ type AdminClubIdSelectorProps =
 
 export default function AdminClubIdSelector(props: AdminClubIdSelectorProps) {
 	const { mode = "admin", className } = props;
-	const switchScope = mode === "switch"
-		? ((props as Extract<AdminClubIdSelectorProps, { mode: "switch" }>).scope ?? "memberships")
-		: "memberships";
+	const switchScope =
+		mode === "switch"
+			? ((props as Extract<AdminClubIdSelectorProps, { mode: "switch" }>)
+					.scope ?? "memberships")
+			: "memberships";
 	const [isOpen, setIsOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const containerRef = useRef<HTMLDivElement>(null);

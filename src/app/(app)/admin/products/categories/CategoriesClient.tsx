@@ -1,12 +1,6 @@
 "use client";
 
-import {
-	Archive,
-	ChevronDown,
-	ChevronRight,
-	Pencil,
-	Plus,
-} from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, Pencil, Plus } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
@@ -85,7 +79,7 @@ function CategoryRow({
 	return (
 		<>
 			<div
-				className={`flex items-center gap-2 border-b border-[var(--border)] px-4 py-3 hover:bg-[var(--accent)] ${!category.isActive ? "opacity-50" : ""}`}
+				className={`flex items-center gap-2 border-[var(--border)] border-b px-4 py-3 hover:bg-[var(--accent)] ${!category.isActive ? "opacity-50" : ""}`}
 				style={{ paddingLeft: `${depth * 24 + 16}px` }}
 			>
 				{/* Expand/collapse toggle */}
@@ -114,8 +108,7 @@ function CategoryRow({
 								value={editName}
 								onChange={(e) => setEditName(e.target.value)}
 								onKeyDown={(e) => {
-									if (e.key === "Enter")
-										handleSaveEdit(category.categoryId);
+									if (e.key === "Enter") handleSaveEdit(category.categoryId);
 									if (e.key === "Escape") setEditingId(null);
 								}}
 								className="h-8 text-sm"
@@ -213,15 +206,14 @@ function CategoryRow({
 			{/* Inline add-subcategory form */}
 			{addingSubTo === category.categoryId && (
 				<div
-					className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--accent)] px-4 py-2"
+					className="flex items-center gap-2 border-[var(--border)] border-b bg-[var(--accent)] px-4 py-2"
 					style={{ paddingLeft: `${(depth + 1) * 24 + 16}px` }}
 				>
 					<Input
 						value={subName}
 						onChange={(e) => setSubName(e.target.value)}
 						onKeyDown={(e) => {
-							if (e.key === "Enter")
-								handleCreateSub(category.categoryId);
+							if (e.key === "Enter") handleCreateSub(category.categoryId);
 							if (e.key === "Escape") setAddingSubTo(null);
 						}}
 						placeholder="Subcategory name"
@@ -476,7 +468,6 @@ export default function CategoriesClient() {
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-4 md:p-6">
-
 			{/* Header */}
 			<div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<div>
@@ -576,10 +567,7 @@ export default function CategoriesClient() {
 						<p className="text-[var(--muted-foreground)] text-sm">
 							No categories yet
 						</p>
-						<Button
-							className="mt-4"
-							onClick={() => setShowNewForm(true)}
-						>
+						<Button className="mt-4" onClick={() => setShowNewForm(true)}>
 							<Plus size={16} />
 							Create Your First Category
 						</Button>
