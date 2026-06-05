@@ -1,6 +1,7 @@
 "use client";
 
 import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
+import { Gender } from "@prisma/client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import CoachProfile from "~/app/_components/client/CoachProfile";
@@ -73,11 +74,19 @@ function ProfilePageContent() {
 
 	const [serverError, setServerError] = useState<string>("");
 
+	// Gender is set-once (B1): editable only until the user has a value.
+	const [genderInput, setGenderInput] = useState<Gender | "">("");
+	const genderLocked = !!user?.gender;
+
 	const isFirstNameMissing = formData.firstName.trim().length === 0;
 	const isLastNameMissing = formData.lastName.trim().length === 0;
 	const isEmailMissing = formData.email.trim().length === 0;
+	const isGenderMissing = !genderLocked && !genderInput;
 	const isMissingRequiredFields =
-		isFirstNameMissing || isLastNameMissing || isEmailMissing;
+		isFirstNameMissing ||
+		isLastNameMissing ||
+		isEmailMissing ||
+		isGenderMissing;
 
 	// Initialize form when user data loads and handle joinClub URL parameter
 	useEffect(() => {
@@ -92,6 +101,7 @@ function ProfilePageContent() {
 			clubName: user.clubName || "",
 		});
 		setServerError("");
+		setGenderInput("");
 
 		// Handle automatic club assignment from URL parameter.
 		// This param is set by Clerk's forceRedirectUrl when users sign up/in
@@ -126,12 +136,15 @@ function ProfilePageContent() {
 
 		// Store current form data in case we need to restore it on error
 		const currentFormData = { ...formData };
-		updateProfile.mutate(formData, {
-			onError: () => {
-				// Preserve form data on error so user doesn't lose their changes
-				setFormData(currentFormData);
+		updateProfile.mutate(
+			{ ...formData, gender: genderInput || undefined },
+			{
+				onError: () => {
+					// Preserve form data on error so user doesn't lose their changes
+					setFormData(currentFormData);
+				},
 			},
-		});
+		);
 	};
 
 	const handleCancel = () => {
@@ -145,6 +158,7 @@ function ProfilePageContent() {
 				timeZone: user.timeZone || "",
 				clubName: user.clubName || "",
 			});
+			setGenderInput("");
 		}
 	};
 
@@ -159,7 +173,7 @@ function ProfilePageContent() {
 						<h1 className="mb-2 font-bold text-3xl">My Profile</h1>
 						{user && !isOnboardedUser(user) && (
 							<ErrorBanner
-								message="First name, last name, and email are required to complete onboarding."
+								message="First name, last name, email, and gender are required to complete onboarding."
 								className="mb-8"
 							/>
 						)}
@@ -357,6 +371,38 @@ function ProfilePageContent() {
 												<p className="required-field-message">
 													Email is required.
 												</p>
+											)}
+										</div>
+
+										<div>
+											<label className="mb-1 block font-medium text-gray-700 text-sm">
+												Gender
+											</label>
+											{genderLocked ? (
+												<div className="rounded-lg bg-gray-50 px-3 py-2 text-gray-700">
+													{user.gender === Gender.MALE ? "Male" : "Female"}
+													<span className="ml-2 text-gray-400 text-xs">
+														(can't be changed)
+													</span>
+												</div>
+											) : (
+												<>
+													<Select
+														value={genderInput}
+														onChange={(e) =>
+															setGenderInput(e.target.value as Gender | "")
+														}
+													>
+														<option value="">Select gender</option>
+														<option value={Gender.MALE}>Male</option>
+														<option value={Gender.FEMALE}>Female</option>
+													</Select>
+													{isGenderMissing && (
+														<p className="required-field-message">
+															Gender is required.
+														</p>
+													)}
+												</>
 											)}
 										</div>
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { Gender } from "@prisma/client";
 import {
 	Check,
 	ChevronsUpDown,
@@ -17,21 +18,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUrlPagination } from "~/app/_components/hooks/use-url-pagination";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
+import ManageTagsDialog from "~/app/_components/shared/ManageTagsDialog";
+import { TagEditor } from "~/app/_components/shared/TagEditor";
 import { useToast } from "~/app/_components/shared/Toast";
-import { PaginationControls } from "~/app/_components/shared/ui/pagination-controls";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "~/app/_components/shared/ui/command";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "~/app/_components/shared/ui/popover";
 import {
 	Dialog,
 	DialogBody,
@@ -41,10 +30,22 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "~/app/_components/shared/dialog";
-import ManageTagsDialog from "~/app/_components/shared/ManageTagsDialog";
-import { TagEditor } from "~/app/_components/shared/TagEditor";
+import {
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "~/app/_components/shared/ui/command";
+import { PaginationControls } from "~/app/_components/shared/ui/pagination-controls";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "~/app/_components/shared/ui/popover";
 import { Select } from "~/app/_components/shared/ui/select";
-import { cn, ROLE_HIERARCHY, assignableRoles, isAnyAdmin } from "~/lib/utils";
+import { ROLE_HIERARCHY, assignableRoles, cn, isAnyAdmin } from "~/lib/utils";
 import { type RouterInputs, api } from "~/trpc/react";
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ function CreateUserModal({
 	const [firstName, setFirstName] = useState("");
 	const [lastName, setLastName] = useState("");
 	const [email, setEmail] = useState("");
+	const [gender, setGender] = useState<Gender | "">("");
 	const [role, setRole] = useState<UserRole>("STUDENT");
 	const [facilityId, setFacilityId] = useState("");
 	const [createNewClub, setCreateNewClub] = useState(false);
@@ -170,6 +172,7 @@ function CreateUserModal({
 		setFirstName("");
 		setLastName("");
 		setEmail("");
+		setGender("");
 		setRole("STUDENT");
 		setFacilityId(facilities?.[0]?.facilityId ?? "");
 		setCreateNewClub(false);
@@ -220,6 +223,20 @@ function CreateUserModal({
 							value={email}
 							onChange={(e) => setEmail(e.target.value)}
 						/>
+					</div>
+
+					<div className="space-y-2">
+						<label className="font-medium text-[var(--foreground)] text-sm">
+							Gender
+						</label>
+						<Select
+							value={gender}
+							onChange={(e) => setGender(e.target.value as Gender | "")}
+						>
+							<option value="">Select gender</option>
+							<option value={Gender.MALE}>Male</option>
+							<option value={Gender.FEMALE}>Female</option>
+						</Select>
 					</div>
 
 					<div className="grid grid-cols-2 gap-4">
@@ -282,9 +299,7 @@ function CreateUserModal({
 										value={newClubShortName}
 										onChange={(e) =>
 											setNewClubShortName(
-												e.target.value
-													.toLowerCase()
-													.replace(/[^a-z0-9-]/g, ""),
+												e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
 											)
 										}
 									/>
@@ -318,6 +333,7 @@ function CreateUserModal({
 								firstName,
 								lastName,
 								email,
+								gender: gender as Gender,
 								role,
 								...(createNewClub
 									? {
@@ -334,6 +350,7 @@ function CreateUserModal({
 							!firstName.trim() ||
 							!lastName.trim() ||
 							!email.trim() ||
+							!gender ||
 							(!createNewClub && !facilityId) ||
 							(createNewClub &&
 								(!newClubName.trim() || !newClubShortName.trim()))
@@ -480,9 +497,7 @@ function EditUserModal({
 								}
 								disabled={updateProfileMutation.isPending}
 							>
-								{updateProfileMutation.isPending
-									? "Saving..."
-									: "Save Changes"}
+								{updateProfileMutation.isPending ? "Saving..." : "Save Changes"}
 							</Button>
 						)}
 					</div>
@@ -547,9 +562,7 @@ function EditUserModal({
 												))}
 											</Select>
 										)}
-										{isMember && !canEdit && (
-											<RoleBadge role={currentRole} />
-										)}
+										{isMember && !canEdit && <RoleBadge role={currentRole} />}
 									</div>
 								);
 							})}
@@ -576,9 +589,7 @@ function EditUserModal({
 								}
 								disabled={setUserTagsMutation.isPending}
 							>
-								{setUserTagsMutation.isPending
-									? "Saving..."
-									: "Save Tags"}
+								{setUserTagsMutation.isPending ? "Saving..." : "Save Tags"}
 							</Button>
 						</div>
 					)}
@@ -721,7 +732,9 @@ export default function ClientsList({
 			]);
 			const csv = [
 				["First Name", "Last Name", "Email"],
-				...rows.map((r) => r.map((v) => `"${v.replace(/"/g, '""')}"`).join(",")),
+				...rows.map((r) =>
+					r.map((v) => `"${v.replace(/"/g, '""')}"`).join(","),
+				),
 			].join("\n");
 
 			const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -745,17 +758,13 @@ export default function ClientsList({
 	}, [search, facilityFilter, roleFilter, tagIdsFromUrl, page, limit]);
 
 	// Current page user IDs for "select all" logic
-	const currentPageUserIds = useMemo(
-		() => users.map((u) => u.userId),
-		[users],
-	);
+	const currentPageUserIds = useMemo(() => users.map((u) => u.userId), [users]);
 
 	const allSelected =
 		currentPageUserIds.length > 0 &&
 		currentPageUserIds.every((id) => selectedUserIds.has(id));
 	const someSelected =
-		!allSelected &&
-		currentPageUserIds.some((id) => selectedUserIds.has(id));
+		!allSelected && currentPageUserIds.some((id) => selectedUserIds.has(id));
 
 	function toggleSelectAll() {
 		if (allSelected) {
@@ -787,8 +796,12 @@ export default function ClientsList({
 		onSuccess: (result) => {
 			void utils.user.listClubUsers.invalidate();
 			const parts: string[] = [];
-			if (result.added > 0) parts.push(`Added to ${result.added} client${result.added === 1 ? "" : "s"}`);
-			if (result.skipped > 0) parts.push(`${result.skipped} already at tag limit`);
+			if (result.added > 0)
+				parts.push(
+					`Added to ${result.added} client${result.added === 1 ? "" : "s"}`,
+				);
+			if (result.skipped > 0)
+				parts.push(`${result.skipped} already at tag limit`);
 			toast(parts.join(", ") || "No changes made", "success");
 			setSelectedUserIds(new Set());
 			setBulkTagPopoverOpen(false);
@@ -801,7 +814,6 @@ export default function ClientsList({
 
 	return (
 		<div className="p-6">
-
 			{/* Header */}
 			<div className="mb-6 flex items-center justify-between">
 				<h1 className="font-semibold text-2xl text-[var(--foreground)]">
@@ -861,75 +873,75 @@ export default function ClientsList({
 				</Select>
 
 				{/* Tags multi-select filter — deferred to client to avoid Radix hydration ID mismatch */}
-				{mounted && <Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
-					<PopoverTrigger asChild>
-						<Button
-							variant="outline"
-							role="combobox"
-							aria-expanded={tagPopoverOpen}
-							className="w-auto shrink-0 justify-between gap-1"
-						>
-							Tags
-							{tagIdsFromUrl.length > 0 && (
-								<span className="ml-1 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[var(--primary)] px-1.5 font-semibold text-[10px] text-white">
-									{tagIdsFromUrl.length}
-								</span>
-							)}
-							<ChevronsUpDown className="ml-1 h-4 w-4 shrink-0 opacity-50" />
-						</Button>
-					</PopoverTrigger>
-					<PopoverContent className="w-[220px] p-0" align="start">
-						<Command>
-							<CommandInput placeholder="Search tags..." />
-							<CommandList>
-								<CommandEmpty>No tags found.</CommandEmpty>
+				{mounted && (
+					<Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
+						<PopoverTrigger asChild>
+							<Button
+								variant="outline"
+								role="combobox"
+								aria-expanded={tagPopoverOpen}
+								className="w-auto shrink-0 justify-between gap-1"
+							>
+								Tags
 								{tagIdsFromUrl.length > 0 && (
-									<CommandGroup>
-										<CommandItem
-											value="__clear_all__"
-											onSelect={() => setTagFilter([])}
-										>
-											<X className="mr-2 h-4 w-4" />
-											<span>Clear</span>
-										</CommandItem>
-									</CommandGroup>
+									<span className="ml-1 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[var(--primary)] px-1.5 font-semibold text-[10px] text-white">
+										{tagIdsFromUrl.length}
+									</span>
 								)}
-								<CommandGroup>
-									{[...(clubTags ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((tag) => {
-										const isSelected = tagIdsFromUrl.includes(
-											tag.tagId,
-										);
-										return (
+								<ChevronsUpDown className="ml-1 h-4 w-4 shrink-0 opacity-50" />
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent className="w-[220px] p-0" align="start">
+							<Command>
+								<CommandInput placeholder="Search tags..." />
+								<CommandList>
+									<CommandEmpty>No tags found.</CommandEmpty>
+									{tagIdsFromUrl.length > 0 && (
+										<CommandGroup>
 											<CommandItem
-												key={tag.tagId}
-												value={tag.name}
-												onSelect={() => toggleTag(tag.tagId)}
+												value="__clear_all__"
+												onSelect={() => setTagFilter([])}
 											>
-												<Check
-													className={cn(
-														"mr-2 h-4 w-4",
-														isSelected
-															? "opacity-100"
-															: "opacity-0",
-													)}
-												/>
-												<span
-													className="mr-2 inline-block h-3 w-3 shrink-0 rounded-full"
-													style={{
-														backgroundColor: tag.bgColor,
-													}}
-												/>
-												<span className="truncate capitalize">
-													{tag.name}
-												</span>
+												<X className="mr-2 h-4 w-4" />
+												<span>Clear</span>
 											</CommandItem>
-										);
-									})}
-								</CommandGroup>
-							</CommandList>
-						</Command>
-					</PopoverContent>
-				</Popover>}
+										</CommandGroup>
+									)}
+									<CommandGroup>
+										{[...(clubTags ?? [])]
+											.sort((a, b) => a.name.localeCompare(b.name))
+											.map((tag) => {
+												const isSelected = tagIdsFromUrl.includes(tag.tagId);
+												return (
+													<CommandItem
+														key={tag.tagId}
+														value={tag.name}
+														onSelect={() => toggleTag(tag.tagId)}
+													>
+														<Check
+															className={cn(
+																"mr-2 h-4 w-4",
+																isSelected ? "opacity-100" : "opacity-0",
+															)}
+														/>
+														<span
+															className="mr-2 inline-block h-3 w-3 shrink-0 rounded-full"
+															style={{
+																backgroundColor: tag.bgColor,
+															}}
+														/>
+														<span className="truncate capitalize">
+															{tag.name}
+														</span>
+													</CommandItem>
+												);
+											})}
+									</CommandGroup>
+								</CommandList>
+							</Command>
+						</PopoverContent>
+					</Popover>
+				)}
 
 				{/* Manage Tags button — club admins+ only */}
 				{isAnyAdmin({ userType }) && (
@@ -973,10 +985,14 @@ export default function ClientsList({
 			{selectedUserIds.size > 0 && (
 				<div className="mb-4 flex items-center gap-3 rounded-lg bg-blue-50 px-4 py-2.5">
 					<span className="font-medium text-blue-900 text-sm">
-						{selectedUserIds.size} client{selectedUserIds.size === 1 ? "" : "s"} selected
+						{selectedUserIds.size} client{selectedUserIds.size === 1 ? "" : "s"}{" "}
+						selected
 					</span>
 
-					<Popover open={bulkTagPopoverOpen} onOpenChange={setBulkTagPopoverOpen}>
+					<Popover
+						open={bulkTagPopoverOpen}
+						onOpenChange={setBulkTagPopoverOpen}
+					>
 						<PopoverTrigger asChild>
 							<Button
 								variant="outline"
@@ -1137,9 +1153,7 @@ export default function ClientsList({
 										<input
 											type="checkbox"
 											checked={selectedUserIds.has(u.userId)}
-											onChange={() =>
-												toggleSelectUser(u.userId)
-											}
+											onChange={() => toggleSelectUser(u.userId)}
 											aria-label={`Select ${u.firstName ?? ""} ${u.lastName ?? ""}`}
 											className="h-4 w-4 rounded border-gray-300 accent-[var(--primary)]"
 										/>
@@ -1171,85 +1185,60 @@ export default function ClientsList({
 										</div>
 									</td>
 									<td className="px-4 py-3">
-										{u.userTags &&
-											u.userTags.length > 0 && (
-												<div className="flex items-center gap-1">
-													{u.userTags
-														.slice(0, 2)
-														.map((ut) => (
-															<span
-																key={ut.tagId}
-																style={{
-																	backgroundColor:
-																		ut.tag
-																			.bgColor,
-																	color: ut.tag
-																		.textColor,
-																}}
-																className="inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs capitalize"
+										{u.userTags && u.userTags.length > 0 && (
+											<div className="flex items-center gap-1">
+												{u.userTags.slice(0, 2).map((ut) => (
+													<span
+														key={ut.tagId}
+														style={{
+															backgroundColor: ut.tag.bgColor,
+															color: ut.tag.textColor,
+														}}
+														className="inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs capitalize"
+													>
+														{ut.tag.name}
+													</span>
+												))}
+												{u.userTags.length > 2 && (
+													<Popover>
+														<PopoverTrigger asChild>
+															<button
+																type="button"
+																className="inline-flex cursor-pointer items-center rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600 text-xs hover:bg-gray-200"
 															>
-																{ut.tag.name}
-															</span>
-														))}
-													{u.userTags.length > 2 && (
-														<Popover>
-															<PopoverTrigger
-																asChild
-															>
-																<button
-																	type="button"
-																	className="inline-flex cursor-pointer items-center rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600 text-xs hover:bg-gray-200"
-																>
-																	+
-																	{u.userTags
-																		.length -
-																		2}{" "}
-																	more
-																</button>
-															</PopoverTrigger>
-															<PopoverContent
-																align="start"
-																className="w-auto max-w-xs p-3"
-															>
-																<div className="flex flex-wrap gap-1.5">
-																	{u.userTags.map(
-																		(
-																			ut,
-																		) => (
-																			<span
-																				key={
-																					ut.tagId
-																				}
-																				style={{
-																					backgroundColor:
-																						ut
-																							.tag
-																							.bgColor,
-																					color: ut
-																						.tag
-																						.textColor,
-																				}}
-																				className="inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs capitalize"
-																			>
-																				{ut.tag.name}
-																			</span>
-																		),
-																	)}
-																</div>
-															</PopoverContent>
-														</Popover>
-													)}
-												</div>
-											)}
+																+{u.userTags.length - 2} more
+															</button>
+														</PopoverTrigger>
+														<PopoverContent
+															align="start"
+															className="w-auto max-w-xs p-3"
+														>
+															<div className="flex flex-wrap gap-1.5">
+																{u.userTags.map((ut) => (
+																	<span
+																		key={ut.tagId}
+																		style={{
+																			backgroundColor: ut.tag.bgColor,
+																			color: ut.tag.textColor,
+																		}}
+																		className="inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs capitalize"
+																	>
+																		{ut.tag.name}
+																	</span>
+																))}
+															</div>
+														</PopoverContent>
+													</Popover>
+												)}
+											</div>
+										)}
 									</td>
 									<td className="px-4 py-3">
 										<div className="flex items-center gap-1">
 											<Button
 												variant="ghost"
 												size="icon"
-												onClick={() =>
-													setEditingUserId(u.userId)
-												}
+												onClick={() => setEditingUserId(u.userId)}
 												aria-label={`Edit ${u.firstName ?? ""} ${u.lastName ?? ""}`}
 												title="Edit"
 											>

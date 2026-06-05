@@ -327,6 +327,7 @@ export type UserForFrontend = {
 	email?: string | null;
 	firstName?: string | null;
 	lastName?: string | null;
+	gender: UserWithProfiles["gender"];
 	profileImage?: string | null;
 	timeZone?: string | null;
 	clubShortName: string;
@@ -412,6 +413,7 @@ export function formatUserForFrontend(raw: UserWithProfiles): UserForFrontend {
 		email: raw.email,
 		firstName: raw.firstName,
 		lastName: raw.lastName,
+		gender: raw.gender,
 		profileImage: raw.profileImage ? String(raw.profileImage) : null,
 		timeZone: raw.timeZone,
 		clubShortName: raw.clubShortName,

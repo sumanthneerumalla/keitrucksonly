@@ -101,10 +101,18 @@ export function isOnboardedUser(user: {
 	firstName?: string | null;
 	lastName?: string | null;
 	email?: string | null;
+	gender?: string | null;
 }): boolean {
 	const firstName = user.firstName?.trim() ?? "";
 	const lastName = user.lastName?.trim() ?? "";
 	const email = user.email?.trim() ?? "";
+	const gender = user.gender?.trim() ?? "";
 
-	return firstName.length > 0 && lastName.length > 0 && email.length > 0;
+	// Gender is required for onboarding (B1) — set-once, feeds GBR's rating category.
+	return (
+		firstName.length > 0 &&
+		lastName.length > 0 &&
+		email.length > 0 &&
+		gender.length > 0
+	);
 }
