@@ -24,6 +24,7 @@ services:
       - BUILD_TIMESTAMP=${BUILD_TIMESTAMP:-unknown}
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-}
+      - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-}
     volumes:
       # For development: mount source code for hot reloading
       - ./src:/app/src

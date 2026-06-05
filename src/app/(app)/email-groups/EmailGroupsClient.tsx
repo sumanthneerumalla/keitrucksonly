@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "~/trpc/react";
 import { isAnyAdmin } from "~/lib/utils";
 import Link from "next/link";
-import { Plus, Users, Mail, RefreshCw } from "lucide-react";
+import { Plus, Users, Mail, RefreshCw, History } from "lucide-react";
 
 interface Props {
 	userType: string;
@@ -22,6 +22,10 @@ export default function EmailGroupsClient({
 	const [showCreateModal, setShowCreateModal] = useState(false);
 
 	const myGroups = api.emailGroups.getMyGroups.useQuery();
+	const allHistoryQuery = api.emailGroups.getAllSendHistory.useQuery(
+		{ facilityId: activeFacilityId ?? "" },
+		{ enabled: !!activeFacilityId },
+	);
 	const adminGroups = api.emailGroups.getAllForFacility.useQuery(
 		{ facilityId: activeFacilityId ?? "" },
 		{ enabled: isAnyAdmin({ userType }) && !!activeFacilityId },
@@ -102,6 +106,127 @@ export default function EmailGroupsClient({
 					))}
 				</div>
 			)}
+
+			{/* Send History */}
+			<div className="mt-8 rounded-lg border">
+				<div className="border-b px-4 py-3">
+					<h2 className="flex items-center gap-2 font-medium">
+						<History className="h-4 w-4" />
+						Send History
+					</h2>
+				</div>
+				{allHistoryQuery.isLoading && (
+					<div className="flex items-center justify-center py-8">
+						<RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+					</div>
+				)}
+				{allHistoryQuery.data && allHistoryQuery.data.length === 0 && (
+					<p className="px-4 py-8 text-center text-sm text-muted-foreground">
+						No emails sent yet.
+					</p>
+				)}
+				{allHistoryQuery.data && allHistoryQuery.data.length > 0 && (
+					<div className="overflow-x-auto">
+						<table className="w-full text-sm">
+							<thead>
+								<tr className="border-b bg-accent/30 text-xs font-medium text-muted-foreground">
+									<th className="px-4 py-2.5 text-left">Resend ID</th>
+									<th className="px-4 py-2.5 text-left">Subject</th>
+									<th className="px-4 py-2.5 text-left">Recipients</th>
+									<th className="px-4 py-2.5 text-left">Status</th>
+									<th className="px-4 py-2.5 text-left">Sent</th>
+								</tr>
+							</thead>
+							<tbody>
+								{allHistoryQuery.data.map((log: any) => (
+									<tr
+										key={log.sendLogId}
+										className="border-b last:border-b-0 hover:bg-accent/20"
+									>
+										{/* Resend ID */}
+										<td className="px-4 py-3">
+											{log.resendId ? (
+												<span
+													title={log.resendId}
+													className="font-mono text-xs text-muted-foreground"
+												>
+													{log.resendId.slice(0, 16)}…
+												</span>
+											) : (
+												<span className="text-xs text-muted-foreground/50">—</span>
+											)}
+										</td>
+										{/* Subject */}
+										<td className="px-4 py-3">
+											<Link
+												href={`/email-groups/${log.emailGroupId}`}
+												className="font-medium hover:underline"
+											>
+												{log.subject}
+											</Link>
+										</td>
+										{/* Group + counts */}
+										<td className="px-4 py-3 text-muted-foreground">
+											{log.emailGroup?.name ?? "—"}
+											<span className="ml-1 text-xs">
+												· {log.recipientCount} sent
+												{log.skippedCount > 0 && (
+													<span className="ml-1 text-amber-600">
+														/ {log.skippedCount} skipped
+													</span>
+												)}
+											</span>
+										</td>
+										{/* Status */}
+										<td className="px-4 py-3">
+											<div className="flex flex-wrap gap-1">
+												{log.status === "sent" && (
+													<span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+														sent
+													</span>
+												)}
+												{log.status === "partial_failure" && (
+													<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+														partial
+													</span>
+												)}
+												{log.status === "failed" && (
+													<span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+														API rejected
+													</span>
+												)}
+												{log.status === "sending" && (
+													<span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+														sending
+													</span>
+												)}
+												{!log.status && (
+													<span className="rounded-full bg-accent px-2 py-0.5 text-xs text-muted-foreground">
+														—
+													</span>
+												)}
+												{(log._count?.recipients ?? 0) > 0 && (
+													<span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+														{log._count.recipients} bounced
+													</span>
+												)}
+											</div>
+										</td>
+										{/* Date */}
+										<td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
+											{new Date(log.sentAt).toLocaleDateString(undefined, {
+												day: "numeric",
+												month: "short",
+												year: "numeric",
+											})}
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				)}
+			</div>
 		</div>
 	);
 }

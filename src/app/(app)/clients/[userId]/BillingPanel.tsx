@@ -1,6 +1,6 @@
 "use client";
 
-import { CreditCard, Receipt } from "lucide-react";
+import { CreditCard, Mail, Receipt } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -75,6 +75,12 @@ interface BillingPanelProps {
 	 * button just doesn't appear.
 	 */
 	clubChargesEnabled?: boolean;
+	/**
+	 * Whether the current viewer is a club admin or platform admin. When true,
+	 * an "Email Invoice" button appears on each non-void invoice row so the
+	 * admin can send the PDF to the client directly from this panel.
+	 */
+	viewerIsAdmin?: boolean;
 }
 
 type InvoiceRow = {
@@ -183,6 +189,7 @@ export default function BillingPanel({
 	userId,
 	audience = "staff",
 	clubChargesEnabled = false,
+	viewerIsAdmin = false,
 }: BillingPanelProps) {
 	const isStaff = audience === "staff";
 	const { toast } = useToast();
@@ -239,6 +246,18 @@ export default function BillingPanel({
 	// Matches RecordPaymentModal's pattern: tRPC's `isPending` is the single
 	// source of truth for the in-flight flag — no separate useState to drift.
 	const closing = closeInvoiceMutation.isPending;
+
+	const sendEmailMutation = api.billing.sendInvoiceEmail.useMutation({
+		onSuccess: (result) => {
+			toast(`Invoice emailed to ${result.sentTo}`, "success");
+		},
+		onError: (err) => {
+			toast(err.message, "error");
+		},
+	});
+	const sendingInvoiceId = sendEmailMutation.isPending
+		? (sendEmailMutation.variables?.invoiceId ?? null)
+		: null;
 
 	return (
 		<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
@@ -518,6 +537,25 @@ export default function BillingPanel({
 																			}
 																		>
 																			Mark as due
+																		</Button>
+																	) : null}
+																	{isStaff &&
+																	viewerIsAdmin &&
+																	inv.status !== "void" ? (
+																		<Button
+																			variant="outline"
+																			size="sm"
+																			disabled={sendEmailMutation.isPending}
+																			onClick={() =>
+																				sendEmailMutation.mutate({
+																					invoiceId: inv.invoiceId,
+																				})
+																			}
+																		>
+																			<Mail size={14} />
+																			{sendingInvoiceId === inv.invoiceId
+																				? "Sending…"
+																				: "Email Invoice"}
 																		</Button>
 																	) : null}
 																</div>

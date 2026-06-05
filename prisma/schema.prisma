@@ -1578,6 +1578,8 @@ model EmailGroup {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
+  archivedAt  DateTime?
+
   members    EmailGroupMember[]
   exclusions EmailGroupExclusion[]
   sendLogs   EmailSendLog[]
@@ -1585,6 +1587,7 @@ model EmailGroup {
   @@index([clubShortName])
   @@index([facilityId])
   @@index([createdByUserId])
+  @@index([archivedAt])
 }
 
 // EmailGroupMember — explicit membership in an email group (from filter sync or manual add)
@@ -1617,18 +1620,39 @@ model EmailGroupExclusion {
   @@index([userId])
 }
 
+// EmailSendStatus — lifecycle of a group email campaign. Lowercase labels match
+// the values written by the send pipeline (emailSend.ts) and the Resend webhook.
+enum EmailSendStatus {
+  queued
+  sending
+  sent
+  partial_failure
+  failed
+}
+
 // EmailSendLog — audit log of every email sent to a group
 model EmailSendLog {
-  sendLogId      String     @id @default(cuid())
-  emailGroupId   String
-  emailGroup     EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
-  senderUserId   String
-  sender         User       @relation("EmailSender", fields: [senderUserId], references: [userId])
-  subject        String     @db.VarChar(500)
-  bodyHtml       String     @db.Text
-  attachmentUrls String[]
-  recipientCount Int
-  sentAt         DateTime   @default(now())
+  sendLogId       String     @id @default(cuid())
+  emailGroupId    String
+  emailGroup      EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  senderUserId    String
+  sender          User       @relation("EmailSender", fields: [senderUserId], references: [userId])
+  subject         String     @db.VarChar(500)
+  bodyHtml        String     @db.Text
+  bodyText        String?    @db.Text
+  attachmentUrls  String[]
+  resendId        String?    @db.VarChar(100)
+  status          EmailSendStatus @default(sent)
+  replyToEmail    String?    @db.VarChar(255)
+  fromDisplayName String?    @db.VarChar(200)
+  recipientCount  Int
+  skippedCount    Int        @default(0)
+  skippedRecipients Json?
+  errorMessage    String?    @db.Text
+  // Test sends (the "Send Test to Me" button) are logged for audit/delivery
+  // tracking but excluded from the user-facing send history.
+  isTest          Boolean    @default(false)
+  sentAt          DateTime   @default(now())
 
   recipients EmailSendRecipient[]
 
@@ -1639,16 +1663,24 @@ model EmailSendLog {
 
 // EmailSendRecipient — per-recipient delivery record for a sent email
 model EmailSendRecipient {
-  id        String       @id @default(cuid())
-  sendLogId String
-  sendLog   EmailSendLog @relation(fields: [sendLogId], references: [sendLogId], onDelete: Cascade)
-  userId    String
-  user      User         @relation("EmailRecipient", fields: [userId], references: [userId])
-  email     String       @db.VarChar(255) // snapshot at send time
-  status    String       @db.VarChar(20) // "sent" | "failed"
+  id              String       @id @default(cuid())
+  sendLogId       String
+  sendLog         EmailSendLog @relation(fields: [sendLogId], references: [sendLogId], onDelete: Cascade)
+  userId          String
+  user            User         @relation("EmailRecipient", fields: [userId], references: [userId])
+  email           String       @db.VarChar(255) // snapshot at send time
+  status          String       @db.VarChar(20) // "sent" | "failed"
+  resendMessageId String?      @db.VarChar(100)
+  deliveredAt     DateTime?
+  openedAt        DateTime?
+  openCount       Int          @default(0)
+  bouncedAt       DateTime?
+  complainedAt    DateTime?
+  error           String?      @db.Text
 
   @@index([sendLogId])
   @@index([userId])
+  @@index([resendMessageId])
 }
 
 // Phase 9b — cached invoice PDF renders.

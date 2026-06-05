@@ -13,6 +13,8 @@ export const env = createEnv({
 			.default("development"),
 		RESEND_API_KEY: z.string().optional(),
 		RESEND_FROM_EMAIL: z.string().optional(),
+		RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
+		RESEND_TEST_TO_EMAIL: z.string().email().optional(),
 		// Phase 12a — Stripe Connect. All optional so the app boots without
 		// Stripe configured; payment surfaces lazy-fail when called (see
 		// `src/server/services/payments/stripe.ts`).
@@ -54,6 +56,8 @@ export const env = createEnv({
 		NODE_ENV: process.env.NODE_ENV,
 		RESEND_API_KEY: process.env.RESEND_API_KEY,
 		RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
+		RESEND_WEBHOOK_SECRET: process.env.RESEND_WEBHOOK_SECRET,
+		RESEND_TEST_TO_EMAIL: process.env.RESEND_TEST_TO_EMAIL,
 		STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
 		STRIPE_WEBHOOK_SECRET_PLATFORM: process.env.STRIPE_WEBHOOK_SECRET_PLATFORM,
 		STRIPE_WEBHOOK_SECRET_CONNECT: process.env.STRIPE_WEBHOOK_SECRET_CONNECT,
