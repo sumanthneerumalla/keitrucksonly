@@ -13,6 +13,7 @@ import {
 	withRetry,
 	sanitizeEmailHtml,
 	htmlToText,
+	extractBatchEmailIds,
 } from "~/server/services/email/resend";
 
 export const emailSendRouter = createTRPCRouter({
@@ -239,16 +240,20 @@ export const emailSendRouter = createTRPCRouter({
 							});
 						}
 					} else {
-						const arr: any[] = Array.isArray(data) ? data : ((data as any)?.data ?? []);
-						const ids: string[] = arr.map((d: any) => d?.id ?? null);
+						const ids = extractBatchEmailIds(data);
 						if (!firstResendId && ids[0]) firstResendId = ids[0];
 
 						batch.forEach((m: any, idx: number) => {
+							const resendMessageId = ids[idx] ?? null;
 							recipientResults.push({
 								userId: m.user.userId,
 								email: m.user.email!,
-								status: "sent",
-								resendMessageId: ids[idx] ?? null,
+								// Without a Resend id we can never reconcile delivery
+								// via the webhook, so treat a missing id as a failure
+								// (keeps the recipient retry-eligible) rather than a
+								// false "sent".
+								status: resendMessageId ? "sent" : "failed",
+								resendMessageId,
 							});
 						});
 					}
@@ -377,23 +382,30 @@ export const emailSendRouter = createTRPCRouter({
 					if (error) {
 						failedCount += batch.length;
 					} else {
-						const ids: string[] = Array.isArray(data)
-							? data.map((d: any) => d?.id ?? null)
-							: [];
+						const ids = extractBatchEmailIds(data);
 
 						for (let j = 0; j < batch.length; j++) {
 							const r = batch[j];
 							if (!r) continue;
-							await ctx.db.emailSendRecipient.update({
-								where: { id: r.id },
-								data: {
-									status: "sent",
-									resendMessageId: ids[j] ?? null,
-									error: null,
-								},
-							});
+							const resendMessageId = ids[j] ?? null;
+							// Only count a retry as a success when Resend returned an
+							// id we can track. A missing id leaves the recipient as
+							// "failed" with resendMessageId=null so a later retry
+							// re-picks them instead of double-sending to "sent" rows.
+							if (resendMessageId) {
+								await ctx.db.emailSendRecipient.update({
+									where: { id: r.id },
+									data: {
+										status: "sent",
+										resendMessageId,
+										error: null,
+									},
+								});
+								successCount += 1;
+							} else {
+								failedCount += 1;
+							}
 						}
-						successCount += batch.length;
 					}
 				} catch (err) {
 					console.error("[EmailSend] Retry batch exception:", err);

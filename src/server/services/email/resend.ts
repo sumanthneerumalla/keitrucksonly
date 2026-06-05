@@ -67,6 +67,25 @@ export async function withRetry<T>(
 	throw lastError;
 }
 
+// ─── Batch response parsing ──────────────────────────────────────────────────
+
+/**
+ * Extract the per-email Resend IDs from a `batch.send` success response.
+ *
+ * For resend@6, the awaited result is `{ data, error }` where, on success,
+ * `data` is `{ data: [{ id }, …] }` (the IDs are nested one level deep). The
+ * array is returned in the same order as the input batch, so `ids[i]` maps to
+ * `batch[i]`. We return `(string | null)[]` so callers can detect any missing
+ * id and treat that recipient as un-tracked rather than silently "sent".
+ *
+ * Use this in BOTH the send and retry paths so the two never drift apart.
+ */
+export function extractBatchEmailIds(data: unknown): (string | null)[] {
+	const inner = (data as { data?: { id?: string }[] } | null)?.data;
+	if (!Array.isArray(inner)) return [];
+	return inner.map((d) => d?.id ?? null);
+}
+
 // ─── HTML sanitization ───────────────────────────────────────────────────────
 
 const ALLOWED_TAGS = [
