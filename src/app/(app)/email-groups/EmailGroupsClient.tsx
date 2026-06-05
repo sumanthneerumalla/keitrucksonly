@@ -22,7 +22,10 @@ export default function EmailGroupsClient({
 	const [showCreateModal, setShowCreateModal] = useState(false);
 
 	const myGroups = api.emailGroups.getMyGroups.useQuery();
-	const allHistoryQuery = api.emailGroups.getAllSendHistory.useQuery();
+	const allHistoryQuery = api.emailGroups.getAllSendHistory.useQuery(
+		{ facilityId: activeFacilityId ?? "" },
+		{ enabled: !!activeFacilityId },
+	);
 	const adminGroups = api.emailGroups.getAllForFacility.useQuery(
 		{ facilityId: activeFacilityId ?? "" },
 		{ enabled: isAnyAdmin({ userType }) && !!activeFacilityId },

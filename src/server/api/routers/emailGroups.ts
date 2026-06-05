@@ -8,7 +8,30 @@ import {
 	createTRPCRouter,
 	staffProcedure,
 } from "~/server/api/trpc";
-import { getCurrentUser, isAnyAdmin } from "~/server/utils/utils";
+import { getCurrentUser, isAnyAdmin, isPlatformAdmin } from "~/server/utils/utils";
+
+// Ensures the caller is allowed to read data scoped to `facilityId`. Platform
+// admins may target any facility; everyone else is confined to facilities that
+// belong to their own club (cross-tenant guard). Throws NOT_FOUND / FORBIDDEN.
+async function assertFacilityInCallerClub(
+	ctx: { db: any },
+	user: { userType: string; clubShortName: string },
+	facilityId: string,
+) {
+	const facility = await ctx.db.clubFacility.findUnique({
+		where: { facilityId },
+		select: { clubShortName: true },
+	});
+	if (!facility) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Facility not found" });
+	}
+	if (!isPlatformAdmin(user) && facility.clubShortName !== user.clubShortName) {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message: "You can only access facilities in your own club",
+		});
+	}
+}
 
 // ─── Zod Schemas ────────────────────────────────────────────────────────────
 
@@ -275,6 +298,8 @@ export const emailGroupsRouter = createTRPCRouter({
 			if (!isAnyAdmin(user)) {
 				throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
 			}
+			// Cross-tenant guard: a club admin must not read another club's facility.
+			await assertFacilityInCallerClub(ctx, user, input.facilityId);
 
 			return ctx.db.emailGroup.findMany({
 				where: { facilityId: input.facilityId, archivedAt: null },
@@ -530,15 +555,23 @@ export const emailGroupsRouter = createTRPCRouter({
 			};
 		}),
 
-	// Get send history across all accessible groups (for the list page)
+	// Get send history for the active facility (for the list page). Scoped to a
+	// single facility so a club admin never sees another club's/facility's sends.
 	getAllSendHistory: staffProcedure
-		.query(async ({ ctx }) => {
+		.input(z.object({ facilityId: z.string() }))
+		.query(async ({ ctx, input }) => {
 			const user = await getCurrentUser(ctx);
+			// Cross-tenant guard: confine non-platform admins to their own club's facility.
+			await assertFacilityInCallerClub(ctx, user, input.facilityId);
 
 			const accessibleGroups = await ctx.db.emailGroup.findMany({
 				where: isAnyAdmin(user)
-					? { archivedAt: null }
-					: { archivedAt: null, members: { some: { userId: user.userId } } },
+					? { facilityId: input.facilityId, archivedAt: null }
+					: {
+							facilityId: input.facilityId,
+							archivedAt: null,
+							members: { some: { userId: user.userId } },
+						},
 				select: { emailGroupId: true },
 			});
 
