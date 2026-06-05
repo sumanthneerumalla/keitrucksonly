@@ -1,12 +1,13 @@
 # Per-Club Member Profile — Foundation Design (Models 1–3)
 
-> Status: **BUILT + REBOUND** (2026-06-04) — `MemberClubProfile` table + migration
-> `20260604222752_add_member_club_profile` applied on dev (backfill lives **inside the migration
-> SQL**, idempotent via deterministic ids + `ON CONFLICT`, runs automatically on `migrate deploy`).
-> **PR1 (DOB consolidation)** and **PR2 (per-club rebind)** are done: the staff card + invoice
-> phone + email age-filter now read/write `MemberClubProfile`/`User.dateOfBirth`, NOT the blob.
-> Remaining: **PR3 cutover** (drop the now-unused `StudentProfile.profileData` column, ~2 weeks
-> after stable) and the **new-field UI** (address/emergency/referral). See §10.
+> Status: **COMPLETE** (2026-06-05) — `MemberClubProfile` table + migration
+> `20260604222752_add_member_club_profile` (backfill lives **inside the migration SQL**, idempotent
+> via deterministic ids + `ON CONFLICT`). **PR1 (DOB consolidation)**, **PR2 (per-club rebind)**,
+> **PR3 cutover** (`20260605000000_drop_student_profile_data` drops the blob column), and the
+> **full staff UI** (all per-club fields incl. address/emergency/referral) are done. The blob is
+> gone; member data is per-club on `MemberClubProfile`, DOB global on `User`, skillLevel global on
+> `StudentProfile`. Remaining future work: none required — Model 4 (waivers) and onboarding wizard
+> stay out of scope. See §10.
 > Scope: data-model foundation only. **No** waiver/consent/signature system and **no**
 > onboarding wizard this round (both deferred — see "Out of scope").
 
@@ -289,9 +290,11 @@ handled above. Safe to build post-stabilization.
    per-club row; `getStudentDetail` returns top-level `profileData` from it (missing row → all-null);
    invoice phone (`billing.ts`, `assemble.ts`) reads `MemberClubProfile.phone` for the invoice's club.
    `phoneFromProfileData`/`src/lib/studentProfile.ts` retired. `skillLevel` untouched.
-3. ⬜ **PR3 cutover (~2 weeks after stable):** drop the now-unused `StudentProfile.profileData` column
-   (migration) — the app no longer reads or writes it. `StudentProfile.skillLevel` is kept.
-4. ⬜ **Later pass:** build the form UI for the 8 new contact/emergency/referral fields.
+3. ✅ **PR3 cutover (DONE — migration `20260605000000_drop_student_profile_data`):** dropped the
+   now-unused `StudentProfile.profileData` column. `StudentProfile.skillLevel` kept.
+4. ✅ **Staff UI (DONE):** `ProfileFieldsCard` now edits all per-club fields, grouped into Contact /
+   Address / Emergency contact / How they heard / Notes sections. Server schema, `updateStudentProfileData`,
+   and `getStudentDetail` carry all fields.
 
 **Carry-over to verify at build time:** every reader tolerates a NULL `MemberClubProfile`
 (all-fields-null, no throw); backfill iterates `UserClub`, excludes primary from the placeholder

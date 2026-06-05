@@ -196,6 +196,15 @@ const getStudentDetailSchema = z.object({
 const studentProfileDataSchema = z
 	.object({
 		phone: z.string().trim().max(32).optional(),
+		streetAddress: z.string().trim().max(200).optional(),
+		city: z.string().trim().max(100).optional(),
+		state: z.string().trim().max(50).optional(),
+		zipCode: z.string().trim().max(20).optional(),
+		emergencyContactName: z.string().trim().max(120).optional(),
+		emergencyContactPhone: z.string().trim().max(32).optional(),
+		emergencyContactRelationship: z.string().trim().max(50).optional(),
+		referralSource: z.string().trim().max(120).optional(),
+		howHeard: z.string().trim().max(120).optional(),
 		medicalNotes: z.string().max(2000).optional(),
 		allergies: z.string().max(1000).optional(),
 		generalNotes: z.string().max(5000).optional(),
@@ -2126,6 +2135,15 @@ export const userRouter = createTRPCRouter({
 						where: { clubShortName: ctx.user.clubShortName },
 						select: {
 							phone: true,
+							streetAddress: true,
+							city: true,
+							state: true,
+							zipCode: true,
+							emergencyContactName: true,
+							emergencyContactPhone: true,
+							emergencyContactRelationship: true,
+							referralSource: true,
+							howHeard: true,
 							medicalNotes: true,
 							allergies: true,
 							generalNotes: true,
@@ -2175,6 +2193,18 @@ export const userRouter = createTRPCRouter({
 				// is independent of whether a StudentProfile exists.
 				profileData: {
 					phone: memberClubProfile?.phone ?? undefined,
+					streetAddress: memberClubProfile?.streetAddress ?? undefined,
+					city: memberClubProfile?.city ?? undefined,
+					state: memberClubProfile?.state ?? undefined,
+					zipCode: memberClubProfile?.zipCode ?? undefined,
+					emergencyContactName:
+						memberClubProfile?.emergencyContactName ?? undefined,
+					emergencyContactPhone:
+						memberClubProfile?.emergencyContactPhone ?? undefined,
+					emergencyContactRelationship:
+						memberClubProfile?.emergencyContactRelationship ?? undefined,
+					referralSource: memberClubProfile?.referralSource ?? undefined,
+					howHeard: memberClubProfile?.howHeard ?? undefined,
 					medicalNotes: memberClubProfile?.medicalNotes ?? undefined,
 					allergies: memberClubProfile?.allergies ?? undefined,
 					generalNotes: memberClubProfile?.generalNotes ?? undefined,
@@ -2211,10 +2241,20 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
-			// Only the fields the staff card edits today; the 8 new contact fields
-			// (address/emergency/referral) keep their existing values (deferred UI).
+			// Full replace of the staff-editable per-club fields — the card sends the
+			// whole object each save (an unset field arrives undefined → cleared to null).
 			const memberData = {
 				phone: input.profileData.phone ?? null,
+				streetAddress: input.profileData.streetAddress ?? null,
+				city: input.profileData.city ?? null,
+				state: input.profileData.state ?? null,
+				zipCode: input.profileData.zipCode ?? null,
+				emergencyContactName: input.profileData.emergencyContactName ?? null,
+				emergencyContactPhone: input.profileData.emergencyContactPhone ?? null,
+				emergencyContactRelationship:
+					input.profileData.emergencyContactRelationship ?? null,
+				referralSource: input.profileData.referralSource ?? null,
+				howHeard: input.profileData.howHeard ?? null,
 				medicalNotes: input.profileData.medicalNotes ?? null,
 				allergies: input.profileData.allergies ?? null,
 				generalNotes: input.profileData.generalNotes ?? null,

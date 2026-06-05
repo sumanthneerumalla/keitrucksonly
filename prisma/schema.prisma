@@ -256,10 +256,9 @@ model StudentProfile {
   bio              String?  @db.Text
   profileImage     Bytes? // Store the binary image data directly in PostgreSQL
   profileImageType String? // Store the MIME type (e.g., "image/png")
-  // Loose JSON blob — phone, dateOfBirth, medicalNotes, allergies, generalNotes.
-  // TD-1 in designFiles/roadmap/customer-feedback-ui-sprint.md. Shape validated in
-  // src/lib/types/student-profile.ts, not at DB level. Promote to typed columns later.
-  profileData      Json?
+  // profileData JSON blob removed (per-club-profiles.md PR3 cutover) — its fields
+  // moved to per-club MemberClubProfile (phone/medical/allergies/general) and
+  // global User.dateOfBirth. skillLevel stays here (global, member-editable).
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
