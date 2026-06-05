@@ -27,6 +27,11 @@ import {
 	isPlatformAdmin,
 	isSameClub,
 } from "~/server/utils/utils";
+import { getOrRenderInvoicePdf } from "~/server/services/invoiceRenderer/getOrRender";
+import {
+	getResendClient,
+	getFromAddress,
+} from "~/server/services/email/resend";
 
 /**
  * Phase 9 billing router.
@@ -2477,5 +2482,121 @@ export const billingRouter = createTRPCRouter({
 					: null;
 
 			return { items, nextCursor };
+		}),
+
+	/**
+	 * Send an invoice PDF to the client (consumer or billed-to party) by email.
+	 * Restricted to club admins and platform admins only.
+	 *
+	 * The PDF is generated via the existing `getOrRenderInvoicePdf` cache layer
+	 * and attached to the email. The recipient is the billed-to user's email
+	 * when a separate payer exists, otherwise the consumer's email.
+	 */
+	sendInvoiceEmail: clubAdminProcedure
+		.input(z.object({ invoiceId: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			const sender = ctx.user;
+
+			const invoice = await ctx.db.invoice.findFirst({
+				where: { invoiceId: input.invoiceId },
+				select: {
+					invoiceId: true,
+					invoiceNumber: true,
+					clubShortName: true,
+					status: true,
+					club: { select: { clubName: true } },
+					user: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+							email: true,
+						},
+					},
+					billedToUser: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+							email: true,
+						},
+					},
+				},
+			});
+
+			if (!invoice) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+			}
+
+			// Club admins are scoped to their own club; platform admins may send
+			// across clubs.
+			if (!isPlatformAdmin(sender) && !isSameClub(sender, invoice)) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You can only send invoices for your own club",
+				});
+			}
+
+			if (invoice.status === "void") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Cannot send a voided invoice",
+				});
+			}
+
+			// Prefer the billed-to party's email (they're the one who owes money);
+			// fall back to the consumer when there's no separate payer.
+			const hasSeparatePayer =
+				invoice.billedToUser !== null &&
+				invoice.billedToUser.userId !== invoice.user.userId;
+			const recipient = hasSeparatePayer
+				? invoice.billedToUser
+				: invoice.user;
+
+			if (!recipient?.email) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "The recipient does not have an email address on file",
+				});
+			}
+
+			const { buffer, filename } = await getOrRenderInvoicePdf(
+				invoice.invoiceId,
+				sender.userId,
+			);
+
+			const resend = getResendClient();
+			const from = getFromAddress(sender);
+			const recipientName =
+				`${recipient.firstName ?? ""} ${recipient.lastName ?? ""}`.trim() ||
+				"there";
+			const clubName = invoice.club.clubName;
+
+			const subject = `Invoice ${invoice.invoiceNumber} from ${clubName}`;
+			const bodyHtml = `<p>Hi ${recipientName},</p><p>Please find your invoice <strong>${invoice.invoiceNumber}</strong> attached.</p><p>Thank you,<br/>${clubName}</p>`;
+			const bodyText = `Hi ${recipientName},\n\nPlease find your invoice ${invoice.invoiceNumber} attached.\n\nThank you,\n${clubName}`;
+
+			const { error } = await resend.emails.send({
+				from,
+				to: [recipient.email],
+				subject,
+				html: bodyHtml,
+				text: bodyText,
+				attachments: [
+					{
+						filename,
+						content: buffer,
+					},
+				],
+			});
+
+			if (error) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: `Failed to send email: ${error.message}`,
+				});
+			}
+
+			return { sentTo: recipient.email };
 		}),
 });

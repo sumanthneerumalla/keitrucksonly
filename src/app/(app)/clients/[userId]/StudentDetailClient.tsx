@@ -14,10 +14,12 @@ import StudentSignupsCard from "./StudentSignupsCard";
 
 interface StudentDetailClientProps {
 	userId: string;
+	viewerIsAdmin?: boolean;
 }
 
 export default function StudentDetailClient({
 	userId,
+	viewerIsAdmin = false,
 }: StudentDetailClientProps) {
 	const { data, isLoading, error } = api.user.getStudentDetail.useQuery(
 		{ userId },
@@ -141,7 +143,7 @@ export default function StudentDetailClient({
 			<AttendanceHistoryCard userId={user.userId} />
 
 			{/* Billing — Phase 9-EOD (2026-05-02): read-only invoice list + 3 rollup tiles */}
-			<BillingPanel userId={user.userId} />
+			<BillingPanel userId={user.userId} viewerIsAdmin={viewerIsAdmin} />
 		</div>
 	);
 }
