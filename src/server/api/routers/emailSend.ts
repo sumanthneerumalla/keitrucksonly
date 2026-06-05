@@ -15,6 +15,7 @@ import {
 	htmlToText,
 	extractBatchEmailIds,
 } from "~/server/services/email/resend";
+import { reconcileSendLogStatus } from "~/server/services/email/sendLog";
 
 export const emailSendRouter = createTRPCRouter({
 	// Send a test email to the sender's own address. Logged as an EmailSendLog
@@ -204,111 +205,121 @@ export const emailSendRouter = createTRPCRouter({
 				status: string;
 				resendMessageId: string | null;
 			};
-			const recipientResults: RecipientResult[] = [];
 			let firstResendId: string | null = null;
+			let resendIdPersisted = false;
+			let totalRecipients = 0;
 
-			for (let i = 0; i < withEmail.length; i += BATCH_SIZE) {
-				const batch = withEmail.slice(i, i + BATCH_SIZE);
-				const batchIndex = Math.floor(i / BATCH_SIZE);
+			try {
+				for (let i = 0; i < withEmail.length; i += BATCH_SIZE) {
+					const batch = withEmail.slice(i, i + BATCH_SIZE);
+					const batchIndex = Math.floor(i / BATCH_SIZE);
 
-				const batchEmails = batch.map((m: any) => ({
-					from,
-					to: [env.RESEND_FROM_EMAIL?.includes("resend.dev") ? (env.RESEND_TEST_TO_EMAIL ?? "delivered@resend.dev") : m.user.email],
-					subject: input.subject,
-					html: safeHtml,
-					text: bodyText,
-					replyTo: user.email ?? undefined,
-					headers: {
-						"Idempotency-Key": `sm-${sendLogId}-b${batchIndex}`,
-					},
-				}));
+					const batchEmails = batch.map((m: any) => ({
+						from,
+						to: [env.RESEND_FROM_EMAIL?.includes("resend.dev") ? (env.RESEND_TEST_TO_EMAIL ?? "delivered@resend.dev") : m.user.email],
+						subject: input.subject,
+						html: safeHtml,
+						text: bodyText,
+						replyTo: user.email ?? undefined,
+						headers: {
+							"Idempotency-Key": `sm-${sendLogId}-b${batchIndex}`,
+						},
+					}));
 
-				try {
-					const resend = getResendClient();
-					const { data, error } = await withRetry(() =>
-						resend.batch.send(batchEmails),
-					);
+					const batchResults: RecipientResult[] = [];
 
-					if (error) {
-						console.error("[EmailSend] Batch send error:", error);
+					try {
+						const resend = getResendClient();
+						const { data, error } = await withRetry(() =>
+							resend.batch.send(batchEmails),
+						);
+
+						if (error) {
+							console.error("[EmailSend] Batch send error:", error);
+							for (const m of batch) {
+								batchResults.push({
+									userId: m.user.userId,
+									email: m.user.email!,
+									status: "failed",
+									resendMessageId: null,
+								});
+							}
+						} else {
+							const ids = extractBatchEmailIds(data);
+							if (!firstResendId && ids[0]) firstResendId = ids[0];
+
+							batch.forEach((m: any, idx: number) => {
+								const resendMessageId = ids[idx] ?? null;
+								batchResults.push({
+									userId: m.user.userId,
+									email: m.user.email!,
+									// Without a Resend id we can never reconcile delivery
+									// via the webhook, so treat a missing id as a failure
+									// (keeps the recipient retry-eligible) rather than a
+									// false "sent".
+									status: resendMessageId ? "sent" : "failed",
+									resendMessageId,
+								});
+							});
+						}
+					} catch (err) {
+						console.error("[EmailSend] Batch send exception:", err);
 						for (const m of batch) {
-							recipientResults.push({
+							batchResults.push({
 								userId: m.user.userId,
 								email: m.user.email!,
 								status: "failed",
 								resendMessageId: null,
 							});
 						}
-					} else {
-						const ids = extractBatchEmailIds(data);
-						if (!firstResendId && ids[0]) firstResendId = ids[0];
-
-						batch.forEach((m: any, idx: number) => {
-							const resendMessageId = ids[idx] ?? null;
-							recipientResults.push({
-								userId: m.user.userId,
-								email: m.user.email!,
-								// Without a Resend id we can never reconcile delivery
-								// via the webhook, so treat a missing id as a failure
-								// (keeps the recipient retry-eligible) rather than a
-								// false "sent".
-								status: resendMessageId ? "sent" : "failed",
-								resendMessageId,
-							});
-						});
 					}
-				} catch (err) {
-					console.error("[EmailSend] Batch send exception:", err);
-					for (const m of batch) {
-						recipientResults.push({
-							userId: m.user.userId,
-							email: m.user.email!,
-							status: "failed",
-							resendMessageId: null,
+
+					// Persist this batch's recipient rows immediately. Doing it
+					// per-batch (instead of one createMany at the very end) means a
+					// delivery/bounce webhook that fires before the whole send
+					// finishes still finds its recipient row, and a crash mid-send
+					// leaves accurate partial data to reconcile from.
+					await ctx.db.emailSendRecipient.createMany({
+						data: batchResults.map((r) => ({
+							sendLogId,
+							userId: r.userId,
+							email: r.email,
+							status: r.status,
+							resendMessageId: r.resendMessageId,
+						})),
+					});
+					totalRecipients += batchResults.length;
+
+					// Stamp the campaign-level Resend id as soon as we have one so
+					// the log isn't blank if a later crash skips the final update.
+					if (firstResendId && !resendIdPersisted) {
+						resendIdPersisted = true;
+						await ctx.db.emailSendLog.update({
+							where: { sendLogId },
+							data: { resendId: firstResendId },
 						});
 					}
 				}
+			} catch (err) {
+				// Unexpected failure escaping the per-batch handling (e.g. a DB
+				// write). Don't leave the log stuck "sending" — reconcile its
+				// terminal status from whatever recipient rows landed, then rethrow.
+				console.error("[EmailSend] Send loop failed:", err);
+				await reconcileSendLogStatus(sendLogId);
+				throw err;
 			}
 
-			// Persist recipient rows
-			await ctx.db.emailSendRecipient.createMany({
-				data: recipientResults.map((r) => ({
-					sendLogId,
-					userId: r.userId,
-					email: r.email,
-					status: r.status,
-					resendMessageId: r.resendMessageId,
-				})),
-			});
-
-			const sentCount = recipientResults.filter((r) => r.status === "sent").length;
-			const failedCount = recipientResults.filter((r) => r.status === "failed").length;
-			const finalStatus =
-				failedCount === 0
-					? "sent"
-					: sentCount === 0
-						? "failed"
-						: "partial_failure";
-
-			// Update log with final counts and status
-			await ctx.db.emailSendLog.update({
-				where: { sendLogId },
-				data: {
-					status: finalStatus,
-					recipientCount: sentCount,
-					resendId: firstResendId,
-					...(finalStatus === "failed"
-						? { errorMessage: "All recipients failed to receive the email" }
-						: {}),
-				},
-			});
+			// Normal completion: derive the terminal status from the persisted
+			// recipient rows (single source of truth), not an in-memory tally.
+			const { sentCount, failedCount } =
+				await reconcileSendLogStatus(sendLogId);
 
 			return {
 				sendLogId,
 				sentCount,
 				failedCount,
 				skippedCount: skipped.length,
-				totalRecipients: recipientResults.length,
+				totalRecipients,
 			};
 		}),
 
@@ -413,24 +424,9 @@ export const emailSendRouter = createTRPCRouter({
 				}
 			}
 
-			// Recompute overall status on the log
-			const totalFailed = await ctx.db.emailSendRecipient.count({
-				where: { sendLogId: input.sendLogId, status: "failed" },
-			});
-			const totalSent = await ctx.db.emailSendRecipient.count({
-				where: { sendLogId: input.sendLogId, status: "sent" },
-			});
-			const newStatus =
-				totalFailed === 0 ? "sent" : totalSent === 0 ? "failed" : "partial_failure";
-
-			await ctx.db.emailSendLog.update({
-				where: { sendLogId: input.sendLogId },
-				data: {
-					status: newStatus,
-					recipientCount: totalSent,
-					...(newStatus !== "failed" ? { errorMessage: null } : {}),
-				},
-			});
+			// Recompute overall status from the recipient rows (shared with the
+			// initial send path so the two can't compute it differently).
+			await reconcileSendLogStatus(input.sendLogId);
 
 			return { retriedCount: failedRecipients.length, successCount, failedCount };
 		}),

@@ -9,6 +9,7 @@ import {
 	staffProcedure,
 } from "~/server/api/trpc";
 import { getCurrentUser, isAnyAdmin, isPlatformAdmin } from "~/server/utils/utils";
+import { reconcileStaleSendLogs } from "~/server/services/email/sendLog";
 
 // Ensures the caller is allowed to read data scoped to `facilityId`. Platform
 // admins may target any facility; everyone else is confined to facilities that
@@ -577,7 +578,7 @@ export const emailGroupsRouter = createTRPCRouter({
 
 			const groupIds = accessibleGroups.map((g) => g.emailGroupId);
 
-			return ctx.db.emailSendLog.findMany({
+			const logs = await ctx.db.emailSendLog.findMany({
 				where: { emailGroupId: { in: groupIds }, isTest: false },
 				include: {
 					sender: { select: { firstName: true, lastName: true, email: true } },
@@ -591,6 +592,10 @@ export const emailGroupsRouter = createTRPCRouter({
 				orderBy: { sentAt: "desc" },
 				take: 30,
 			});
+
+			// Lazy-on-read recovery: flip any send stuck in "sending" past the
+			// stale window to its real terminal status, derived from its rows.
+			return reconcileStaleSendLogs(logs);
 		}),
 
 	// Get send history for a group
@@ -607,7 +612,7 @@ export const emailGroupsRouter = createTRPCRouter({
 				throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this group" });
 			}
 
-			return ctx.db.emailSendLog.findMany({
+			const logs = await ctx.db.emailSendLog.findMany({
 				where: { emailGroupId: input.emailGroupId, isTest: false },
 				include: {
 					sender: { select: { firstName: true, lastName: true, email: true } },
@@ -621,5 +626,8 @@ export const emailGroupsRouter = createTRPCRouter({
 				orderBy: { sentAt: "desc" },
 				take: 50,
 			});
+
+			// Lazy-on-read recovery (see getAllSendHistory).
+			return reconcileStaleSendLogs(logs);
 		}),
 });
