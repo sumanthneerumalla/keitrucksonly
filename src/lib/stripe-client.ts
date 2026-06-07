@@ -15,7 +15,7 @@
  * promise is invalidated and Stripe.js is reloaded.
  *
  * Publishable key sourcing: callers must pass the key in. The CheckoutPage
- * server component resolves it via `getPlatformConfig` (env-first, DB-fallback
+ * server component resolves it via `getConfig` (env-first, DB-fallback
  * — see designFiles/roadmap/phase12-stripe-connect.md §24) and threads it
  * through to CheckoutClient as a prop. The server secret key
  * (`STRIPE_SECRET_KEY`) is server-only and MUST NOT be imported here.

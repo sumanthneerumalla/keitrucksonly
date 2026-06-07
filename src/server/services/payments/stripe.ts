@@ -23,13 +23,13 @@ import {
 	type ProviderEvent,
 	SignatureError,
 } from "~/server/services/payments/types";
-import { getPlatformConfig } from "~/server/utils/platformConfig";
+import { getConfig } from "~/server/utils/config";
 
 // ============================================================
 // Lazy Stripe client
 // ============================================================
 //
-// Phase 12a no-SSH workaround: secrets resolve through `getPlatformConfig`
+// Phase 12a no-SSH workaround: secrets resolve through `getConfig`
 // (env-first, DB fallback). `getStripe()` is async because the DB fallback
 // is async; if the secret changes (e.g., Prisma Studio edit), the cached
 // client is rebuilt on the next call after the platform-config cache
@@ -39,13 +39,10 @@ let _stripe: Stripe | null = null;
 let _stripeKey: string | null = null;
 
 async function getStripe(): Promise<Stripe> {
-	const secret = await getPlatformConfig(
-		"STRIPE_SECRET_KEY",
-		"stripe_secret_key",
-	);
+	const secret = await getConfig("STRIPE_SECRET_KEY");
 	if (!secret) {
 		throw new Error(
-			'STRIPE_SECRET_KEY is not configured — set the env var or add a row to the PlatformConfig table with key="stripe_secret_key".',
+			'STRIPE_SECRET_KEY is not configured — set the env var or add a row to the PlatformConfig table with key="STRIPE_SECRET_KEY".',
 		);
 	}
 	if (_stripe !== null && _stripeKey === secret) return _stripe;
@@ -61,18 +58,14 @@ async function getStripe(): Promise<Stripe> {
 async function getWebhookSecret(
 	endpointKind: "platform" | "connect",
 ): Promise<string> {
-	const envVarName =
+	const key =
 		endpointKind === "platform"
 			? "STRIPE_WEBHOOK_SECRET_PLATFORM"
 			: "STRIPE_WEBHOOK_SECRET_CONNECT";
-	const dbKey =
-		endpointKind === "platform"
-			? "stripe_webhook_secret_platform"
-			: "stripe_webhook_secret_connect";
-	const secret = await getPlatformConfig(envVarName, dbKey);
+	const secret = await getConfig(key);
 	if (!secret) {
 		throw new Error(
-			`${envVarName} is not configured — set the env var or add a row to the PlatformConfig table with key="${dbKey}".`,
+			`${key} is not configured — set the env var or add a row to the PlatformConfig table with key="${key}".`,
 		);
 	}
 	return secret;

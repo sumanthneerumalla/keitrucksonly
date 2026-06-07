@@ -2,35 +2,37 @@ import { TRPCError } from "@trpc/server";
 import { convert } from "html-to-text";
 import DOMPurify from "isomorphic-dompurify";
 import { Resend } from "resend";
-import { env } from "~/env";
+import { getConfig } from "~/server/utils/config";
 
 // ─── Client ─────────────────────────────────────────────────────────────────
 
-export function getResendClient(): Resend {
-	if (!env.RESEND_API_KEY) {
+export async function getResendClient(): Promise<Resend> {
+	const apiKey = await getConfig("RESEND_API_KEY");
+	if (!apiKey) {
 		throw new TRPCError({
 			code: "PRECONDITION_FAILED",
 			message:
-				"Email sending is not configured. Set RESEND_API_KEY and RESEND_FROM_EMAIL in your environment.",
+				"Email sending is not configured. Set RESEND_API_KEY (env var or PlatformConfig row) and RESEND_FROM_EMAIL.",
 		});
 	}
-	return new Resend(env.RESEND_API_KEY);
+	return new Resend(apiKey);
 }
 
 // ─── Address helpers ─────────────────────────────────────────────────────────
 
-export function getFromAddress(user: {
+export async function getFromAddress(user: {
 	firstName: string | null;
 	lastName: string | null;
-}): string {
-	if (!env.RESEND_FROM_EMAIL) {
+}): Promise<string> {
+	const fromEmail = await getConfig("RESEND_FROM_EMAIL");
+	if (!fromEmail) {
 		throw new TRPCError({
 			code: "PRECONDITION_FAILED",
 			message: "RESEND_FROM_EMAIL is not configured.",
 		});
 	}
 	const display = getDisplayName(user);
-	return `${display} <${env.RESEND_FROM_EMAIL}>`;
+	return `${display} <${fromEmail}>`;
 }
 
 export function getDisplayName(user: {

@@ -37,8 +37,8 @@ export const env = createEnv({
 		// Phase 12a — absolute app URL used to build Stripe AccountLink
 		// `return_url` / `refresh_url` (the AccountLink API rejects
 		// path-only strings). Optional in the schema so the app boots
-		// without it; consumers resolve via `getPlatformConfig(
-		// 'NEXT_PUBLIC_APP_URL', 'app_url')` so a missing env var can fall
+		// without it; consumers resolve via `getConfig(
+		// 'NEXT_PUBLIC_APP_URL')` so a missing env var can fall
 		// back to a `PlatformConfig` row (no-SSH workaround §24).
 		// Expected values:
 		//   prod  → https://facilitypresence.com

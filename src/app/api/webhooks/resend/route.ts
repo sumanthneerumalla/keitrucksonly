@@ -16,14 +16,15 @@
  */
 
 import { Webhook } from "svix";
-import { env } from "~/env";
 import { db } from "~/server/db";
+import { getConfig } from "~/server/utils/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<Response> {
-	if (!env.RESEND_WEBHOOK_SECRET) {
+	const webhookSecret = await getConfig("RESEND_WEBHOOK_SECRET");
+	if (!webhookSecret) {
 		console.error("[ResendWebhook] RESEND_WEBHOOK_SECRET is not configured");
 		return new Response("webhook secret not configured", { status: 500 });
 	}
@@ -39,7 +40,7 @@ export async function POST(req: Request): Promise<Response> {
 
 	let event: { type: string; data: Record<string, any> };
 	try {
-		const wh = new Webhook(env.RESEND_WEBHOOK_SECRET);
+		const wh = new Webhook(webhookSecret);
 		event = wh.verify(rawBody, {
 			"svix-id": svixId,
 			"svix-timestamp": svixTimestamp,

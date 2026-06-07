@@ -1,6 +1,5 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { env } from "~/env";
 import { createTRPCRouter, staffProcedure } from "~/server/api/trpc";
 import {
 	extractBatchEmailIds,
@@ -12,6 +11,7 @@ import {
 	withRetry,
 } from "~/server/services/email/resend";
 import { reconcileSendLogStatus } from "~/server/services/email/sendLog";
+import { getConfig } from "~/server/utils/config";
 import { getCurrentUser, isAnyAdmin } from "~/server/utils/utils";
 
 export const emailSendRouter = createTRPCRouter({
@@ -53,14 +53,16 @@ export const emailSendRouter = createTRPCRouter({
 				});
 			}
 
-			const resend = getResendClient();
-			const from = getFromAddress(user);
+			const resend = await getResendClient();
+			const from = await getFromAddress(user);
 			const displayName = getDisplayName(user);
 			const safeHtml = sanitizeEmailHtml(input.bodyHtml);
 			const bodyText = htmlToText(safeHtml);
 			const testSubject = `[TEST] ${input.subject}`;
-			const sentTo = env.RESEND_FROM_EMAIL?.includes("resend.dev")
-				? (env.RESEND_TEST_TO_EMAIL ?? "delivered@resend.dev")
+			const fromEmail = await getConfig("RESEND_FROM_EMAIL");
+			const testToEmail = await getConfig("RESEND_TEST_TO_EMAIL");
+			const sentTo = fromEmail?.includes("resend.dev")
+				? (testToEmail ?? "delivered@resend.dev")
 				: user.email;
 
 			const { data, error } = await resend.emails.send({
@@ -171,7 +173,7 @@ export const emailSendRouter = createTRPCRouter({
 			// Sanitize and derive plain-text body
 			const safeHtml = sanitizeEmailHtml(input.bodyHtml);
 			const bodyText = htmlToText(safeHtml);
-			const from = getFromAddress(user);
+			const from = await getFromAddress(user);
 			const displayName = getDisplayName(user);
 
 			// Create the log row first to get sendLogId for idempotency keys
@@ -207,17 +209,18 @@ export const emailSendRouter = createTRPCRouter({
 			let totalRecipients = 0;
 
 			try {
+				const fromEmail = await getConfig("RESEND_FROM_EMAIL");
+				const testToEmail = await getConfig("RESEND_TEST_TO_EMAIL");
+				const testRecipient = fromEmail?.includes("resend.dev")
+					? (testToEmail ?? "delivered@resend.dev")
+					: null;
 				for (let i = 0; i < withEmail.length; i += BATCH_SIZE) {
 					const batch = withEmail.slice(i, i + BATCH_SIZE);
 					const batchIndex = Math.floor(i / BATCH_SIZE);
 
 					const batchEmails = batch.map((m: any) => ({
 						from,
-						to: [
-							env.RESEND_FROM_EMAIL?.includes("resend.dev")
-								? (env.RESEND_TEST_TO_EMAIL ?? "delivered@resend.dev")
-								: m.user.email,
-						],
+						to: [testRecipient ?? m.user.email],
 						subject: input.subject,
 						html: safeHtml,
 						text: bodyText,
@@ -230,7 +233,7 @@ export const emailSendRouter = createTRPCRouter({
 					const batchResults: RecipientResult[] = [];
 
 					try {
-						const resend = getResendClient();
+						const resend = await getResendClient();
 						const { data, error } = await withRetry(() =>
 							resend.batch.send(batchEmails),
 						);
@@ -368,7 +371,7 @@ export const emailSendRouter = createTRPCRouter({
 				return { retriedCount: 0, successCount: 0, failedCount: 0 };
 			}
 
-			const from = getFromAddress(user);
+			const from = await getFromAddress(user);
 			const safeHtml = sendLog.bodyHtml;
 			const bodyText = sendLog.bodyText ?? htmlToText(safeHtml);
 			const BATCH_SIZE = 100;
@@ -392,7 +395,7 @@ export const emailSendRouter = createTRPCRouter({
 				}));
 
 				try {
-					const resend = getResendClient();
+					const resend = await getResendClient();
 					const { data, error } = await withRetry(() =>
 						resend.batch.send(batchEmails),
 					);

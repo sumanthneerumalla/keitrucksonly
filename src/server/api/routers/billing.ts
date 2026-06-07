@@ -2586,8 +2586,8 @@ export const billingRouter = createTRPCRouter({
 				sender.userId,
 			);
 
-			const resend = getResendClient();
-			const from = getFromAddress(sender);
+			const resend = await getResendClient();
+			const from = await getFromAddress(sender);
 			const recipientName =
 				`${recipient.firstName ?? ""} ${recipient.lastName ?? ""}`.trim() ||
 				"there";
