@@ -2,12 +2,15 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Copy package files and prisma schema (needed for postinstall script)
+# Copy package files and ONLY the Prisma schema. The postinstall `prisma
+# generate` needs schema.prisma but not migrations/seeds — copying the whole
+# prisma/ dir would bust the npm ci cache on every new migration.
 COPY package.json package-lock.json ./
-COPY prisma ./prisma
+COPY prisma/schema.prisma ./prisma/schema.prisma
 
-# Install dependencies
-RUN npm ci
+# npm cache mount keeps downloaded tarballs warm across builds, so a
+# cache-busted reinstall reuses them instead of re-fetching from the registry.
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline --no-audit --no-fund
 
 # Development stage - for hot reloading during development
 FROM node:20-alpine AS development
