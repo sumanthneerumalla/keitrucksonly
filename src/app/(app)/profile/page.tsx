@@ -197,10 +197,16 @@ function ProfilePageContent() {
 										<div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 											<div className="flex-1 space-y-4">
 												<div>
-													<label className="text-gray-500 text-sm">
+													<label
+														htmlFor="profile-view-first-name"
+														className="text-gray-500 text-sm"
+													>
 														First Name
 													</label>
-													<p className="font-medium text-lg">
+													<p
+														id="profile-view-first-name"
+														className="font-medium text-lg"
+													>
 														{user.firstName ?? (
 															<span className="text-red-600">Not set</span>
 														)}
@@ -208,10 +214,16 @@ function ProfilePageContent() {
 												</div>
 
 												<div>
-													<label className="text-gray-500 text-sm">
+													<label
+														htmlFor="profile-view-last-name"
+														className="text-gray-500 text-sm"
+													>
 														Last Name
 													</label>
-													<p className="font-medium text-lg">
+													<p
+														id="profile-view-last-name"
+														className="font-medium text-lg"
+													>
 														{user.lastName ?? (
 															<span className="text-red-600">Not set</span>
 														)}
@@ -219,8 +231,13 @@ function ProfilePageContent() {
 												</div>
 
 												<div>
-													<label className="text-gray-500 text-sm">Email</label>
-													<p className="text-lg">
+													<label
+														htmlFor="profile-view-email"
+														className="text-gray-500 text-sm"
+													>
+														Email
+													</label>
+													<p id="profile-view-email" className="text-lg">
 														{user.email ?? (
 															<span className="text-red-600">Not set</span>
 														)}
@@ -228,10 +245,13 @@ function ProfilePageContent() {
 												</div>
 
 												<div>
-													<label className="text-gray-500 text-sm">
+													<label
+														htmlFor="profile-view-time-zone"
+														className="text-gray-500 text-sm"
+													>
 														Time Zone
 													</label>
-													<p className="text-lg">
+													<p id="profile-view-time-zone" className="text-lg">
 														{user.timeZone ?? (
 															<span className="text-red-600">Not set</span>
 														)}
@@ -239,8 +259,13 @@ function ProfilePageContent() {
 												</div>
 
 												<div>
-													<label className="text-gray-500 text-sm">Club</label>
-													<p className="text-lg">
+													<label
+														htmlFor="profile-view-club"
+														className="text-gray-500 text-sm"
+													>
+														Club
+													</label>
+													<p id="profile-view-club" className="text-lg">
 														{user.clubName ?? (
 															<span className="text-red-600">Not set</span>
 														)}
@@ -257,19 +282,28 @@ function ProfilePageContent() {
 												</div>
 
 												<div>
-													<label className="text-gray-500 text-sm">
+													<label
+														htmlFor="profile-view-account-type"
+														className="text-gray-500 text-sm"
+													>
 														Account Type
 													</label>
-													<p className="text-lg capitalize">
+													<p
+														id="profile-view-account-type"
+														className="text-lg capitalize"
+													>
 														{user.userType.toLowerCase()}
 													</p>
 												</div>
 
 												<div>
-													<label className="text-gray-500 text-sm">
+													<label
+														htmlFor="profile-view-member-since"
+														className="text-gray-500 text-sm"
+													>
 														Member Since
 													</label>
-													<p className="text-lg">
+													<p id="profile-view-member-since" className="text-lg">
 														{new Date(user.createdAt).toLocaleDateString()}
 													</p>
 												</div>
@@ -308,10 +342,14 @@ function ProfilePageContent() {
 
 										<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 											<div>
-												<label className="mb-1 block font-medium text-gray-700 text-sm">
+												<label
+													htmlFor="profile-edit-first-name"
+													className="mb-1 block font-medium text-gray-700 text-sm"
+												>
 													First Name
 												</label>
 												<input
+													id="profile-edit-first-name"
 													type="text"
 													value={formData.firstName}
 													onChange={(e) =>
@@ -331,10 +369,14 @@ function ProfilePageContent() {
 											</div>
 
 											<div>
-												<label className="mb-1 block font-medium text-gray-700 text-sm">
+												<label
+													htmlFor="profile-edit-last-name"
+													className="mb-1 block font-medium text-gray-700 text-sm"
+												>
 													Last Name
 												</label>
 												<input
+													id="profile-edit-last-name"
 													type="text"
 													value={formData.lastName}
 													onChange={(e) =>
@@ -355,10 +397,14 @@ function ProfilePageContent() {
 										</div>
 
 										<div>
-											<label className="mb-1 block font-medium text-gray-700 text-sm">
+											<label
+												htmlFor="profile-edit-email"
+												className="mb-1 block font-medium text-gray-700 text-sm"
+											>
 												Email
 											</label>
 											<input
+												id="profile-edit-email"
 												type="email"
 												value={formData.email}
 												onChange={(e) =>
@@ -375,7 +421,10 @@ function ProfilePageContent() {
 										</div>
 
 										<div>
-											<label className="mb-1 block font-medium text-gray-700 text-sm">
+											<label
+												htmlFor="profile-edit-gender"
+												className="mb-1 block font-medium text-gray-700 text-sm"
+											>
 												Gender
 											</label>
 											{genderLocked ? (
@@ -388,6 +437,7 @@ function ProfilePageContent() {
 											) : (
 												<>
 													<Select
+														id="profile-edit-gender"
 														value={genderInput}
 														onChange={(e) =>
 															setGenderInput(e.target.value as Gender | "")
@@ -407,10 +457,14 @@ function ProfilePageContent() {
 										</div>
 
 										<div>
-											<label className="mb-1 block font-medium text-gray-700 text-sm">
+											<label
+												htmlFor="profile-edit-time-zone"
+												className="mb-1 block font-medium text-gray-700 text-sm"
+											>
 												Time Zone
 											</label>
 											<Select
+												id="profile-edit-time-zone"
 												value={formData.timeZone}
 												onChange={(e) =>
 													setFormData({ ...formData, timeZone: e.target.value })
