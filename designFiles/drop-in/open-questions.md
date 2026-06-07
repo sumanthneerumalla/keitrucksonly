@@ -87,3 +87,22 @@ Most of A–D are **resolved** (owner, 2026-06-02) — see the Resolved section.
 - **D3** Players must **log in (Clerk)** to submit scores.
 - **D4** **Kiosk mode = a button on the event page** → fullscreen + unlock audio (no separate kiosk code). On a connected TV the horn plays from the TV. (The button-gesture is also what browsers require to allow sound later.)
 - **D5** Match time limits **off in v1**.
+
+---
+
+## Resolved (owner, 2026-06-05 — onboarding session)
+
+> **UPDATED 2026-06-06:** the "Rotation Play / casual `DROP_IN` event / DI-1c" framing below was simplified one step further — **casual drop-in is just a multi-court `BOOKABLE` event**, so there is no `DROP_IN` type for casual and no DI-1c (CANCELLED). The `DROP_IN` type stays reserved for the live-rotation feature only. The non-naming decisions (payment, check-in, occurrenceDate, gender/onboarding gate, a11y) all still hold. See HANDOFF.md "2026-06-06 FINAL decision".
+
+These refine A5/B1/B7/G1/G2 and the open-loops audit. See HANDOFF.md "2026-06-05 onboarding-session decisions" for the operational version.
+
+- **NAME** — the `DROP_IN` event type is presented to club owners as **"Rotation Play"** (*"auto-managed peak-hour matches"*); a new option in the create-event dropdown. Enum stays `DROP_IN`.
+- **SCOPE** — ship **casual first**, TIMED/MATCH rotation later (owner OK with the forward-looking label now).
+- **⭐ CASUAL ARCHITECTURE (supersedes "MANUAL = DropInSession")** — casual Rotation Play is a **normal registrable/checkable event**: reuse `EventRegistration` + checkout + member `selfCheckin` (`checkin` router) + front-desk check-in. **`DropInSession` + the `dropIn` router (DI-1a/DI-1b) are PARKED for TIMED/MATCH** (DI-2/DI-4); casual does not touch them. The old MANUAL-mode-on-DropInSession design is dropped.
+- **A5 wiring** — to make a `DROP_IN` event payable/registrable, extend the `BOOKABLE`-gated branches (Register button + checkout + `calendar.getPublicEvents` filter) to accept `DROP_IN`.
+- **Multi-court** — reuse the modal's existing `RENTAL_WINDOW` multi-court picker for `DROP_IN`.
+- **occurrenceDate** — normalize to **club-local calendar day** (facility-tz start-of-day); only relevant once `DropInSession` is used (TIMED/MATCH). Non-recurring = `event.start`.
+- **Check-in (loop #3)** — members **self-check-in to any registration they own** (already true via `checkin.selfCheckin`); front-desk can also check in. No new check-in system for casual.
+- **Admin gender display (loop #4)** — **SKIP**.
+- **B1 → required (loop #5)** — `gender` becomes a **hard requirement**, plus an **onboarding-completeness gate** before a user can participate in Rotation Play. Tracked as a **separate work thread** (see HANDOFF "Onboarding completeness gate"), not part of DI-1c.
+- **a11y (loop #6)** — fix the `noLabelWithoutControl` warnings (was "accepted"; owner wants them fixed since it needs no project context).

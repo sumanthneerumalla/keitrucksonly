@@ -217,6 +217,7 @@ const updateEventSchema = z.object({
 	title: z.string().min(1).max(500).trim().optional(),
 	description: z.string().max(2000).trim().nullable().optional(),
 	resourceId: z.string().nullable().optional(),
+	resourceIds: z.array(z.string()).optional(),
 	start: z.date().optional(),
 	end: z.date().optional(),
 	allDay: z.boolean().optional(),
@@ -1029,52 +1030,34 @@ export const calendarRouter = createTRPCRouter({
 			// names the conflict and includes the date when the conflict is a recurring
 			// occurrence (CR-c.2), so staff aren't left guessing which Tuesday the
 			// existing weekly class was on.
-			if (resourceId && !allDay) {
-				// Tier A: single-occurrence check. Surfaces both non-recurring overlaps
-				// and existing recurring-event occurrences that fall in [start, end].
-				const conflicts = await checkResourceConflicts({
-					db: ctx.db,
-					resourceId,
-					start,
-					end,
-				});
-				if (conflicts.length > 0) {
-					// Lazy timezone lookup — only fires on the unhappy path. Use the user's
-					// effective facility (the one this event would belong to) so the error
-					// renders in the same zone the calendar is showing.
-					const facilityIdForTz = input.facilityId ?? user.activeFacilityId;
-					const facility = facilityIdForTz
-						? await ctx.db.clubFacility.findUnique({
-								where: { facilityId: facilityIdForTz },
-								select: { timezone: true },
-							})
-						: null;
-					const c = conflicts[0]!;
-					const timeStr = formatEventTimeInZone(
-						c.start,
-						c.end,
-						facility?.timezone ?? null,
-						{ includeDate: c.isRecurringOccurrence },
-					);
-					throw new TRPCError({
-						code: "CONFLICT",
-						message: `Blocked by "${c.title}" (${timeStr})`,
-					});
-				}
-
-				// Tier B: if the new event is itself recurring, expand its rrule and
-				// check each occurrence against existing events on the resource. Catches
-				// the "weekly class for 6 months conflicts with existing weekly class on
-				// 4 Tuesdays" case that Tier A's single-slot check would miss.
-				if (rrule) {
-					const recurringConflicts = await checkRecurringEventConflicts({
+			// A BOOKABLE event can reserve multiple courts (primary `resourceId` +
+			// additional `resourceIds`). Check each court for conflicts. QUICK version
+			// (see designFiles/drop-in/multi-court-conflict-TODO.md): this catches
+			// overlaps against any event holding a court as its PRIMARY resourceId, but
+			// `checkResourceConflicts` does NOT match existing events by their
+			// `resourceIds` array — so two multi-court events sharing an extra court
+			// won't conflict-detect. Tracked as a known gap.
+			const courtsToCheck = Array.from(
+				new Set(
+					[resourceId, ...(resourceIds ?? [])].filter(
+						(id): id is string => !!id,
+					),
+				),
+			);
+			if (courtsToCheck.length > 0 && !allDay) {
+				for (const court of courtsToCheck) {
+					// Tier A: single-occurrence check. Surfaces both non-recurring overlaps
+					// and existing recurring-event occurrences that fall in [start, end].
+					const conflicts = await checkResourceConflicts({
 						db: ctx.db,
-						resourceId,
-						rruleString: rrule,
-						dtstart: start,
-						durationMs: end.getTime() - start.getTime(),
+						resourceId: court,
+						start,
+						end,
 					});
-					if (recurringConflicts.length > 0) {
+					if (conflicts.length > 0) {
+						// Lazy timezone lookup — only fires on the unhappy path. Use the user's
+						// effective facility (the one this event would belong to) so the error
+						// renders in the same zone the calendar is showing.
 						const facilityIdForTz = input.facilityId ?? user.activeFacilityId;
 						const facility = facilityIdForTz
 							? await ctx.db.clubFacility.findUnique({
@@ -1082,13 +1065,47 @@ export const calendarRouter = createTRPCRouter({
 									select: { timezone: true },
 								})
 							: null;
+						const c = conflicts[0]!;
+						const timeStr = formatEventTimeInZone(
+							c.start,
+							c.end,
+							facility?.timezone ?? null,
+							{ includeDate: c.isRecurringOccurrence },
+						);
 						throw new TRPCError({
 							code: "CONFLICT",
-							message: formatRecurringConflictsMessage(
-								recurringConflicts,
-								facility?.timezone ?? null,
-							),
+							message: `Blocked by "${c.title}" (${timeStr})`,
 						});
+					}
+
+					// Tier B: if the new event is itself recurring, expand its rrule and
+					// check each occurrence against existing events on the resource. Catches
+					// the "weekly class for 6 months conflicts with existing weekly class on
+					// 4 Tuesdays" case that Tier A's single-slot check would miss.
+					if (rrule) {
+						const recurringConflicts = await checkRecurringEventConflicts({
+							db: ctx.db,
+							resourceId: court,
+							rruleString: rrule,
+							dtstart: start,
+							durationMs: end.getTime() - start.getTime(),
+						});
+						if (recurringConflicts.length > 0) {
+							const facilityIdForTz = input.facilityId ?? user.activeFacilityId;
+							const facility = facilityIdForTz
+								? await ctx.db.clubFacility.findUnique({
+										where: { facilityId: facilityIdForTz },
+										select: { timezone: true },
+									})
+								: null;
+							throw new TRPCError({
+								code: "CONFLICT",
+								message: formatRecurringConflictsMessage(
+									recurringConflicts,
+									facility?.timezone ?? null,
+								),
+							});
+						}
 					}
 				}
 			}
@@ -1405,57 +1422,69 @@ export const calendarRouter = createTRPCRouter({
 				}
 			}
 
-			// Check for conflicts if resource or time is changing
+			// Check for conflicts if resource or time is changing. A BOOKABLE event may
+			// hold multiple courts (primary + additional resourceIds) — check each.
+			// QUICK version, same known gap as createEvent (see designFiles TODO).
 			const newResourceId = data.resourceId ?? existing.resourceId;
+			const newResourceIds = data.resourceIds ?? existing.resourceIds;
+			const courtsToCheck = Array.from(
+				new Set(
+					[newResourceId, ...(newResourceIds ?? [])].filter(
+						(id): id is string => !!id,
+					),
+				),
+			);
 
-			if (newResourceId && !isAllDay) {
-				// Tier A: single-occurrence check, see comment in createEvent.
-				const conflicts = await checkResourceConflicts({
-					db: ctx.db,
-					resourceId: newResourceId,
-					start: newStart,
-					end: newEnd,
-					excludeEventId: eventId,
-				});
-				if (conflicts.length > 0) {
-					// `existing.facility.timezone` was joined above (CR-c Tier A) — no
-					// extra query needed for the error formatter.
-					const c = conflicts[0]!;
-					const timeStr = formatEventTimeInZone(
-						c.start,
-						c.end,
-						existing.facility?.timezone ?? null,
-						{ includeDate: c.isRecurringOccurrence },
-					);
-					throw new TRPCError({
-						code: "CONFLICT",
-						message: `Blocked by "${c.title}" (${timeStr})`,
-					});
-				}
-
+			if (courtsToCheck.length > 0 && !isAllDay) {
 				// Tier B: if the event remains (or becomes) recurring after this update,
 				// expand the new rrule and check each occurrence. CR-c.13: if the update
-				// clears rrule (recurring → non-recurring), the Tier A check above is
+				// clears rrule (recurring → non-recurring), the Tier A check below is
 				// sufficient and we skip Tier B.
 				const newRrule = data.rrule !== undefined ? data.rrule : existing.rrule;
-				if (newRrule) {
-					const recurringConflicts = await checkRecurringEventConflicts({
+				for (const court of courtsToCheck) {
+					// Tier A: single-occurrence check, see comment in createEvent.
+					const conflicts = await checkResourceConflicts({
 						db: ctx.db,
-						resourceId: newResourceId,
-						rruleString: newRrule,
-						dtstart: newStart,
-						durationMs: newEnd.getTime() - newStart.getTime(),
-						exdates: existing.exdates,
+						resourceId: court,
+						start: newStart,
+						end: newEnd,
 						excludeEventId: eventId,
 					});
-					if (recurringConflicts.length > 0) {
+					if (conflicts.length > 0) {
+						// `existing.facility.timezone` was joined above (CR-c Tier A) — no
+						// extra query needed for the error formatter.
+						const c = conflicts[0]!;
+						const timeStr = formatEventTimeInZone(
+							c.start,
+							c.end,
+							existing.facility?.timezone ?? null,
+							{ includeDate: c.isRecurringOccurrence },
+						);
 						throw new TRPCError({
 							code: "CONFLICT",
-							message: formatRecurringConflictsMessage(
-								recurringConflicts,
-								existing.facility?.timezone ?? null,
-							),
+							message: `Blocked by "${c.title}" (${timeStr})`,
 						});
+					}
+
+					if (newRrule) {
+						const recurringConflicts = await checkRecurringEventConflicts({
+							db: ctx.db,
+							resourceId: court,
+							rruleString: newRrule,
+							dtstart: newStart,
+							durationMs: newEnd.getTime() - newStart.getTime(),
+							exdates: existing.exdates,
+							excludeEventId: eventId,
+						});
+						if (recurringConflicts.length > 0) {
+							throw new TRPCError({
+								code: "CONFLICT",
+								message: formatRecurringConflictsMessage(
+									recurringConflicts,
+									existing.facility?.timezone ?? null,
+								),
+							});
+						}
 					}
 				}
 			}
