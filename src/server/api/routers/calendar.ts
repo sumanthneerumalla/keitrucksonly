@@ -198,7 +198,9 @@ const createEventSchema = z.object({
 	color: z.string().optional(),
 	backgroundColor: z.string().optional(),
 	rrule: z.string().max(500).optional(),
-	eventType: z.enum(["BLOCK", "BOOKABLE", "COACHING_SLOT"]).default("BLOCK"),
+	eventType: z
+		.enum(["BLOCK", "BOOKABLE", "COACHING_SLOT", "DROP_IN"])
+		.default("BLOCK"),
 	isPublic: z.boolean().default(false),
 	maxParticipants: z.number().int().positive().optional(),
 	registrationType: z.enum(["PER_INSTANCE", "PER_SERIES"]).optional(),
@@ -917,7 +919,9 @@ export const calendarRouter = createTRPCRouter({
 			// prior private events will be marked as public again next time they're
 			// saved or updated if this the event is bookable or a coaching slot
 			const effectiveIsPublic =
-				eventType === "BOOKABLE" || eventType === "COACHING_SLOT"
+				eventType === "BOOKABLE" ||
+				eventType === "COACHING_SLOT" ||
+				eventType === "DROP_IN"
 					? true
 					: isPublic;
 

@@ -20,6 +20,7 @@ import AddStudentPopover from "~/app/(app)/events/[eventId]/AddStudentPopover";
 import EventStatusLogTimeline from "~/app/(app)/events/[eventId]/EventStatusLogTimeline";
 import GuestRegisterModal from "~/app/(app)/events/[eventId]/GuestRegisterModal";
 import BookableEventDetails from "~/app/(app)/events/_components/BookableEventDetails";
+import DropInEventDetails from "~/app/(app)/events/_components/DropInEventDetails";
 import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
@@ -156,6 +157,33 @@ export default function EventDetailClient({
 					>
 						Back to calendar
 					</Link>
+				</div>
+			</div>
+		);
+	}
+
+	// Rotation Play (DROP_IN): the event page IS the live board — render it instead
+	// of the normal bookable detail view (D2: the board is the event page).
+	if (event.eventType === "DROP_IN") {
+		return (
+			<div className="h-[calc(100vh-5rem)] overflow-auto p-6">
+				<div className="mb-6">
+					<Link
+						href="/calendar"
+						className="inline-flex items-center gap-1.5 text-[var(--muted-foreground)] text-sm transition-colors hover:text-[var(--foreground)]"
+					>
+						<ArrowLeft size={14} />
+						Back to calendar
+					</Link>
+				</div>
+				<div className="mx-auto max-w-3xl">
+					<DropInEventDetails
+						eventId={eventId}
+						eventStart={event.start}
+						eventTitle={event.title}
+						isStaff={isFacilityOrAdmin}
+						userId={userId}
+					/>
 				</div>
 			</div>
 		);

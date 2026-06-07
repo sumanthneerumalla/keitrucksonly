@@ -45,7 +45,12 @@ import { COLOR_OPTIONS } from "~/lib/constants";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
-type EventTypeValue = "BLOCK" | "BOOKABLE" | "COACHING_SLOT" | "RENTAL_WINDOW";
+type EventTypeValue =
+	| "BLOCK"
+	| "BOOKABLE"
+	| "COACHING_SLOT"
+	| "RENTAL_WINDOW"
+	| "DROP_IN";
 
 interface EventFormModalProps {
 	open?: boolean;
@@ -185,10 +190,13 @@ export default function EventFormModal({
 	// Populate rental-specific fields from fetchedEvent (async — arrives after modal opens)
 	useEffect(() => {
 		if (!fetchedEvent) return;
-		// BOOKABLE uses one flat "Courts" multi-select (like RENTAL_WINDOW). Hydrate it
-		// with the full set of courts — primary resourceId + any additional resourceIds,
-		// deduped — since the calendar lib renders an event on resourceIds when present.
-		if (fetchedEvent.eventType === "BOOKABLE") {
+		// BOOKABLE and DROP_IN use one flat "Courts" multi-select (like RENTAL_WINDOW).
+		// Hydrate it with the full set of courts — primary resourceId + any additional
+		// resourceIds, deduped — since the calendar lib renders on resourceIds when present.
+		if (
+			fetchedEvent.eventType === "BOOKABLE" ||
+			fetchedEvent.eventType === "DROP_IN"
+		) {
 			setResourceIds(
 				Array.from(
 					new Set(
@@ -544,17 +552,18 @@ export default function EventFormModal({
 		}
 
 		setSaving(true);
-		// BOOKABLE uses the flat "Courts" multi-select (`resourceIds` state). Store the
-		// first selection as the primary `resourceId` (single-court consumers still read
-		// it) and the FULL set as `resourceIds` only when 2+ courts — the calendar lib
-		// renders an event on `resourceIds` when present, so it must hold every reserved
-		// court. Single-court BOOKABLE keeps the legacy shape (resourceId set, no extras).
-		const isBookable = eventType === "BOOKABLE";
-		const primaryResourceId = isBookable
+		// BOOKABLE and DROP_IN (Rotation Play) use the flat "Courts" multi-select
+		// (`resourceIds` state). Store the first selection as the primary `resourceId`
+		// (single-court consumers still read it) and the FULL set as `resourceIds` only
+		// when 2+ courts — the calendar lib renders an event on `resourceIds` when
+		// present, so it must hold every reserved court. A single-court event keeps the
+		// legacy shape (resourceId set, no extras).
+		const usesMultiCourt = eventType === "BOOKABLE" || eventType === "DROP_IN";
+		const primaryResourceId = usesMultiCourt
 			? resourceIds[0] || undefined
 			: resourceId || undefined;
 		const multiCourtIds =
-			isBookable && resourceIds.length > 1 ? resourceIds : undefined;
+			usesMultiCourt && resourceIds.length > 1 ? resourceIds : undefined;
 		if (isEdit && selectedEvent) {
 			const dbEventId =
 				((selectedEvent.data as Record<string, unknown> | undefined)
@@ -569,7 +578,7 @@ export default function EventFormModal({
 				// Send [] (not undefined) for single-court BOOKABLE so deselecting down to
 				// one court clears any previously-stored extra courts. undefined = "leave
 				// unchanged", which would strand stale resourceIds.
-				resourceIds: isBookable ? (multiCourtIds ?? []) : undefined,
+				resourceIds: usesMultiCourt ? (multiCourtIds ?? []) : undefined,
 				allDay,
 				productId: productId || undefined,
 				// MVP: creditCost is always 1 for product-linked events. No UI input exists for
@@ -692,6 +701,9 @@ export default function EventFormModal({
 								<option value="BOOKABLE">
 									Bookable — students can register
 								</option>
+								<option value="DROP_IN">
+									Rotation Play — managed drop-in games
+								</option>
 								<option value="BLOCK">Block — internal scheduling</option>
 								<option value="RENTAL_WINDOW">
 									Rental Window — court availability
@@ -723,7 +735,8 @@ export default function EventFormModal({
 					    BOOKABLE use the flat multi-court "Courts" picker below instead. */}
 					{resources.length > 0 &&
 						eventType !== "RENTAL_WINDOW" &&
-						eventType !== "BOOKABLE" && (
+						eventType !== "BOOKABLE" &&
+						eventType !== "DROP_IN" && (
 							<div className="space-y-1">
 								<label className="font-medium text-[var(--foreground)] text-sm">
 									Resource
@@ -768,11 +781,13 @@ export default function EventFormModal({
 					    RENTAL_WINDOW and BOOKABLE. BOOKABLE uses it so a drop-in / open-play
 					    event can reserve several courts at once (optional for BOOKABLE,
 					    required for RENTAL_WINDOW). */}
-					{(eventType === "RENTAL_WINDOW" || eventType === "BOOKABLE") &&
+					{(eventType === "RENTAL_WINDOW" ||
+						eventType === "BOOKABLE" ||
+						eventType === "DROP_IN") &&
 						(!isEdit || fetchedEvent) && (
 							<div className="space-y-1">
 								<label className="font-medium text-[var(--foreground)] text-sm">
-									{eventType === "BOOKABLE" ? (
+									{eventType === "BOOKABLE" || eventType === "DROP_IN" ? (
 										"Courts"
 									) : (
 										<>
