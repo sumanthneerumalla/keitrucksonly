@@ -149,7 +149,8 @@ model User {
   rentalBookings RentalBooking[]
 
   // Drop-in check-ins (designFiles/drop-in) — per-session play state, separate from EventRegistration
-  dropInCheckIns DropInCheckIn[]
+  dropInCheckIns               DropInCheckIn[]
+  dropInAssignmentParticipants DropInAssignmentParticipant[]
 
   // Family group — opt-in grouping for shared package consumption (public-shop.md FAM phase).
   // Two users with the same non-null familyGroupId share package credits via consumeCredit widening.
@@ -737,7 +738,8 @@ model DropInSession {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  checkIns DropInCheckIn[]
+  checkIns    DropInCheckIn[]
+  assignments DropInAssignment[]
 
   @@unique([eventId, occurrenceDate]) // one live session per day per series
   @@index([clubShortName])
@@ -770,6 +772,91 @@ model DropInCheckIn {
 
   @@unique([sessionId, userId])
   @@index([sessionId, status])
+  @@index([userId])
+}
+
+// ===========================================================================
+// DROP-IN ROTATION (TIMED + MATCH) — DI-2 / DI-4. See designFiles/drop-in.
+// ===========================================================================
+
+enum DropInSide {
+  A
+  B
+}
+
+enum DropInAssignmentStatus {
+  ASSIGNED // transient: staff pre-assign or the instant before auto-start (happy path skips to IN_PROGRESS)
+  IN_PROGRESS // the live matchup/group on the court
+  PENDING_CONFIRM // MATCH: one side reported a score; court freed; awaiting opponent confirm
+  CONFIRMED // MATCH: both sides agree; eligible for GBR sync
+  DISPUTED // MATCH: score mismatch; needs staff resolution
+  COMPLETED // TIMED slot ended by timer (no scores)
+  CANCELLED // staff-cancelled
+}
+
+enum GbrSyncStatus {
+  NOT_APPLICABLE // TIMED / MANUAL — never synced
+  PENDING // confirmed, queued for submission
+  SENT // accepted by GBR
+  FAILED // submission errored; retry queue re-attempts
+  SKIPPED // intentionally not scored (walkover / staff override)
+}
+
+// A court occupied by players for a slot (TIMED group) or a matchup (MATCH).
+model DropInAssignment {
+  assignmentId String                 @id @default(cuid())
+  sessionId    String
+  session      DropInSession          @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  courtId      String // ClubResource id (one of session.courtIds); plain string, not a relation
+  format       DropInFormat
+  status       DropInAssignmentStatus @default(ASSIGNED)
+
+  participants DropInAssignmentParticipant[]
+
+  startedAt DateTime?
+  endedAt   DateTime?
+  expiresAt DateTime? // TIMED: startedAt + rotationMinutes; MATCH (DI-6): optional time limit
+
+  // Scores (MATCH only) — best-of-N per DropInSession.bestOf
+  reportedByUserId  String?
+  reportedScoreA    Int? // games won by side A (summary/winner)
+  reportedScoreB    Int? // games won by side B
+  gameScores        Json? // per-game [{a:21,b:18},...] — submitted to GBR match_sets (DI-5)
+  winnerSide        DropInSide?
+  confirmedByUserId String?
+  confirmedAt       DateTime?
+
+  // GBR sync (MATCH only; stubbed until DI-5)
+  externalMatchId String?       @unique // idempotency key sent to GBR; == assignmentId
+  gbrSyncStatus   GbrSyncStatus @default(NOT_APPLICABLE)
+  gbrSyncedAt     DateTime?
+  gbrSyncError    String?
+  ratingWeight    Float? // 1.0 for self-reported drop-in matches
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sessionId, status])
+  @@index([courtId])
+  @@index([gbrSyncStatus])
+}
+
+// Per-player rows for an assignment — the unit we aggregate for standings + fairness.
+model DropInAssignmentParticipant {
+  id                 String           @id @default(cuid())
+  assignmentId       String
+  assignment         DropInAssignment @relation(fields: [assignmentId], references: [assignmentId], onDelete: Cascade)
+  sessionId          String // denormalized from the assignment for fast per-session aggregation
+  userId             String
+  user               User             @relation(fields: [userId], references: [userId])
+  gbrPlayerId        String? // GBR player id used at submission time
+  side               DropInSide? // A/B for MATCH; null for a TIMED group
+  isWinner           Boolean? // stamped when the assignment is CONFIRMED (MATCH); null for TIMED
+  ratingAtAssignment Float? // optional: GBR display rating used for skill-band pairing (audit)
+  createdAt          DateTime         @default(now())
+
+  @@unique([assignmentId, userId])
+  @@index([sessionId, userId])
   @@index([userId])
 }
 
@@ -1577,7 +1664,7 @@ model EmailGroup {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
-  archivedAt  DateTime?
+  archivedAt DateTime?
 
   members    EmailGroupMember[]
   exclusions EmailGroupExclusion[]
@@ -1631,27 +1718,27 @@ enum EmailSendStatus {
 
 // EmailSendLog — audit log of every email sent to a group
 model EmailSendLog {
-  sendLogId       String     @id @default(cuid())
-  emailGroupId    String
-  emailGroup      EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
-  senderUserId    String
-  sender          User       @relation("EmailSender", fields: [senderUserId], references: [userId])
-  subject         String     @db.VarChar(500)
-  bodyHtml        String     @db.Text
-  bodyText        String?    @db.Text
-  attachmentUrls  String[]
-  resendId        String?    @db.VarChar(100)
-  status          EmailSendStatus @default(sent)
-  replyToEmail    String?    @db.VarChar(255)
-  fromDisplayName String?    @db.VarChar(200)
-  recipientCount  Int
-  skippedCount    Int        @default(0)
+  sendLogId         String          @id @default(cuid())
+  emailGroupId      String
+  emailGroup        EmailGroup      @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  senderUserId      String
+  sender            User            @relation("EmailSender", fields: [senderUserId], references: [userId])
+  subject           String          @db.VarChar(500)
+  bodyHtml          String          @db.Text
+  bodyText          String?         @db.Text
+  attachmentUrls    String[]
+  resendId          String?         @db.VarChar(100)
+  status            EmailSendStatus @default(sent)
+  replyToEmail      String?         @db.VarChar(255)
+  fromDisplayName   String?         @db.VarChar(200)
+  recipientCount    Int
+  skippedCount      Int             @default(0)
   skippedRecipients Json?
-  errorMessage    String?    @db.Text
+  errorMessage      String?         @db.Text
   // Test sends (the "Send Test to Me" button) are logged for audit/delivery
   // tracking but excluded from the user-facing send history.
-  isTest          Boolean    @default(false)
-  sentAt          DateTime   @default(now())
+  isTest            Boolean         @default(false)
+  sentAt            DateTime        @default(now())
 
   recipients EmailSendRecipient[]
 
