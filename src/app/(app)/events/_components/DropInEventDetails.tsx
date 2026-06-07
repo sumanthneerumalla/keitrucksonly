@@ -533,15 +533,25 @@ export default function DropInEventDetails({
 										a.status === "PENDING_CONFIRM" &&
 										a.participants.some((p) => p.userId === userId) &&
 										a.reportedByUserId !== userId && (
-											<Button
-												size="sm"
-												disabled={confirmScore.isPending}
-												onClick={() =>
-													confirmScore.mutate({ assignmentId: a.assignmentId })
-												}
-											>
-												Confirm {a.reportedScoreA}–{a.reportedScoreB}
-											</Button>
+											<div className="space-y-1.5 rounded-md bg-[var(--muted)] p-2">
+												<p className="text-[var(--muted-foreground)] text-xs">
+													Opponent reported:
+												</p>
+												<p className="font-mono text-[var(--foreground)] text-sm">
+													{formatGames(a.gameScores)}
+												</p>
+												<Button
+													size="sm"
+													disabled={confirmScore.isPending}
+													onClick={() =>
+														confirmScore.mutate({
+															assignmentId: a.assignmentId,
+														})
+													}
+												>
+													Confirm {a.reportedScoreA}–{a.reportedScoreB}
+												</Button>
+											</div>
 										)}
 
 									{/* Staff can enter the score for any court directly (authoritative). */}
@@ -709,6 +719,14 @@ function Leaderboard({
 			</table>
 		</div>
 	);
+}
+
+/** Format reported per-game scores ("21–18 · 18–21 · 21–15") from the JSON column. */
+function formatGames(gameScores: unknown): string {
+	if (!Array.isArray(gameScores)) return "—";
+	return (gameScores as { a: number; b: number }[])
+		.map((g) => `${g.a}–${g.b}`)
+		.join("  ·  ");
 }
 
 function Countdown({
