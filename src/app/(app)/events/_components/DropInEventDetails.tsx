@@ -102,7 +102,7 @@ export default function DropInEventDetails({
 	});
 	const reportScore = api.dropIn.reportScore.useMutation({
 		onSuccess: () => {
-			setReportingFor(null);
+			setReporting(null);
 			refresh();
 		},
 		onError: (e) => toast(e.message, "error"),
@@ -122,6 +122,13 @@ export default function DropInEventDetails({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
+	const staffSetScore = api.dropIn.staffSetScore.useMutation({
+		onSuccess: () => {
+			setReporting(null);
+			refresh();
+		},
+		onError: (e) => toast(e.message, "error"),
+	});
 
 	// ---- start-session form (staff, before a session exists) -----------------
 	const [mode, setMode] = useState<"TIMED" | "MATCH">("TIMED");
@@ -129,7 +136,10 @@ export default function DropInEventDetails({
 	const [rotationMinutes, setRotationMinutes] = useState(15);
 
 	// ---- score reporting -----------------------------------------------------
-	const [reportingFor, setReportingFor] = useState<string | null>(null);
+	const [reporting, setReporting] = useState<{
+		id: string;
+		staff: boolean;
+	} | null>(null);
 
 	// ---- audio horn + kiosk --------------------------------------------------
 	const audioCtxRef = useRef<AudioContext | null>(null);
@@ -469,7 +479,9 @@ export default function DropInEventDetails({
 										a.participants.some((p) => p.userId === userId) && (
 											<Button
 												size="sm"
-												onClick={() => setReportingFor(a.assignmentId)}
+												onClick={() =>
+													setReporting({ id: a.assignmentId, staff: false })
+												}
 											>
 												Report score
 											</Button>
@@ -490,16 +502,41 @@ export default function DropInEventDetails({
 											</Button>
 										)}
 
-									{reportingFor === a.assignmentId && (
+									{/* Staff can enter the score for any court directly (authoritative). */}
+									{isMatch &&
+										isStaff &&
+										(a.status === "IN_PROGRESS" ||
+											a.status === "PENDING_CONFIRM") && (
+											<Button
+												variant="outline"
+												size="sm"
+												onClick={() =>
+													setReporting({ id: a.assignmentId, staff: true })
+												}
+											>
+												Enter score
+											</Button>
+										)}
+
+									{reporting?.id === a.assignmentId && (
 										<ScoreEntry
 											bestOf={session.bestOf ?? 3}
-											pending={reportScore.isPending}
-											onCancel={() => setReportingFor(null)}
+											pending={
+												reporting.staff
+													? staffSetScore.isPending
+													: reportScore.isPending
+											}
+											onCancel={() => setReporting(null)}
 											onSubmit={(gameScores) =>
-												reportScore.mutate({
-													assignmentId: a.assignmentId,
-													gameScores,
-												})
+												reporting.staff
+													? staffSetScore.mutate({
+															assignmentId: a.assignmentId,
+															gameScores,
+														})
+													: reportScore.mutate({
+															assignmentId: a.assignmentId,
+															gameScores,
+														})
 											}
 										/>
 									)}

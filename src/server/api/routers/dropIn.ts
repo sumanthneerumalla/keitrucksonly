@@ -811,6 +811,101 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Staff (facility+): enter/override a MATCH score directly — authoritative
+	 * (C2, 1.0x), no opponent confirm needed. Sets the game CONFIRMED, stamps
+	 * winners, returns players to the pool (counters bumped), and queues the
+	 * (stubbed) GBR sync. Works on a live, pending, or disputed game.
+	 */
+	staffSetScore: facilityProcedure
+		.input(
+			z.object({
+				assignmentId: z.string(),
+				gameScores: z
+					.array(
+						z.object({
+							a: z.number().int().min(0),
+							b: z.number().int().min(0),
+						}),
+					)
+					.min(1),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const assignment = await ctx.db.dropInAssignment.findUnique({
+				where: { assignmentId: input.assignmentId },
+				include: {
+					participants: { select: { userId: true } },
+					session: { select: { clubShortName: true, sessionId: true } },
+				},
+			});
+			if (
+				!assignment ||
+				assignment.session.clubShortName !== ctx.user.clubShortName
+			) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (
+				assignment.status !== "IN_PROGRESS" &&
+				assignment.status !== "PENDING_CONFIRM" &&
+				assignment.status !== "DISPUTED"
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "This game is already finished.",
+				});
+			}
+			const gamesA = input.gameScores.filter((g) => g.a > g.b).length;
+			const gamesB = input.gameScores.filter((g) => g.b > g.a).length;
+			if (gamesA === gamesB) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "A match can't end tied — re-check the game scores.",
+				});
+			}
+			const winnerSide = gamesA > gamesB ? DropInSide.A : DropInSide.B;
+			const now = new Date();
+			return ctx.db.$transaction(async (tx) => {
+				const updated = await tx.dropInAssignment.update({
+					where: { assignmentId: assignment.assignmentId },
+					data: {
+						status: "CONFIRMED",
+						reportedByUserId: ctx.user.userId,
+						reportedScoreA: gamesA,
+						reportedScoreB: gamesB,
+						gameScores: input.gameScores,
+						winnerSide,
+						confirmedByUserId: ctx.user.userId,
+						confirmedAt: now,
+						gbrSyncStatus: "PENDING",
+					},
+				});
+				await tx.dropInAssignmentParticipant.updateMany({
+					where: { assignmentId: assignment.assignmentId, side: winnerSide },
+					data: { isWinner: true },
+				});
+				await tx.dropInAssignmentParticipant.updateMany({
+					where: {
+						assignmentId: assignment.assignmentId,
+						side: winnerSide === DropInSide.A ? DropInSide.B : DropInSide.A,
+					},
+					data: { isWinner: false },
+				});
+				await tx.dropInCheckIn.updateMany({
+					where: {
+						sessionId: assignment.session.sessionId,
+						userId: { in: assignment.participants.map((p) => p.userId) },
+					},
+					data: {
+						status: "IDLE",
+						gamesPlayed: { increment: 1 },
+						lastPlayedAt: now,
+					},
+				});
+				return updated;
+			});
+		}),
+
+	/**
 	 * TIMED auto-rotation tick. The live board calls this when a slot's countdown
 	 * hits zero; it completes every expired TIMED slot and forms the next group on
 	 * that court from the remaining WAITING pool — so rotation is hands-free.
