@@ -364,6 +364,89 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Staff (facility+): replace a player in a live game with another member (e.g. to
+	 * seat a specific test account). Keeps the participant's side; benches the
+	 * outgoing player (IDLE) and seats the incoming one (PLAYING, check-in created if
+	 * needed). Allowed while the game is IN_PROGRESS or PENDING_CONFIRM.
+	 */
+	swapParticipant: facilityProcedure
+		.input(
+			z.object({
+				assignmentId: z.string(),
+				outUserId: z.string(),
+				inUserId: z.string(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			if (input.outUserId === input.inUserId) return { ok: true };
+			const assignment = await ctx.db.dropInAssignment.findUnique({
+				where: { assignmentId: input.assignmentId },
+				include: {
+					participants: { select: { id: true, userId: true } },
+					session: { select: { clubShortName: true, sessionId: true } },
+				},
+			});
+			if (
+				!assignment ||
+				assignment.session.clubShortName !== ctx.user.clubShortName
+			) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (
+				assignment.status !== "IN_PROGRESS" &&
+				assignment.status !== "PENDING_CONFIRM"
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Players can only be swapped on a live game.",
+				});
+			}
+			const outRow = assignment.participants.find(
+				(p) => p.userId === input.outUserId,
+			);
+			if (!outRow) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "That player isn't in this game.",
+				});
+			}
+			if (assignment.participants.some((p) => p.userId === input.inUserId)) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "That player is already in this game.",
+				});
+			}
+			const inUser = await ctx.db.user.findUnique({
+				where: { userId: input.inUserId },
+				select: { clubShortName: true },
+			});
+			if (!inUser || inUser.clubShortName !== ctx.user.clubShortName) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Unknown player.",
+				});
+			}
+
+			const sessionId = assignment.session.sessionId;
+			return ctx.db.$transaction(async (tx) => {
+				const swapped = await tx.dropInAssignmentParticipant.update({
+					where: { id: outRow.id },
+					data: { userId: input.inUserId, isWinner: null },
+				});
+				await tx.dropInCheckIn.updateMany({
+					where: { sessionId, userId: input.outUserId },
+					data: { status: "IDLE" },
+				});
+				await tx.dropInCheckIn.upsert({
+					where: { sessionId_userId: { sessionId, userId: input.inUserId } },
+					create: { sessionId, userId: input.inUserId, status: "PLAYING" },
+					update: { status: "PLAYING", leftAt: null },
+				});
+				return swapped;
+			});
+		}),
+
+	/**
 	 * Staff (facility+): add one or more members to the waiting pool. Passing 2 (or
 	 * 4) users queues them adjacently so doubles auto-pairs them by queue order —
 	 * the closest thing to "add a pair" until explicit pairs land (R3). Upserts each

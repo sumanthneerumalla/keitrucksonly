@@ -1,7 +1,14 @@
 "use client";
 
 import { Check, Maximize2, Trophy, UserPlus, Volume2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -110,6 +117,10 @@ export default function DropInEventDetails({
 		onSuccess: (res) => {
 			if (res.rotated > 0) refresh();
 		},
+	});
+	const swapParticipant = api.dropIn.swapParticipant.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
 	});
 
 	// ---- start-session form (staff, before a session exists) -----------------
@@ -289,6 +300,36 @@ export default function DropInEventDetails({
 	const fullName = (u: { firstName: string | null; lastName: string | null }) =>
 		`${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "Player";
 
+	// Staff can swap a player on a live game (e.g. seat a test account).
+	type Assignment = (typeof assignments)[number];
+	const canSwapPlayers = (status: string) =>
+		isStaff && (status === "IN_PROGRESS" || status === "PENDING_CONFIRM");
+	const renderSide = (a: Assignment, side: "A" | "B") => {
+		const ps = a.participants.filter((p) => p.side === side);
+		if (ps.length === 0)
+			return (
+				<span className="text-[var(--muted-foreground)]">Side {side}</span>
+			);
+		return ps.map((p, i) => (
+			<span key={p.userId} className="inline-flex items-center">
+				{i > 0 && (
+					<span className="mx-1 text-[var(--muted-foreground)]">&</span>
+				)}
+				<SwapPlayer
+					name={fullName(p.user)}
+					canSwap={canSwapPlayers(a.status)}
+					onPick={(inUserId) =>
+						swapParticipant.mutate({
+							assignmentId: a.assignmentId,
+							outUserId: p.userId,
+							inUserId,
+						})
+					}
+				/>
+			</span>
+		));
+	};
+
 	return (
 		<div className="space-y-5">
 			{/* Header */}
@@ -366,24 +407,18 @@ export default function DropInEventDetails({
 							{a && (
 								<div className="space-y-2">
 									{isMatch ? (
-										<div className="flex items-center justify-between text-sm">
-											<TeamNames
-												label="A"
-												names={a.participants
-													.filter((p) => p.side === "A")
-													.map((p) => fullName(p.user))}
-											/>
-											<span className="text-[var(--muted-foreground)] text-xs">
+										<div className="flex items-center justify-between gap-2 text-sm">
+											<span className="flex flex-1 flex-wrap items-center gap-x-1">
+												{renderSide(a, "A")}
+											</span>
+											<span className="shrink-0 text-[var(--muted-foreground)] text-xs">
 												{a.reportedScoreA != null
 													? `${a.reportedScoreA}–${a.reportedScoreB}`
 													: "vs"}
 											</span>
-											<TeamNames
-												label="B"
-												names={a.participants
-													.filter((p) => p.side === "B")
-													.map((p) => fullName(p.user))}
-											/>
+											<span className="flex flex-1 flex-wrap items-center justify-end gap-x-1">
+												{renderSide(a, "B")}
+											</span>
 										</div>
 									) : (
 										<div className="flex flex-wrap gap-1 text-sm">
@@ -392,7 +427,17 @@ export default function DropInEventDetails({
 													key={p.userId}
 													className="rounded-full bg-[var(--muted)] px-2 py-0.5 text-xs"
 												>
-													{fullName(p.user)}
+													<SwapPlayer
+														name={fullName(p.user)}
+														canSwap={canSwapPlayers(a.status)}
+														onPick={(inUserId) =>
+															swapParticipant.mutate({
+																assignmentId: a.assignmentId,
+																outUserId: p.userId,
+																inUserId,
+															})
+														}
+													/>
 												</span>
 											))}
 										</div>
@@ -590,11 +635,94 @@ function Countdown({
 	);
 }
 
-function TeamNames({ label, names }: { label: string; names: string[] }) {
+/** A player's name. For staff (canSwap), it's a typeahead trigger to replace the
+ *  player with another member; otherwise a plain label. */
+function SwapPlayer({
+	name,
+	canSwap,
+	onPick,
+}: {
+	name: string;
+	canSwap: boolean;
+	onPick: (inUserId: string) => void;
+}) {
+	if (!canSwap) return <span className="text-[var(--foreground)]">{name}</span>;
 	return (
-		<span className="text-[var(--foreground)]">
-			{names.length ? names.join(" & ") : `Side ${label}`}
-		</span>
+		<MemberSearchPopover onPick={onPick}>
+			<button
+				type="button"
+				title="Swap player"
+				className="rounded text-[var(--foreground)] underline decoration-dotted underline-offset-2 hover:text-[var(--primary)]"
+			>
+				{name}
+			</button>
+		</MemberSearchPopover>
+	);
+}
+
+/** Single-select club member typeahead in a popover. */
+function MemberSearchPopover({
+	children,
+	onPick,
+}: {
+	children: ReactNode;
+	onPick: (userId: string) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const [query, setQuery] = useState("");
+	const [debounced, setDebounced] = useState("");
+	useEffect(() => {
+		const t = setTimeout(() => setDebounced(query.trim()), 300);
+		return () => clearTimeout(t);
+	}, [query]);
+	const search = api.user.searchMembers.useQuery(
+		{ query: debounced },
+		{ enabled: open && debounced.length > 0 },
+	);
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>{children}</PopoverTrigger>
+			<PopoverContent className="w-64 p-2" align="start">
+				<Input
+					placeholder="Search members…"
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					className="h-8"
+				/>
+				<div className="mt-2 max-h-48 space-y-0.5 overflow-auto">
+					{debounced.length === 0 && (
+						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
+							Type a name to search.
+						</p>
+					)}
+					{search.data?.members.map((m) => {
+						const name =
+							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() ||
+							m.email ||
+							"Member";
+						return (
+							<button
+								key={m.userId}
+								type="button"
+								onClick={() => {
+									onPick(m.userId);
+									setOpen(false);
+									setQuery("");
+								}}
+								className="block w-full rounded px-2 py-1 text-left text-[var(--foreground)] text-sm hover:bg-[var(--muted)]"
+							>
+								{name}
+							</button>
+						);
+					})}
+					{debounced.length > 0 && (search.data?.members.length ?? 0) === 0 && (
+						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
+							No matches.
+						</p>
+					)}
+				</div>
+			</PopoverContent>
+		</Popover>
 	);
 }
 
