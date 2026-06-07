@@ -364,6 +364,57 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Staff (facility+): add one or more members to the waiting pool. Passing 2 (or
+	 * 4) users queues them adjacently so doubles auto-pairs them by queue order —
+	 * the closest thing to "add a pair" until explicit pairs land (R3). Upserts each
+	 * check-in to WAITING; queuedAt is staggered to preserve the selected order.
+	 */
+	addToQueue: facilityProcedure
+		.input(
+			z.object({
+				sessionId: z.string(),
+				userIds: z.array(z.string()).min(1).max(8),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: { clubShortName: true, status: true },
+			});
+			if (!session || session.clubShortName !== ctx.user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (session.status !== "ACTIVE") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Session is not active.",
+				});
+			}
+			const now = Date.now();
+			await ctx.db.$transaction(
+				input.userIds.map((userId, i) =>
+					ctx.db.dropInCheckIn.upsert({
+						where: {
+							sessionId_userId: { sessionId: input.sessionId, userId },
+						},
+						create: {
+							sessionId: input.sessionId,
+							userId,
+							status: "WAITING",
+							queuedAt: new Date(now + i),
+						},
+						update: {
+							status: "WAITING",
+							queuedAt: new Date(now + i),
+							leftAt: null,
+						},
+					}),
+				),
+			);
+			return { added: input.userIds.length };
+		}),
+
+	/**
 	 * Staff: form the next group (TIMED) or matchup (MATCH) on a free court from
 	 * the top of the fairness-ordered pool. Doubles auto-pairs from queue order.
 	 */

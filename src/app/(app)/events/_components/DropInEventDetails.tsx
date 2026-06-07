@@ -1,9 +1,15 @@
 "use client";
 
-import { Maximize2, Trophy, Volume2 } from "lucide-react";
+import { Check, Maximize2, Trophy, UserPlus, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
+import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "~/app/_components/shared/ui/popover";
 import { Select } from "~/app/_components/shared/ui/select";
 import { api } from "~/trpc/react";
 
@@ -466,6 +472,13 @@ export default function DropInEventDetails({
 						Waiting ({pool.length})
 					</span>
 					<div className="flex gap-2">
+						{isStaff && (
+							<StaffAddToQueue
+								sessionId={session.sessionId}
+								format={session.format}
+								onAdded={refresh}
+							/>
+						)}
 						{viewerStatus === "WAITING" ? (
 							<Button
 								variant="outline"
@@ -648,5 +661,132 @@ function ScoreEntry({
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+/**
+ * Staff (facility+) control to add member(s) to the waiting pool. Multi-select so
+ * staff can drop in a pair/group at once (they queue together → doubles pairs them
+ * by queue order). Reuses the club member search (`user.searchMembers`).
+ */
+function StaffAddToQueue({
+	sessionId,
+	format,
+	onAdded,
+}: {
+	sessionId: string;
+	format: string | null;
+	onAdded: () => void;
+}) {
+	const { toast } = useToast();
+	const [open, setOpen] = useState(false);
+	const [query, setQuery] = useState("");
+	const [debounced, setDebounced] = useState("");
+	const [selected, setSelected] = useState<Set<string>>(new Set());
+
+	useEffect(() => {
+		const t = setTimeout(() => setDebounced(query.trim()), 300);
+		return () => clearTimeout(t);
+	}, [query]);
+
+	const search = api.user.searchMembers.useQuery(
+		{ query: debounced },
+		{ enabled: open && debounced.length > 0 },
+	);
+	const addToQueue = api.dropIn.addToQueue.useMutation({
+		onSuccess: (res) => {
+			toast(`Added ${res.added} to the queue.`, "success");
+			setSelected(new Set());
+			setQuery("");
+			setOpen(false);
+			onAdded();
+		},
+		onError: (e) => toast(e.message, "error"),
+	});
+
+	const toggle = (userId: string) =>
+		setSelected((prev) => {
+			const next = new Set(prev);
+			if (next.has(userId)) next.delete(userId);
+			else next.add(userId);
+			return next;
+		});
+
+	const ids = [...selected];
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button variant="outline" size="sm">
+					<UserPlus size={14} /> Add to queue
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent className="w-72 p-2" align="end">
+				<Input
+					placeholder="Search members…"
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					className="h-8"
+				/>
+				<div className="mt-2 max-h-48 space-y-0.5 overflow-auto">
+					{debounced.length === 0 && (
+						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
+							Type a name to search.
+						</p>
+					)}
+					{debounced.length > 0 && search.isFetching && (
+						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
+							Searching…
+						</p>
+					)}
+					{search.data?.members.map((m) => {
+						const name =
+							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() ||
+							m.email ||
+							"Member";
+						const isSel = selected.has(m.userId);
+						return (
+							<button
+								key={m.userId}
+								type="button"
+								onClick={() => toggle(m.userId)}
+								className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${
+									isSel
+										? "bg-[var(--primary)]/10 text-[var(--foreground)]"
+										: "text-[var(--foreground)] hover:bg-[var(--muted)]"
+								}`}
+							>
+								<span>{name}</span>
+								{isSel && <Check size={14} className="text-[var(--primary)]" />}
+							</button>
+						);
+					})}
+					{debounced.length > 0 &&
+						!search.isFetching &&
+						(search.data?.members.length ?? 0) === 0 && (
+							<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
+								No matches.
+							</p>
+						)}
+				</div>
+				<Button
+					size="sm"
+					className="mt-2 w-full"
+					disabled={ids.length === 0 || addToQueue.isPending}
+					onClick={() => addToQueue.mutate({ sessionId, userIds: ids })}
+				>
+					{addToQueue.isPending
+						? "Adding…"
+						: ids.length > 0
+							? `Add ${ids.length} to queue`
+							: "Add to queue"}
+				</Button>
+				<p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+					{format === "SINGLES"
+						? "Add players individually."
+						: "Pick 2 (or 4) — they queue together for doubles pairing."}
+				</p>
+			</PopoverContent>
+		</Popover>
 	);
 }
