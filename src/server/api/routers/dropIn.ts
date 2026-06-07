@@ -677,6 +677,120 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * TIMED auto-rotation tick. The live board calls this when a slot's countdown
+	 * hits zero; it completes every expired TIMED slot and forms the next group on
+	 * that court from the remaining WAITING pool — so rotation is hands-free.
+	 * Idempotent + race-safe: each expired slot is "claimed" via a conditional
+	 * status update, so concurrent ticks from multiple open boards can't double-
+	 * rotate. (Headless rotation with no board open would need a scheduler — R3.)
+	 */
+	tickTimed: protectedProcedure
+		.input(z.object({ sessionId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const user = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { clubShortName: true },
+			});
+			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: {
+					clubShortName: true,
+					status: true,
+					mode: true,
+					format: true,
+					rotationMinutes: true,
+				},
+			});
+			if (!session || session.clubShortName !== user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (session.status !== "ACTIVE" || session.mode !== DropInMode.TIMED) {
+				return { rotated: 0 };
+			}
+
+			const now = new Date();
+			const expired = await ctx.db.dropInAssignment.findMany({
+				where: {
+					sessionId: input.sessionId,
+					status: "IN_PROGRESS",
+					expiresAt: { lte: now },
+				},
+				include: { participants: { select: { userId: true } } },
+			});
+
+			const format = session.format ?? DropInFormat.DOUBLES;
+			const playersPerCourt = format === DropInFormat.SINGLES ? 2 : 4;
+			let rotated = 0;
+
+			for (const slot of expired) {
+				await ctx.db.$transaction(async (tx) => {
+					// Claim: only the tick that flips IN_PROGRESS -> COMPLETED proceeds.
+					const claimed = await tx.dropInAssignment.updateMany({
+						where: { assignmentId: slot.assignmentId, status: "IN_PROGRESS" },
+						data: { status: "COMPLETED", endedAt: now },
+					});
+					if (claimed.count === 0) return;
+
+					// Free the finishing players back to the pool (manual rejoin, A12).
+					await tx.dropInCheckIn.updateMany({
+						where: {
+							sessionId: input.sessionId,
+							userId: { in: slot.participants.map((p) => p.userId) },
+						},
+						data: {
+							status: "IDLE",
+							gamesPlayed: { increment: 1 },
+							lastPlayedAt: now,
+						},
+					});
+
+					// Pull the next group from whoever is still WAITING (fairness order).
+					const waiting = await tx.dropInCheckIn.findMany({
+						where: { sessionId: input.sessionId, status: "WAITING" },
+						orderBy: [
+							{ gamesPlayed: "asc" },
+							{ lastPlayedAt: { sort: "asc", nulls: "first" } },
+							{ queuedAt: "asc" },
+						],
+					});
+					if (waiting.length < playersPerCourt) return; // leave court empty
+
+					const picked = waiting.slice(0, playersPerCourt);
+					await tx.dropInAssignment.create({
+						data: {
+							sessionId: input.sessionId,
+							courtId: slot.courtId,
+							format,
+							status: "IN_PROGRESS",
+							startedAt: now,
+							expiresAt: new Date(
+								now.getTime() + (session.rotationMinutes ?? 15) * 60_000,
+							),
+							participants: {
+								create: picked.map((c) => ({
+									sessionId: input.sessionId,
+									userId: c.userId,
+									side: null,
+								})),
+							},
+						},
+					});
+					await tx.dropInCheckIn.updateMany({
+						where: {
+							sessionId: input.sessionId,
+							userId: { in: picked.map((c) => c.userId) },
+						},
+						data: { status: "PLAYING" },
+					});
+					rotated += 1;
+				});
+			}
+
+			return { rotated };
+		}),
+
+	/**
 	 * Per-session leaderboard (local; the GBR-extracted `calculateStandings` is a
 	 * later refinement). Ranks confirmed-match players by wins then point diff.
 	 */
