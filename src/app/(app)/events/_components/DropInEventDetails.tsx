@@ -300,6 +300,48 @@ export default function DropInEventDetails({
 		);
 	}
 
+	// Ended / cancelled session — show a clear closed state (+ final leaderboard for
+	// MATCH, + a staff "Start a new session" shortcut that re-activates it).
+	if (session.status === "ENDED" || session.status === "CANCELLED") {
+		return (
+			<div className="space-y-4">
+				<div className="rounded-lg border border-[var(--border)] bg-[var(--muted)] p-5 text-center">
+					<p className="font-semibold text-[var(--foreground)]">
+						{eventTitle} — session ended
+					</p>
+					<p className="mt-1 text-[var(--muted-foreground)] text-sm">
+						{session.mode === "MATCH"
+							? "Final results below."
+							: "Thanks for playing!"}
+					</p>
+					{isStaff && (
+						<Button
+							size="sm"
+							className="mt-3"
+							disabled={startSession.isPending}
+							onClick={() =>
+								startSession.mutate({
+									eventId,
+									occurrenceDate,
+									mode: session.mode,
+									format: session.format ?? undefined,
+									...(session.mode === "TIMED" && {
+										rotationMinutes: session.rotationMinutes ?? 15,
+									}),
+								})
+							}
+						>
+							{startSession.isPending ? "Starting…" : "Start a new session"}
+						</Button>
+					)}
+				</div>
+				{session.mode === "MATCH" && (
+					<Leaderboard rows={standingsQuery.data ?? []} />
+				)}
+			</div>
+		);
+	}
+
 	// Active session.
 	const viewerCheckIn = session.checkIns.find((c) => c.userId === userId);
 	const viewerStatus = viewerCheckIn?.status ?? null;
@@ -620,33 +662,51 @@ export default function DropInEventDetails({
 			</div>
 
 			{/* Leaderboard (MATCH) */}
-			{isMatch && (standingsQuery.data?.length ?? 0) > 0 && (
-				<div className="rounded-lg border border-[var(--border)] p-3">
-					<div className="mb-2 flex items-center gap-1.5 font-medium text-[var(--foreground)] text-sm">
-						<Trophy size={14} /> Leaderboard
-					</div>
-					<table className="w-full text-sm">
-						<thead>
-							<tr className="text-[var(--muted-foreground)] text-xs">
-								<th className="text-left font-normal">Player</th>
-								<th className="text-right font-normal">W</th>
-								<th className="text-right font-normal">L</th>
-								<th className="text-right font-normal">+/−</th>
-							</tr>
-						</thead>
-						<tbody>
-							{standingsQuery.data?.map((s) => (
-								<tr key={s.userId}>
-									<td className="text-[var(--foreground)]">{fullName(s)}</td>
-									<td className="text-right">{s.wins}</td>
-									<td className="text-right">{s.losses}</td>
-									<td className="text-right">{s.pointDiff}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
-			)}
+			{isMatch && <Leaderboard rows={standingsQuery.data ?? []} />}
+		</div>
+	);
+}
+
+function Leaderboard({
+	rows,
+}: {
+	rows: {
+		userId: string;
+		firstName: string | null;
+		lastName: string | null;
+		wins: number;
+		losses: number;
+		pointDiff: number;
+	}[];
+}) {
+	if (rows.length === 0) return null;
+	return (
+		<div className="rounded-lg border border-[var(--border)] p-3">
+			<div className="mb-2 flex items-center gap-1.5 font-medium text-[var(--foreground)] text-sm">
+				<Trophy size={14} /> Leaderboard
+			</div>
+			<table className="w-full text-sm">
+				<thead>
+					<tr className="text-[var(--muted-foreground)] text-xs">
+						<th className="text-left font-normal">Player</th>
+						<th className="text-right font-normal">W</th>
+						<th className="text-right font-normal">L</th>
+						<th className="text-right font-normal">+/−</th>
+					</tr>
+				</thead>
+				<tbody>
+					{rows.map((s) => (
+						<tr key={s.userId}>
+							<td className="text-[var(--foreground)]">
+								{`${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "Player"}
+							</td>
+							<td className="text-right">{s.wins}</td>
+							<td className="text-right">{s.losses}</td>
+							<td className="text-right">{s.pointDiff}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
 		</div>
 	);
 }

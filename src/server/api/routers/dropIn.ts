@@ -135,7 +135,11 @@ export const dropInRouter = createTRPCRouter({
 			});
 		}),
 
-	/** End a drop-in session. */
+	/**
+	 * End a drop-in session. Cancels any games still in flight and marks everyone
+	 * present as DONE, so the board can render a clean "ended" state. Confirmed
+	 * results (and the leaderboard) are left intact.
+	 */
 	endSession: facilityProcedure
 		.input(z.object({ sessionId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
@@ -146,9 +150,28 @@ export const dropInRouter = createTRPCRouter({
 			if (!session || session.clubShortName !== ctx.user.clubShortName) {
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
-			return ctx.db.dropInSession.update({
-				where: { sessionId: input.sessionId },
-				data: { status: "ENDED", endedAt: new Date() },
+			const now = new Date();
+			return ctx.db.$transaction(async (tx) => {
+				await tx.dropInAssignment.updateMany({
+					where: {
+						sessionId: input.sessionId,
+						status: {
+							in: ["ASSIGNED", "IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"],
+						},
+					},
+					data: { status: "CANCELLED", endedAt: now },
+				});
+				await tx.dropInCheckIn.updateMany({
+					where: {
+						sessionId: input.sessionId,
+						status: { in: ["WAITING", "PLAYING", "IDLE", "AWAITING_RESULT"] },
+					},
+					data: { status: "DONE" },
+				});
+				return tx.dropInSession.update({
+					where: { sessionId: input.sessionId },
+					data: { status: "ENDED", endedAt: now },
+				});
 			});
 		}),
 
