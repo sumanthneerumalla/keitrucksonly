@@ -22,6 +22,43 @@ import {
  * it tracks in-session presence: IDLE = checked in/present, WAITING =
  * waitlisted, CANCELLED = cancelled, LEFT = left/no-show.
  */
+/**
+ * Validate per-game scores for a badminton MATCH. Each game must reach the target
+ * (default 21) and be won by 2 — capped at target+9 (e.g. 30 for 21, where a
+ * 1-point win is allowed at the cap). The match must be decided by exactly the
+ * majority of `bestOf` games (2 of 3), total games ≤ bestOf, no game tied.
+ * Returns an error message, or null if the score is valid.
+ */
+function validateMatchScore(
+	games: { a: number; b: number }[],
+	pointsPerGame: number,
+	bestOf: number,
+): string | null {
+	const cap = pointsPerGame + 9;
+	for (const [i, g] of games.entries()) {
+		const n = i + 1;
+		if (g.a === g.b) return `Game ${n} can't be tied.`;
+		const w = Math.max(g.a, g.b);
+		const l = Math.min(g.a, g.b);
+		if (w < pointsPerGame) return `Game ${n}: a game goes to ${pointsPerGame}.`;
+		if (w > cap) return `Game ${n}: the maximum score is ${cap}.`;
+		// Win by 2, except a 1-point win is allowed only at the cap.
+		if (w < cap && w - l < 2) return `Game ${n}: must be won by 2.`;
+	}
+	if (games.length > bestOf)
+		return `Best of ${bestOf}: too many games entered.`;
+	const gamesA = games.filter((g) => g.a > g.b).length;
+	const gamesB = games.filter((g) => g.b > g.a).length;
+	const majority = Math.floor(bestOf / 2) + 1; // 2 for best-of-3
+	const winnerGames = Math.max(gamesA, gamesB);
+	const loserGames = Math.min(gamesA, gamesB);
+	if (winnerGames !== majority) {
+		return `Best of ${bestOf}: a side must win ${majority} game${majority > 1 ? "s" : ""}.`;
+	}
+	if (loserGames >= majority) return "Both sides can't win the match.";
+	return null;
+}
+
 export const dropInRouter = createTRPCRouter({
 	/**
 	 * Read the session + roster for a DROP_IN event occurrence. Returns null if
@@ -529,14 +566,14 @@ export const dropInRouter = createTRPCRouter({
 		.mutation(async ({ ctx, input }) => {
 			const session = await ctx.db.dropInSession.findUnique({
 				where: { sessionId: input.sessionId },
-				include: {
-					checkIns: true,
-					assignments: {
-						where: {
-							status: { in: ["IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"] },
-						},
-						select: { courtId: true },
-					},
+				select: {
+					sessionId: true,
+					clubShortName: true,
+					status: true,
+					courtIds: true,
+					format: true,
+					mode: true,
+					rotationMinutes: true,
 				},
 			});
 			if (!session || session.clubShortName !== ctx.user.clubShortName) {
@@ -554,32 +591,9 @@ export const dropInRouter = createTRPCRouter({
 					message: "Court is not part of this session.",
 				});
 			}
-			if (session.assignments.some((a) => a.courtId === input.courtId)) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Court is already occupied.",
-				});
-			}
 
 			const format = session.format ?? DropInFormat.DOUBLES;
 			const playersPerCourt = format === DropInFormat.SINGLES ? 2 : 4;
-			const waiting = session.checkIns
-				.filter((c) => c.status === "WAITING")
-				.sort(
-					(a, b) =>
-						a.gamesPlayed - b.gamesPlayed ||
-						(a.lastPlayedAt?.getTime() ?? 0) -
-							(b.lastPlayedAt?.getTime() ?? 0) ||
-						a.queuedAt.getTime() - b.queuedAt.getTime(),
-				);
-			if (waiting.length < playersPerCourt) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: `Need ${playersPerCourt} waiting players; have ${waiting.length}.`,
-				});
-			}
-
-			const picked = waiting.slice(0, playersPerCourt);
 			const isTimed = session.mode === DropInMode.TIMED;
 			const half = playersPerCourt / 2;
 			const now = new Date();
@@ -587,8 +601,59 @@ export const dropInRouter = createTRPCRouter({
 				? new Date(now.getTime() + (session.rotationMinutes ?? 15) * 60_000)
 				: null;
 
+			// Everything that reads the pool / claims players happens in ONE
+			// transaction so concurrent "Start next" (or auto-rotation ticks) can't
+			// assign the same players — or the same court — twice. The claim
+			// (updateMany WHERE status=WAITING) takes row locks; if a contending call
+			// grabbed some of our picks first, our count comes up short and we abort.
 			return ctx.db.$transaction(async (tx) => {
-				const assignment = await tx.dropInAssignment.create({
+				const occupied = await tx.dropInAssignment.findFirst({
+					where: {
+						sessionId: session.sessionId,
+						courtId: input.courtId,
+						status: { in: ["IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"] },
+					},
+					select: { assignmentId: true },
+				});
+				if (occupied) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message: "Court is already occupied.",
+					});
+				}
+
+				const waiting = await tx.dropInCheckIn.findMany({
+					where: { sessionId: session.sessionId, status: "WAITING" },
+					orderBy: [
+						{ gamesPlayed: "asc" },
+						{ lastPlayedAt: { sort: "asc", nulls: "first" } },
+						{ queuedAt: "asc" },
+					],
+				});
+				if (waiting.length < playersPerCourt) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: `Need ${playersPerCourt} waiting players; have ${waiting.length}.`,
+					});
+				}
+				const picked = waiting.slice(0, playersPerCourt);
+
+				const claim = await tx.dropInCheckIn.updateMany({
+					where: {
+						sessionId: session.sessionId,
+						userId: { in: picked.map((c) => c.userId) },
+						status: "WAITING",
+					},
+					data: { status: "PLAYING" },
+				});
+				if (claim.count !== playersPerCourt) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message: "Players were just assigned elsewhere — try again.",
+					});
+				}
+
+				return tx.dropInAssignment.create({
 					data: {
 						sessionId: session.sessionId,
 						courtId: input.courtId,
@@ -615,14 +680,6 @@ export const dropInRouter = createTRPCRouter({
 						},
 					},
 				});
-				await tx.dropInCheckIn.updateMany({
-					where: {
-						sessionId: session.sessionId,
-						userId: { in: picked.map((c) => c.userId) },
-					},
-					data: { status: "PLAYING" },
-				});
-				return assignment;
 			});
 		}),
 
@@ -692,7 +749,14 @@ export const dropInRouter = createTRPCRouter({
 				where: { assignmentId: input.assignmentId },
 				include: {
 					participants: { select: { userId: true } },
-					session: { select: { clubShortName: true, sessionId: true } },
+					session: {
+						select: {
+							clubShortName: true,
+							sessionId: true,
+							bestOf: true,
+							pointsPerGame: true,
+						},
+					},
 				},
 			});
 			if (
@@ -713,14 +777,16 @@ export const dropInRouter = createTRPCRouter({
 					message: "You are not in this match.",
 				});
 			}
+			const scoreError = validateMatchScore(
+				input.gameScores,
+				assignment.session.pointsPerGame ?? 21,
+				assignment.session.bestOf ?? 3,
+			);
+			if (scoreError) {
+				throw new TRPCError({ code: "BAD_REQUEST", message: scoreError });
+			}
 			const gamesA = input.gameScores.filter((g) => g.a > g.b).length;
 			const gamesB = input.gameScores.filter((g) => g.b > g.a).length;
-			if (gamesA === gamesB) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "A match can't end tied — re-check the game scores.",
-				});
-			}
 			const now = new Date();
 			return ctx.db.$transaction(async (tx) => {
 				const updated = await tx.dropInAssignment.update({
@@ -777,16 +843,22 @@ export const dropInRouter = createTRPCRouter({
 					message: "This match is not awaiting confirmation.",
 				});
 			}
-			if (!assignment.participants.some((p) => p.userId === user.userId)) {
+			const me = assignment.participants.find((p) => p.userId === user.userId);
+			if (!me) {
 				throw new TRPCError({
 					code: "FORBIDDEN",
 					message: "You are not in this match.",
 				});
 			}
-			if (assignment.reportedByUserId === user.userId) {
+			// Only the side that did NOT report can confirm (so a doubles partner
+			// can't rubber-stamp their own team's report).
+			const reporter = assignment.participants.find(
+				(p) => p.userId === assignment.reportedByUserId,
+			);
+			if (reporter && me.side === reporter.side) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Wait for an opponent to confirm the score you reported.",
+					message: "Only the opposing side can confirm the score.",
 				});
 			}
 			const now = new Date();
@@ -834,6 +906,59 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * MATCH: the opposing side rejects the reported score → DISPUTED. Players stay
+	 * locked (AWAITING_RESULT) until staff resolve via staffSetScore (or cancel).
+	 */
+	disputeScore: protectedProcedure
+		.input(z.object({ assignmentId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const user = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { userId: true, clubShortName: true },
+			});
+			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const assignment = await ctx.db.dropInAssignment.findUnique({
+				where: { assignmentId: input.assignmentId },
+				include: {
+					participants: { select: { userId: true, side: true } },
+					session: { select: { clubShortName: true } },
+				},
+			});
+			if (
+				!assignment ||
+				assignment.session.clubShortName !== user.clubShortName
+			) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (assignment.status !== "PENDING_CONFIRM") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "This match is not awaiting confirmation.",
+				});
+			}
+			const me = assignment.participants.find((p) => p.userId === user.userId);
+			if (!me) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not in this match.",
+				});
+			}
+			const reporter = assignment.participants.find(
+				(p) => p.userId === assignment.reportedByUserId,
+			);
+			if (reporter && me.side === reporter.side) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Only the opposing side can dispute the score.",
+				});
+			}
+			return ctx.db.dropInAssignment.update({
+				where: { assignmentId: assignment.assignmentId },
+				data: { status: "DISPUTED" },
+			});
+		}),
+
+	/**
 	 * Staff (facility+): enter/override a MATCH score directly — authoritative
 	 * (C2, 1.0x), no opponent confirm needed. Sets the game CONFIRMED, stamps
 	 * winners, returns players to the pool (counters bumped), and queues the
@@ -858,7 +983,14 @@ export const dropInRouter = createTRPCRouter({
 				where: { assignmentId: input.assignmentId },
 				include: {
 					participants: { select: { userId: true } },
-					session: { select: { clubShortName: true, sessionId: true } },
+					session: {
+						select: {
+							clubShortName: true,
+							sessionId: true,
+							bestOf: true,
+							pointsPerGame: true,
+						},
+					},
 				},
 			});
 			if (
@@ -877,14 +1009,16 @@ export const dropInRouter = createTRPCRouter({
 					message: "This game is already finished.",
 				});
 			}
+			const scoreError = validateMatchScore(
+				input.gameScores,
+				assignment.session.pointsPerGame ?? 21,
+				assignment.session.bestOf ?? 3,
+			);
+			if (scoreError) {
+				throw new TRPCError({ code: "BAD_REQUEST", message: scoreError });
+			}
 			const gamesA = input.gameScores.filter((g) => g.a > g.b).length;
 			const gamesB = input.gameScores.filter((g) => g.b > g.a).length;
-			if (gamesA === gamesB) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "A match can't end tied — re-check the game scores.",
-				});
-			}
 			const winnerSide = gamesA > gamesB ? DropInSide.A : DropInSide.B;
 			const now = new Date();
 			return ctx.db.$transaction(async (tx) => {
@@ -976,67 +1110,78 @@ export const dropInRouter = createTRPCRouter({
 			let rotated = 0;
 
 			for (const slot of expired) {
-				await ctx.db.$transaction(async (tx) => {
-					// Claim: only the tick that flips IN_PROGRESS -> COMPLETED proceeds.
-					const claimed = await tx.dropInAssignment.updateMany({
-						where: { assignmentId: slot.assignmentId, status: "IN_PROGRESS" },
-						data: { status: "COMPLETED", endedAt: now },
-					});
-					if (claimed.count === 0) return;
+				try {
+					const formed = await ctx.db.$transaction(async (tx) => {
+						// Claim: only the tick that flips IN_PROGRESS -> COMPLETED proceeds.
+						const claimed = await tx.dropInAssignment.updateMany({
+							where: { assignmentId: slot.assignmentId, status: "IN_PROGRESS" },
+							data: { status: "COMPLETED", endedAt: now },
+						});
+						if (claimed.count === 0) return false;
 
-					// Free the finishing players back to the pool (manual rejoin, A12).
-					await tx.dropInCheckIn.updateMany({
-						where: {
-							sessionId: input.sessionId,
-							userId: { in: slot.participants.map((p) => p.userId) },
-						},
-						data: {
-							status: "IDLE",
-							gamesPlayed: { increment: 1 },
-							lastPlayedAt: now,
-						},
-					});
-
-					// Pull the next group from whoever is still WAITING (fairness order).
-					const waiting = await tx.dropInCheckIn.findMany({
-						where: { sessionId: input.sessionId, status: "WAITING" },
-						orderBy: [
-							{ gamesPlayed: "asc" },
-							{ lastPlayedAt: { sort: "asc", nulls: "first" } },
-							{ queuedAt: "asc" },
-						],
-					});
-					if (waiting.length < playersPerCourt) return; // leave court empty
-
-					const picked = waiting.slice(0, playersPerCourt);
-					await tx.dropInAssignment.create({
-						data: {
-							sessionId: input.sessionId,
-							courtId: slot.courtId,
-							format,
-							status: "IN_PROGRESS",
-							startedAt: now,
-							expiresAt: new Date(
-								now.getTime() + (session.rotationMinutes ?? 15) * 60_000,
-							),
-							participants: {
-								create: picked.map((c) => ({
-									sessionId: input.sessionId,
-									userId: c.userId,
-									side: null,
-								})),
+						// Free the finishing players back to the pool (manual rejoin, A12).
+						await tx.dropInCheckIn.updateMany({
+							where: {
+								sessionId: input.sessionId,
+								userId: { in: slot.participants.map((p) => p.userId) },
 							},
-						},
+							data: {
+								status: "IDLE",
+								gamesPlayed: { increment: 1 },
+								lastPlayedAt: now,
+							},
+						});
+
+						// Pull the next group from whoever is still WAITING (fairness order).
+						const waiting = await tx.dropInCheckIn.findMany({
+							where: { sessionId: input.sessionId, status: "WAITING" },
+							orderBy: [
+								{ gamesPlayed: "asc" },
+								{ lastPlayedAt: { sort: "asc", nulls: "first" } },
+								{ queuedAt: "asc" },
+							],
+						});
+						if (waiting.length < playersPerCourt) return false; // court empty
+
+						const picked = waiting.slice(0, playersPerCourt);
+						// Atomically claim the next group; if another court grabbed some
+						// first, abort this slot (throws → rolls back; retries next tick).
+						const claim = await tx.dropInCheckIn.updateMany({
+							where: {
+								sessionId: input.sessionId,
+								userId: { in: picked.map((c) => c.userId) },
+								status: "WAITING",
+							},
+							data: { status: "PLAYING" },
+						});
+						if (claim.count !== playersPerCourt) {
+							throw new Error("CONTENDED");
+						}
+						await tx.dropInAssignment.create({
+							data: {
+								sessionId: input.sessionId,
+								courtId: slot.courtId,
+								format,
+								status: "IN_PROGRESS",
+								startedAt: now,
+								expiresAt: new Date(
+									now.getTime() + (session.rotationMinutes ?? 15) * 60_000,
+								),
+								participants: {
+									create: picked.map((c) => ({
+										sessionId: input.sessionId,
+										userId: c.userId,
+										side: null,
+									})),
+								},
+							},
+						});
+						return true;
 					});
-					await tx.dropInCheckIn.updateMany({
-						where: {
-							sessionId: input.sessionId,
-							userId: { in: picked.map((c) => c.userId) },
-						},
-						data: { status: "PLAYING" },
-					});
-					rotated += 1;
-				});
+					if (formed) rotated += 1;
+				} catch {
+					// Contended/transient — skip this slot; the next tick retries it.
+				}
 			}
 
 			return { rotated };

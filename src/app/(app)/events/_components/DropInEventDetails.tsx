@@ -111,6 +111,10 @@ export default function DropInEventDetails({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
+	const disputeScore = api.dropIn.disputeScore.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
 	// Background auto-rotation tick (TIMED). Fired when a slot expires; silent on
 	// error (it's a background poll, not a user action).
 	const tickTimed = api.dropIn.tickTimed.useMutation({
@@ -418,6 +422,16 @@ export default function DropInEventDetails({
 			<div className="grid gap-3 sm:grid-cols-2">
 				{session.courtIds.map((courtId) => {
 					const a = assignments.find((x) => x.courtId === courtId);
+					const meP = a?.participants.find((p) => p.userId === userId);
+					const reporterP = a?.participants.find(
+						(p) => p.userId === a?.reportedByUserId,
+					);
+					// Only the opposing side (not the reporter's) may confirm/dispute.
+					const canRespond =
+						!!a &&
+						a.status === "PENDING_CONFIRM" &&
+						!!meP &&
+						(!reporterP || meP.side !== reporterP.side);
 					return (
 						<div
 							key={courtId}
@@ -529,17 +543,15 @@ export default function DropInEventDetails({
 											</Button>
 										)}
 
-									{isMatch &&
-										a.status === "PENDING_CONFIRM" &&
-										a.participants.some((p) => p.userId === userId) &&
-										a.reportedByUserId !== userId && (
-											<div className="space-y-1.5 rounded-md bg-[var(--muted)] p-2">
-												<p className="text-[var(--muted-foreground)] text-xs">
-													Opponent reported:
-												</p>
-												<p className="font-mono text-[var(--foreground)] text-sm">
-													{formatGames(a.gameScores)}
-												</p>
+									{isMatch && canRespond && (
+										<div className="space-y-1.5 rounded-md bg-[var(--muted)] p-2">
+											<p className="text-[var(--muted-foreground)] text-xs">
+												Opponent reported:
+											</p>
+											<p className="font-mono text-[var(--foreground)] text-sm">
+												{formatGames(a.gameScores)}
+											</p>
+											<div className="flex gap-2">
 												<Button
 													size="sm"
 													disabled={confirmScore.isPending}
@@ -551,14 +563,36 @@ export default function DropInEventDetails({
 												>
 													Confirm {a.reportedScoreA}–{a.reportedScoreB}
 												</Button>
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={disputeScore.isPending}
+													onClick={() =>
+														disputeScore.mutate({
+															assignmentId: a.assignmentId,
+														})
+													}
+												>
+													Dispute
+												</Button>
 											</div>
-										)}
+										</div>
+									)}
 
-									{/* Staff can enter the score for any court directly (authoritative). */}
+									{/* Disputed — players wait for staff to resolve. */}
+									{isMatch && a.status === "DISPUTED" && !isStaff && (
+										<p className="rounded-md bg-amber-100 px-2 py-1 text-amber-800 text-xs">
+											Score disputed — a staff member will resolve it.
+										</p>
+									)}
+
+									{/* Staff can enter/override the score for any court (authoritative),
+									    including resolving a dispute. */}
 									{isMatch &&
 										isStaff &&
 										(a.status === "IN_PROGRESS" ||
-											a.status === "PENDING_CONFIRM") && (
+											a.status === "PENDING_CONFIRM" ||
+											a.status === "DISPUTED") && (
 											<Button
 												variant="outline"
 												size="sm"
@@ -566,7 +600,9 @@ export default function DropInEventDetails({
 													setReporting({ id: a.assignmentId, staff: true })
 												}
 											>
-												Enter score
+												{a.status === "DISPUTED"
+													? "Resolve score"
+													: "Enter score"}
 											</Button>
 										)}
 
