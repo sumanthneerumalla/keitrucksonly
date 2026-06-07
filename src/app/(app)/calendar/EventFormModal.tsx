@@ -1138,13 +1138,17 @@ export default function EventFormModal({
 							dbEventId &&
 							fetchedEvent &&
 							(fetchedEvent.eventType === "BOOKABLE" ||
-								fetchedEvent.eventType === "COACHING_SLOT") && (
+								fetchedEvent.eventType === "COACHING_SLOT" ||
+								fetchedEvent.eventType === "DROP_IN") && (
 								<Link
 									href={`/events/${dbEventId}`}
 									onClick={onClose}
 									className="inline-flex items-center gap-1.5 text-[var(--muted-foreground)] text-sm transition-colors hover:text-[var(--foreground)]"
 								>
-									<ExternalLink size={13} /> Event Page
+									<ExternalLink size={13} />{" "}
+									{fetchedEvent.eventType === "DROP_IN"
+										? "Open board"
+										: "Event Page"}
 								</Link>
 							)}
 					</div>
