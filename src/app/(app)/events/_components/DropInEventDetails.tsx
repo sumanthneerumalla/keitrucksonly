@@ -631,13 +631,21 @@ export default function DropInEventDetails({
 										</div>
 									)}
 
-									<div className="text-[var(--muted-foreground)] text-xs">
-										{a.status === "PENDING_CONFIRM"
-											? "Reported — awaiting confirmation"
-											: a.status === "IN_PROGRESS"
-												? "In progress"
-												: a.status}
-									</div>
+									{a.status === "PENDING_CONFIRM" ? (
+										<div className="rounded bg-amber-100 px-2 py-1 font-semibold text-amber-800 text-xs">
+											⏳ Awaiting confirmation — this court is held until the
+											opponent confirms the score.
+										</div>
+									) : a.status === "DISPUTED" ? (
+										<div className="rounded bg-red-100 px-2 py-1 font-semibold text-red-700 text-xs">
+											⚠ Disputed — this court is held until a staff member
+											resolves the score.
+										</div>
+									) : (
+										<div className="text-[var(--muted-foreground)] text-xs">
+											In progress
+										</div>
+									)}
 
 									{/* Controls */}
 									{isStaff && (
@@ -714,13 +722,6 @@ export default function DropInEventDetails({
 												</Button>
 											</div>
 										</div>
-									)}
-
-									{/* Disputed — players wait for staff to resolve. */}
-									{isMatch && a.status === "DISPUTED" && !isStaff && (
-										<p className="rounded-md bg-amber-100 px-2 py-1 text-amber-800 text-xs">
-											Score disputed — a staff member will resolve it.
-										</p>
 									)}
 
 									{/* Staff can enter/override the score for any court (authoritative),
