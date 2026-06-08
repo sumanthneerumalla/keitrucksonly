@@ -1274,6 +1274,51 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Player-facing typeahead used by the "Join queue as a group" + "Add member"
+	 * popovers. Returns real members AND guests in the caller's club so the user
+	 * can add either kind in one search. Scoped to caller's club; the caller is
+	 * excluded (no point adding yourself to your own party).
+	 *
+	 * NOT to be confused with `user.searchMembers` (facilityProcedure) which is
+	 * staff-only. This is the equivalent surface for regular members and only
+	 * exposes names + isGuest flag (no email) to keep the privacy footprint
+	 * smaller.
+	 */
+	searchPartyMembers: protectedProcedure
+		.input(
+			z.object({
+				query: z.string().trim().min(1).max(60),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const caller = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { userId: true, clubShortName: true },
+			});
+			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+
+			const q = input.query;
+			return ctx.db.user.findMany({
+				where: {
+					clubShortName: caller.clubShortName,
+					userId: { not: caller.userId },
+					OR: [
+						{ firstName: { contains: q, mode: "insensitive" } },
+						{ lastName: { contains: q, mode: "insensitive" } },
+					],
+				},
+				orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+				take: 10,
+				select: {
+					userId: true,
+					firstName: true,
+					lastName: true,
+					isGuest: true,
+				},
+			});
+		}),
+
+	/**
 	 * Search guests in the caller's club by name prefix (case-insensitive).
 	 * Used by the "Add to party" UI. Returns up to 20 matches sorted by
 	 * createdAt DESC (most recent first).

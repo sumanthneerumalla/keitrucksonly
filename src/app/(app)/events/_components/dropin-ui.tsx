@@ -131,7 +131,10 @@ export function MemberSearchPopover({
 		const t = setTimeout(() => setDebounced(query.trim()), 300);
 		return () => clearTimeout(t);
 	}, [query]);
-	const search = api.user.searchMembers.useQuery(
+	// Use the protected `searchPartyMembers` rather than the facility-gated
+	// `user.searchMembers` so this popover works for both player flows
+	// (YourPartyCard) and staff flows (SwapPlayer). Includes guests.
+	const search = api.dropIn.searchPartyMembers.useQuery(
 		{ query: debounced },
 		{ enabled: open && debounced.length > 0 },
 	);
@@ -151,11 +154,9 @@ export function MemberSearchPopover({
 							Type a name to search.
 						</p>
 					)}
-					{search.data?.members.map((m) => {
+					{search.data?.map((m) => {
 						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() ||
-							m.email ||
-							"Member";
+							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
 						return (
 							<button
 								key={m.userId}
@@ -168,10 +169,15 @@ export function MemberSearchPopover({
 								className="block w-full rounded px-2 py-1 text-left text-[var(--foreground)] text-sm hover:bg-[var(--muted)]"
 							>
 								{name}
+								{m.isGuest && (
+									<span className="ml-1 text-[var(--muted-foreground)]">
+										· guest
+									</span>
+								)}
 							</button>
 						);
 					})}
-					{debounced.length > 0 && (search.data?.members.length ?? 0) === 0 && (
+					{debounced.length > 0 && (search.data?.length ?? 0) === 0 && (
 						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
 							No matches.
 						</p>
@@ -420,7 +426,9 @@ export function JoinPartyPopover({
 		return () => clearTimeout(t);
 	}, [query]);
 
-	const search = api.user.searchMembers.useQuery(
+	// Player-facing search (any member can call this). The staff-only
+	// `user.searchMembers` would return UNAUTHORIZED here.
+	const search = api.dropIn.searchPartyMembers.useQuery(
 		{ query: debounced },
 		{ enabled: open && debounced.length > 0 },
 	);
@@ -521,11 +529,9 @@ export function JoinPartyPopover({
 							Searching…
 						</p>
 					)}
-					{search.data?.members.map((m) => {
+					{search.data?.map((m) => {
 						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() ||
-							m.email ||
-							"Member";
+							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
 						const isSel = selected.has(m.userId);
 						return (
 							<button
@@ -538,7 +544,14 @@ export function JoinPartyPopover({
 										: "text-[var(--foreground)] hover:bg-[var(--muted)]"
 								}`}
 							>
-								<span>{name}</span>
+								<span>
+									{name}
+									{m.isGuest && (
+										<span className="ml-1 text-[var(--muted-foreground)]">
+											· guest
+										</span>
+									)}
+								</span>
 								{isSel && (
 									<Check size={14} className="text-[var(--primary)]" />
 								)}
@@ -547,7 +560,7 @@ export function JoinPartyPopover({
 					})}
 					{debounced.length > 0 &&
 						!search.isFetching &&
-						(search.data?.members.length ?? 0) === 0 && (
+						(search.data?.length ?? 0) === 0 && (
 							<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
 								No matches.
 							</p>
