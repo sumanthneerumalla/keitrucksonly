@@ -482,7 +482,7 @@ export default function DropInEventDetails({
 						)}
 					</p>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex flex-wrap items-center justify-end gap-2">
 					<Button variant="outline" size="sm" onClick={enableKiosk}>
 						<Maximize2 size={14} /> Kiosk
 					</Button>
@@ -836,11 +836,11 @@ export default function DropInEventDetails({
 
 			{/* Queue + your controls */}
 			<div className="rounded-lg border border-[var(--border)] p-3">
-				<div className="mb-2 flex items-center justify-between">
+				<div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 					<span className="font-medium text-[var(--foreground)] text-sm">
 						Waiting ({pool.length})
 					</span>
-					<div className="flex gap-2">
+					<div className="flex flex-wrap gap-2">
 						{isStaff && (
 							<StaffAddToQueue
 								sessionId={session.sessionId}
