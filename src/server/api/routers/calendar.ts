@@ -2541,6 +2541,167 @@ export const calendarRouter = createTRPCRouter({
 			};
 		}),
 
+	// Member dashboard: the caller's next N upcoming registered occurrences across
+	// all facilities. Mirrors getEventRegistrationsForUser's occurrence logic
+	// (PER_INSTANCE/single → instanceDate ?? start; PER_SERIES → next rrule
+	// occurrence honoring exdates + modified-instance overrides) but for the
+	// current user, merged into one chronological list for the "Your upcoming
+	// events" card. Reuses CalendarEventBadge, so returns capacity/price/colors.
+	getMyUpcomingEvents: protectedProcedure
+		.input(z.object({ limit: z.number().int().min(1).max(20).optional() }))
+		.query(async ({ ctx, input }) => {
+			const user = await getCurrentUser(ctx);
+			const limit = input?.limit ?? 5;
+			const now = new Date();
+
+			const registrations = await ctx.db.eventRegistration.findMany({
+				where: {
+					userId: user.userId,
+					status: {
+						in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN],
+					},
+					event: { isDeleted: false },
+				},
+				include: {
+					event: {
+						select: {
+							eventId: true,
+							title: true,
+							start: true,
+							end: true,
+							eventType: true,
+							registrationType: true,
+							rrule: true,
+							exdates: true,
+							maxParticipants: true,
+							color: true,
+							backgroundColor: true,
+							productId: true,
+							product: { select: { priceInCents: true } },
+							resource: { select: { title: true } },
+							facility: { select: { name: true } },
+							_count: {
+								select: {
+									registrations: {
+										where: {
+											status: {
+												in: [
+													RegistrationStatus.REGISTERED,
+													RegistrationStatus.CHECKED_IN,
+												],
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			});
+
+			type UpcomingEvent = {
+				eventId: string;
+				title: string;
+				eventType: EventType;
+				start: Date;
+				end: Date;
+				status: RegistrationStatus;
+				maxParticipants: number | null;
+				currentRegistrations: number;
+				priceInCents: number | null;
+				productId: string | null;
+				color: string | null;
+				backgroundColor: string | null;
+				resourceTitle: string | null;
+				facilityName: string | null;
+			};
+
+			const shape = (
+				r: (typeof registrations)[number],
+				occStart: Date,
+			): UpcomingEvent => {
+				const durationMs = r.event.end.getTime() - r.event.start.getTime();
+				return {
+					eventId: r.event.eventId,
+					title: r.event.title,
+					eventType: r.event.eventType,
+					start: occStart,
+					end: new Date(occStart.getTime() + durationMs),
+					status: r.status,
+					maxParticipants: r.event.maxParticipants,
+					currentRegistrations: r.event._count.registrations,
+					priceInCents: r.event.product?.priceInCents ?? null,
+					productId: r.event.productId,
+					color: r.event.color,
+					backgroundColor: r.event.backgroundColor,
+					resourceTitle: r.event.resource?.title ?? null,
+					facilityName: r.event.facility?.name ?? null,
+				};
+			};
+
+			const seriesRegs = registrations.filter(
+				(r) => r.event.registrationType === RegistrationType.PER_SERIES,
+			);
+
+			// Batch-fetch modified instances for series base events (avoid N+1).
+			const baseEventIds = seriesRegs.map((r) => r.event.eventId);
+			const children = baseEventIds.length
+				? await ctx.db.calendarEvent.findMany({
+						where: { parentEventId: { in: baseEventIds }, isDeleted: false },
+						select: { parentEventId: true, recurrenceId: true, start: true },
+					})
+				: [];
+			const childrenByParent = new Map<string, typeof children>();
+			for (const child of children) {
+				if (!child.parentEventId) continue;
+				const list = childrenByParent.get(child.parentEventId) ?? [];
+				list.push(child);
+				childrenByParent.set(child.parentEventId, list);
+			}
+
+			const items: UpcomingEvent[] = [];
+			for (const r of registrations) {
+				if (r.event.registrationType === RegistrationType.PER_SERIES) {
+					if (!r.event.rrule) continue;
+					const eventChildren = childrenByParent.get(r.event.eventId) ?? [];
+					const childExdates = eventChildren
+						.map((c) => (c.recurrenceId ? new Date(c.recurrenceId) : null))
+						.filter((d): d is Date => d !== null);
+					let nextRrule: Date | null = null;
+					try {
+						nextRrule = buildRuleSetFromEvent(
+							r.event.rrule,
+							[...r.event.exdates, ...childExdates],
+							r.event.start,
+						).after(now, true);
+					} catch {
+						nextRrule = null;
+					}
+					const futureChildStarts = eventChildren
+						.filter((c) => c.start.getTime() >= now.getTime())
+						.map((c) => c.start);
+					const nextChild =
+						futureChildStarts.length > 0
+							? futureChildStarts.reduce((a, d) => (d < a ? d : a))
+							: null;
+					const candidates = [nextRrule, nextChild].filter(
+						(d): d is Date => d !== null,
+					);
+					if (candidates.length === 0) continue;
+					items.push(shape(r, candidates.reduce((a, d) => (d < a ? d : a))));
+				} else {
+					const occStart = r.instanceDate ?? r.event.start;
+					const item = shape(r, occStart);
+					// Keep events that haven't ended yet (in-progress or future).
+					if (item.end.getTime() >= now.getTime()) items.push(item);
+				}
+			}
+
+			items.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+			return { events: items.slice(0, limit) };
+		}),
+
 	// Admin-facing: return one user's active EventRegistrations, split by
 	// PER_INSTANCE (one occurrence) vs PER_SERIES (whole series). Series rows
 	// include the next upcoming session date computed from the rrule plus any

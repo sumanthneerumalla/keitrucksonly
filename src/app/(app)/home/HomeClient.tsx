@@ -2,6 +2,7 @@
 
 import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
 import { TodayEventsCard } from "~/app/(app)/home/TodayEventsCard";
+import { UpcomingEventsCard } from "~/app/(app)/home/UpcomingEventsCard";
 import { isAnyAdmin } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
@@ -29,8 +30,9 @@ export default function HomeClient() {
 								</h1>
 
 								{user.userType === "STUDENT" && (
-									<div className="mb-6">
+									<div className="mb-6 space-y-6">
 										<TodayEventsCard />
+										<UpcomingEventsCard />
 									</div>
 								)}
 
