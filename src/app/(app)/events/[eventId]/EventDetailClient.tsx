@@ -178,6 +178,7 @@ export default function EventDetailClient({
 							facilityId={event.facilityId ?? null}
 							maxParticipants={event.maxParticipants}
 							canManage={isFacilityOrAdmin}
+							canCheckIn={isFacilityOrAdmin}
 						/>
 					)}
 				</div>
@@ -477,6 +478,7 @@ export default function EventDetailClient({
 								facilityId={event.facilityId ?? null}
 								maxParticipants={event.maxParticipants}
 								canManage={isFacilityOrAdmin}
+								canCheckIn={canEdit}
 							/>
 						)}
 					</>

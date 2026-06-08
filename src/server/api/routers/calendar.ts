@@ -290,6 +290,9 @@ const updateRegistrationStatusSchema = z.object({
 
 const getEventRegistrationsSchema = z.object({
 	eventId: z.string(),
+	// When true, also return inactive registrations (NO_SHOW / cancelled) so a
+	// staff roster can show them greyed-out. Default false (active only).
+	includeInactive: z.boolean().optional(),
 });
 
 // ============================================================
@@ -3144,11 +3147,22 @@ export const calendarRouter = createTRPCRouter({
 				});
 			}
 
+			const activeStatuses = [
+				RegistrationStatus.REGISTERED,
+				RegistrationStatus.CHECKED_IN,
+			];
+			const inactiveStatuses = [
+				RegistrationStatus.NO_SHOW,
+				RegistrationStatus.LATE_CANCEL,
+				RegistrationStatus.EARLY_CANCEL,
+			];
 			const registrations = await ctx.db.eventRegistration.findMany({
 				where: {
 					eventId,
 					status: {
-						in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN],
+						in: input.includeInactive
+							? [...activeStatuses, ...inactiveStatuses]
+							: activeStatuses,
 					},
 				},
 				include: {
@@ -3169,6 +3183,7 @@ export const calendarRouter = createTRPCRouter({
 				registrations: registrations.map((r) => ({
 					registrationId: r.registrationId,
 					userId: r.userId,
+					status: r.status,
 					instanceDate: r.instanceDate,
 					createdAt: r.createdAt,
 					firstName: r.user.firstName,
