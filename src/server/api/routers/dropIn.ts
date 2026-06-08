@@ -11,6 +11,7 @@ import {
 	createTRPCRouter,
 	facilityProcedure,
 	protectedProcedure,
+	publicProcedure,
 } from "~/server/api/trpc";
 import {
 	assertCallerInParty,
@@ -176,6 +177,183 @@ type DropInSessionStatusLike =
 	| "PAUSED"
 	| "ENDED"
 	| "CANCELLED";
+
+/**
+ * Prisma include used by BOTH `getBoard` (authed) and `getPublicBoard` (kiosk).
+ * Shared so the two board readers can never drift in shape — the public kiosk
+ * view must show exactly what the authed board shows, minus viewer-specific bits.
+ */
+const boardSessionInclude = {
+	checkIns: {
+		include: {
+			user: {
+				select: {
+					userId: true,
+					firstName: true,
+					lastName: true,
+					isGuest: true,
+				},
+			},
+		},
+	},
+	assignments: {
+		where: {
+			status: { in: ["IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"] },
+		},
+		include: {
+			participants: {
+				include: {
+					user: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
+				},
+			},
+		},
+		orderBy: { startedAt: "asc" },
+	},
+	parties: {
+		orderBy: { queuedAt: "asc" },
+		include: {
+			members: {
+				where: {
+					status: {
+						in: ["WAITING", "IDLE", "PLAYING", "AWAITING_RESULT", "DONE"],
+					},
+				},
+				orderBy: { createdAt: "asc" },
+				select: {
+					userId: true,
+					status: true,
+					user: {
+						select: {
+							userId: true,
+							firstName: true,
+							lastName: true,
+							isGuest: true,
+						},
+					},
+				},
+			},
+		},
+	},
+} satisfies Prisma.DropInSessionInclude;
+
+type BoardSession = Prisma.DropInSessionGetPayload<{
+	include: typeof boardSessionInclude;
+}>;
+
+/**
+ * Derive the client-facing `pool` (sorted WAITING check-ins, enriched with
+ * party-head flags) and `parties` (filtered + summarized) from a session loaded
+ * with `boardSessionInclude`. Pure — no auth/viewer coupling — so both the authed
+ * and public board readers share identical semantics.
+ */
+function deriveBoardView(session: BoardSession) {
+	// Map userId → isPartyHead (first member by createdAt within their party).
+	const partyHeadByUserId = new Map<string, boolean>();
+	for (const p of session.parties) {
+		const head = p.members[0];
+		if (head) partyHeadByUserId.set(head.userId, true);
+	}
+
+	const pool = session.checkIns
+		.filter((c) => c.status === "WAITING")
+		.sort(
+			(a, b) =>
+				a.gamesPlayed - b.gamesPlayed ||
+				(a.lastPlayedAt?.getTime() ?? 0) - (b.lastPlayedAt?.getTime() ?? 0) ||
+				a.queuedAt.getTime() - b.queuedAt.getTime(),
+		)
+		.map((c) => ({
+			...c,
+			isPartyHead: partyHeadByUserId.get(c.userId) ?? false,
+		}));
+
+	const capacity = capacityForFormat(session.format);
+	const parties = session.parties
+		.filter((p) => p.members.length > 0)
+		.map((p) => {
+			const anyPlaying = p.members.some((m) => m.status === "PLAYING");
+			const anyAwaiting = p.members.some((m) => m.status === "AWAITING_RESULT");
+			const derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT" = anyPlaying
+				? "PLAYING"
+				: anyAwaiting
+					? "AWAITING_RESULT"
+					: "WAITING";
+			const memberCount = p.members.length;
+			return {
+				partyId: p.partyId,
+				openToFill: p.openToFill,
+				queuedAt: p.queuedAt,
+				memberCount,
+				capacity,
+				needsCount: Math.max(0, capacity - memberCount),
+				members: p.members.map((m) => ({
+					userId: m.userId,
+					firstName: m.user.firstName,
+					lastName: m.user.lastName,
+					isGuest: m.user.isGuest,
+					status: m.status,
+				})),
+				hasGuest: p.members.some((m) => m.user.isGuest),
+				isReady: !anyPlaying && !anyAwaiting,
+				derivedState,
+			};
+		});
+
+	return { pool, parties };
+}
+
+type StandingsAssignment = Prisma.DropInAssignmentGetPayload<{
+	include: {
+		participants: {
+			include: {
+				user: { select: { userId: true; firstName: true; lastName: true } };
+			};
+		};
+	};
+}>;
+
+/**
+ * Tally MATCH standings (wins/losses/point-diff per player) from CONFIRMED
+ * assignments. Shared by `getStandings` (authed) and `getPublicStandings`
+ * (kiosk) so the leaderboard is identical in both.
+ */
+function computeStandings(assignments: StandingsAssignment[]) {
+	const tally = new Map<
+		string,
+		{
+			userId: string;
+			firstName: string | null;
+			lastName: string | null;
+			wins: number;
+			losses: number;
+			pointDiff: number;
+		}
+	>();
+	for (const a of assignments) {
+		const games = (a.gameScores as { a: number; b: number }[] | null) ?? [];
+		const ptsA = games.reduce((s, g) => s + g.a, 0);
+		const ptsB = games.reduce((s, g) => s + g.b, 0);
+		for (const p of a.participants) {
+			const row = tally.get(p.userId) ?? {
+				userId: p.userId,
+				firstName: p.user.firstName,
+				lastName: p.user.lastName,
+				wins: 0,
+				losses: 0,
+				pointDiff: 0,
+			};
+			if (p.isWinner === true) row.wins += 1;
+			else if (p.isWinner === false) row.losses += 1;
+			row.pointDiff += p.side === DropInSide.A ? ptsA - ptsB : ptsB - ptsA;
+			tally.set(p.userId, row);
+		}
+	}
+	return [...tally.values()].sort(
+		(x, y) => y.wins - x.wins || y.pointDiff - x.pointDiff,
+	);
+}
 
 export const dropInRouter = createTRPCRouter({
 	/**
@@ -505,146 +683,60 @@ export const dropInRouter = createTRPCRouter({
 						occurrenceDate: input.occurrenceDate,
 					},
 				},
-				include: {
-					checkIns: {
-						include: {
-							user: {
-								select: {
-									userId: true,
-									firstName: true,
-									lastName: true,
-									isGuest: true,
-								},
-							},
-						},
-					},
-					assignments: {
-						where: {
-							status: { in: ["IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"] },
-						},
-						include: {
-							participants: {
-								include: {
-									user: {
-										select: { userId: true, firstName: true, lastName: true },
-									},
-								},
-							},
-						},
-						orderBy: { startedAt: "asc" },
-					},
-					parties: {
-						orderBy: { queuedAt: "asc" },
-						include: {
-							members: {
-								where: {
-									status: {
-										in: [
-											"WAITING",
-											"IDLE",
-											"PLAYING",
-											"AWAITING_RESULT",
-											"DONE",
-										],
-									},
-								},
-								orderBy: { createdAt: "asc" },
-								select: {
-									userId: true,
-									status: true,
-									user: {
-										select: {
-											userId: true,
-											firstName: true,
-											lastName: true,
-											isGuest: true,
-										},
-									},
-								},
-							},
-						},
-					},
-				},
+				include: boardSessionInclude,
 			});
 			if (!session) return null;
 			if (session.clubShortName !== user.clubShortName) {
 				throw new TRPCError({ code: "FORBIDDEN" });
 			}
 
-			// Map checkInId → { partyId, isPartyHead } for pool enrichment. A
-			// member is the "head" of their party iff they're first by
-			// member.createdAt within their party — purely a display concept.
-			const partyHeadByUserId = new Map<string, boolean>();
-			for (const p of session.parties) {
-				const head = p.members[0];
-				if (head) partyHeadByUserId.set(head.userId, true);
-			}
-
-			// Pool: only WAITING members (unchanged semantics), now enriched
-			// with partyId + isPartyHead. Sort key still includes the fairness
-			// counters so legacy renderings stay consistent; new clients can
-			// also group by partyId.
-			const pool = session.checkIns
-				.filter((c) => c.status === "WAITING")
-				.sort(
-					(a, b) =>
-						a.gamesPlayed - b.gamesPlayed ||
-						(a.lastPlayedAt?.getTime() ?? 0) -
-							(b.lastPlayedAt?.getTime() ?? 0) ||
-						a.queuedAt.getTime() - b.queuedAt.getTime(),
-				)
-				.map((c) => ({
-					...c,
-					isPartyHead: partyHeadByUserId.get(c.userId) ?? false,
-				}));
-
-			// Top-level parties[]: derived state per plan §4. Defunct parties
-			// (no live members) are filtered out. Each entry includes member
-			// list so the client can render "Party of 4: Alice + Bob queued,
-			// Charlie on Court 2" while the party is held.
-			//
-			// `capacity` + `needsCount` are computed server-side from the session
-			// format so the client never has to re-derive SINGLES/DOUBLES rules.
-			// Used by QueueByParty, JoinPartyPopover, and YourPartyCard.
-			const capacity = capacityForFormat(session.format);
-			const parties = session.parties
-				.filter((p) => p.members.length > 0)
-				.map((p) => {
-					const anyPlaying = p.members.some((m) => m.status === "PLAYING");
-					const anyAwaiting = p.members.some(
-						(m) => m.status === "AWAITING_RESULT",
-					);
-					const derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT" =
-						anyPlaying
-							? "PLAYING"
-							: anyAwaiting
-								? "AWAITING_RESULT"
-								: "WAITING";
-					const memberCount = p.members.length;
-					return {
-						partyId: p.partyId,
-						openToFill: p.openToFill,
-						queuedAt: p.queuedAt,
-						memberCount,
-						capacity,
-						// How many more members the party would need to hit court
-						// capacity. 0 for parties already at-or-over capacity. Used
-						// by the UI to render "Needs N more" indicators.
-						needsCount: Math.max(0, capacity - memberCount),
-						members: p.members.map((m) => ({
-							userId: m.userId,
-							firstName: m.user.firstName,
-							lastName: m.user.lastName,
-							isGuest: m.user.isGuest,
-							status: m.status,
-						})),
-						hasGuest: p.members.some((m) => m.user.isGuest),
-						isReady: !anyPlaying && !anyAwaiting,
-						derivedState,
-					};
-				});
-
+			const { pool, parties } = deriveBoardView(session);
 			return { session, pool, parties, viewerUserId: user.userId };
+		}),
+
+	/**
+	 * Read-only board for an UNAUTHENTICATED kiosk display (the iPad on the wall).
+	 * Same payload shape as `getBoard` but:
+	 *   - no auth — club is resolved from the session itself (not the caller);
+	 *   - includes resolved court titles (guests can't call `getResources`);
+	 *   - `viewerUserId: null` — there's no viewer, so the client renders
+	 *     everything read-only (no join/leave/score/staff controls).
+	 *
+	 * This is display-only by design: it intentionally exposes NO mutations, so
+	 * players can't manipulate timed matches by tapping the kiosk. Rotation is
+	 * driven by a separate logged-in staff device (see designFiles/drop-in).
+	 */
+	getPublicBoard: publicProcedure
+		.input(z.object({ eventId: z.string(), occurrenceDate: z.coerce.date() }))
+		.query(async ({ ctx, input }) => {
+			const session = await ctx.db.dropInSession.findUnique({
+				where: {
+					eventId_occurrenceDate: {
+						eventId: input.eventId,
+						occurrenceDate: input.occurrenceDate,
+					},
+				},
+				include: boardSessionInclude,
+			});
+			if (!session) return null;
+
+			// Resolve court titles for the session's courts so the kiosk can label
+			// them without the authed `getResources` call.
+			const courtResources =
+				session.courtIds.length > 0
+					? await ctx.db.clubResource.findMany({
+							where: { resourceId: { in: session.courtIds } },
+							select: { resourceId: true, title: true },
+						})
+					: [];
+			const courts = session.courtIds.map((id) => ({
+				resourceId: id,
+				title:
+					courtResources.find((r) => r.resourceId === id)?.title ?? "Court",
+			}));
+
+			const { pool, parties } = deriveBoardView(session);
+			return { session, pool, parties, courts, viewerUserId: null };
 		}),
 
 	/**
@@ -1394,19 +1486,21 @@ export const dropInRouter = createTRPCRouter({
 
 	/**
 	 * Player-facing typeahead used by the "Join queue as a group" + "Add member"
-	 * popovers. Returns ONLY people actually present at this session — i.e.
-	 * users who have a `DropInCheckIn` row for the given sessionId with a live
-	 * status (WAITING / IDLE / PLAYING / AWAITING_RESULT). LEFT / CANCELLED
-	 * are excluded; the caller is excluded too (no point adding yourself).
+	 * popovers (and the staff SwapPlayer control). Searches ALL club members by
+	 * name, NOT just the session's existing roster.
 	 *
-	 * Restricting to checked-in users is what the owner asked for ("only the
-	 * ones that are participating for the event and checked in"): the search
-	 * shouldn't surface pre-registered no-shows or arbitrary club members.
+	 * Why club-wide and not session-scoped: the whole point of "join as a group"
+	 * is to bring in a friend who hasn't checked into THIS session yet. The
+	 * downstream mutations already onboard non-present members — `addPartyMember`
+	 * creates a fresh check-in (or revives a LEFT/CANCELLED one), and
+	 * `swapParticipant` does the same. An earlier version restricted this to
+	 * checked-in users, which made it impossible to add a friend to the correct
+	 * session unless they'd already independently joined it (the bug that
+	 * prompted this change — search couldn't find a friend who hadn't checked in).
 	 *
-	 * NOT to be confused with `user.searchMembers` (facilityProcedure) which is
-	 * staff-only and club-wide. This is the equivalent surface for regular
-	 * members, narrowed to the session's roster, and only exposes names +
-	 * isGuest flag (no email).
+	 * The caller is excluded (no point adding yourself). NOT to be confused with
+	 * `user.searchMembers` (facilityProcedure, staff-only, returns email); this
+	 * member-facing surface only exposes names + isGuest flag.
 	 */
 	searchPartyMembers: protectedProcedure
 		.input(
@@ -1422,6 +1516,8 @@ export const dropInRouter = createTRPCRouter({
 			});
 			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
 
+			// Validate the sessionId belongs to the caller's club (authz guard);
+			// the member search itself is club-wide, not scoped to this session.
 			const session = await ctx.db.dropInSession.findUnique({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },
@@ -1439,21 +1535,6 @@ export const dropInRouter = createTRPCRouter({
 						{ firstName: { contains: q, mode: "insensitive" } },
 						{ lastName: { contains: q, mode: "insensitive" } },
 					],
-					// Scope to people who are actually at this session.
-					dropInCheckIns: {
-						some: {
-							sessionId: input.sessionId,
-							status: {
-								in: [
-									"WAITING",
-									"IDLE",
-									"PLAYING",
-									"AWAITING_RESULT",
-									"DONE",
-								],
-							},
-						},
-					},
 				},
 				orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
 				take: 10,
@@ -2666,39 +2747,29 @@ export const dropInRouter = createTRPCRouter({
 				},
 			});
 
-			const tally = new Map<
-				string,
-				{
-					userId: string;
-					firstName: string | null;
-					lastName: string | null;
-					wins: number;
-					losses: number;
-					pointDiff: number;
-				}
-			>();
-			for (const a of assignments) {
-				const games = (a.gameScores as { a: number; b: number }[] | null) ?? [];
-				const ptsA = games.reduce((s, g) => s + g.a, 0);
-				const ptsB = games.reduce((s, g) => s + g.b, 0);
-				for (const p of a.participants) {
-					const row = tally.get(p.userId) ?? {
-						userId: p.userId,
-						firstName: p.user.firstName,
-						lastName: p.user.lastName,
-						wins: 0,
-						losses: 0,
-						pointDiff: 0,
-					};
-					if (p.isWinner === true) row.wins += 1;
-					else if (p.isWinner === false) row.losses += 1;
-					row.pointDiff += p.side === DropInSide.A ? ptsA - ptsB : ptsB - ptsA;
-					tally.set(p.userId, row);
-				}
-			}
+			return computeStandings(assignments);
+		}),
 
-			return [...tally.values()].sort(
-				(x, y) => y.wins - x.wins || y.pointDiff - x.pointDiff,
-			);
+	/**
+	 * Public (kiosk) MATCH leaderboard. Same as `getStandings` but unauthenticated
+	 * — read-only standings for the wall display. Scoped only by sessionId.
+	 */
+	getPublicStandings: publicProcedure
+		.input(z.object({ sessionId: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const assignments = await ctx.db.dropInAssignment.findMany({
+				where: { sessionId: input.sessionId, status: "CONFIRMED" },
+				include: {
+					participants: {
+						include: {
+							user: {
+								select: { userId: true, firstName: true, lastName: true },
+							},
+						},
+					},
+				},
+			});
+
+			return computeStandings(assignments);
 		}),
 });

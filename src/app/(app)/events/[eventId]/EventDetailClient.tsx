@@ -18,6 +18,7 @@ import EventStatusLogTimeline from "~/app/(app)/events/[eventId]/EventStatusLogT
 import GuestRegisterModal from "~/app/(app)/events/[eventId]/GuestRegisterModal";
 import BookableEventDetails from "~/app/(app)/events/_components/BookableEventDetails";
 import DropInEventDetails from "~/app/(app)/events/_components/DropInEventDetails";
+import KioskBoard from "~/app/(app)/events/_components/KioskBoard";
 import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
@@ -164,21 +165,34 @@ export default function EventDetailClient({
 					</Link>
 				</div>
 				<div className="mx-auto max-w-3xl space-y-4">
-					<DropInEventDetails
-						eventId={eventId}
-						eventStart={event.start}
-						eventTitle={event.title}
-						isStaff={isFacilityOrAdmin}
-						userId={userId}
-					/>
-					{/* Registered roster (facility / club-admin / platform-admin). */}
-					{isFacilityOrAdmin && (
-						<EventRoster
+					{/* Logged-out viewers get the read-only kiosk board (no controls),
+					    so an unauthenticated iPad on the wall can display the live board
+					    without players being able to manipulate timed matches. */}
+					{userId ? (
+						<>
+							<DropInEventDetails
+								eventId={eventId}
+								eventStart={event.start}
+								eventTitle={event.title}
+								isStaff={isFacilityOrAdmin}
+								userId={userId}
+							/>
+							{/* Registered roster (facility / club-admin / platform-admin). */}
+							{isFacilityOrAdmin && (
+								<EventRoster
+									eventId={eventId}
+									facilityId={event.facilityId ?? null}
+									maxParticipants={event.maxParticipants}
+									canManage={isFacilityOrAdmin}
+									canCheckIn={isFacilityOrAdmin}
+								/>
+							)}
+						</>
+					) : (
+						<KioskBoard
 							eventId={eventId}
-							facilityId={event.facilityId ?? null}
-							maxParticipants={event.maxParticipants}
-							canManage={isFacilityOrAdmin}
-							canCheckIn={isFacilityOrAdmin}
+							eventStart={event.start}
+							eventTitle={event.title}
 						/>
 					)}
 				</div>
