@@ -1,6 +1,19 @@
 # Drop-In — Implementation HANDOFF / Resume
 
-**Updated:** 2026-06-03. Read this first, then [README.md](./README.md) (decisions + phases) and [open-questions.md](./open-questions.md) (all A–G decisions). The full feature design lives in this folder; this file tracks *build progress + open threads* so any session can resume.
+**Updated:** 2026-06-08. Read this first, then [README.md](./README.md) (decisions + phases) and [open-questions.md](./open-questions.md) (all A–G decisions). The full feature design lives in this folder; this file tracks *build progress + open threads* so any session can resume.
+
+---
+
+## CURRENT STATUS (2026-06-08) — supersedes the dated "Status" section below
+
+**Built + committed on `dev` (a 3-pass code review passed: 0 blocker, 0 high):**
+- **DI-1 (casual)** — reframed: casual drop-in = a **multi-court Bookable event** (NOT the DROP_IN type). Multi-court enabled on Bookable (quick conflict-check; see [multi-court-conflict-TODO.md](./multi-court-conflict-TODO.md)). The `DROP_IN` type is reserved for rotation.
+- **DI-2 (TIMED) + DI-4 (MATCH) rotation — BUILT.** Schema (`DropInAssignment`/`DropInAssignmentParticipant` + enums, migration), full `dropIn` router (board/pool/formNext/tickTimed auto-rotate/report/confirm/dispute/staffSetScore/cancel/addCourt/removeCourt/pause-resume/standings/recentResults), and the live board (`DropInEventDetails.tsx` + `dropin-ui.tsx`, branched from `EventDetailClient` on `eventType==='DROP_IN'`). "Rotation Play" is a create-event-modal option.
+- **R3 hardening done:** Track A (score validation, opposing-side confirm + dispute, court-assignment race fix), Track B (cancel game, add/remove court w/ conflict-confirm, remove player, pause/resume [PAUSED migration], override confirmed score), Track D (split the board → `dropin-ui.tsx`). Plus review fixes (swap restricted to IN_PROGRESS, `externalMatchId` set on confirm, soft end-session E2).
+
+**Intentional shortcuts still open (see open-questions + memory):** doubles auto-pairs from queue order (A12 self-formed pairs deferred); **A15 auto-start-next-on-report NOT implemented for MATCH** (court idle until staff "Start next"); **GBR sync stubbed** (gbrSyncStatus=PENDING only; DI-5); TIMED auto-rotation is **board-driven** (needs an open board; no cron); **occurrenceDate=event.start** (no recurring/daily-league); **G7 not enforced** ("joining moves you" recorded, unbuilt); **joinQueue has no registration/payment gate**; **soft-end has no auto-grace** (staff cancel stragglers). `ASSIGNED` status is reserved/unused; `DISPUTED` locks players until staff resolve (by design).
+
+**What's left (R3 backlog):** **Track C** lifecycle (G7, headless cron rotation, window-driven sessions, recurring, join gating), **Track E** tests (skipped for now per owner), **Track F** (self-formed pairs, public spectator board G8, **DI-5 GBR stitch** + owner action items). Plus a deliberate **browser-verification** pass and the operational **push + apply migrations on deploy** (`add_dropin_assignment`, `add_dropin_session_paused`).
 
 ---
 
