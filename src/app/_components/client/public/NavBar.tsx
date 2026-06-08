@@ -39,9 +39,10 @@ interface NavBarProps {
 }
 
 export function NavBar({ clubShortName }: NavBarProps) {
-	// Build redirect URL with joinClub param if clubShortName is provided
+	// Build redirect URL so signups from a club landing page land in the /join
+	// funnel pre-targeted at that club (then pick a facility → profile → app).
 	const redirectUrl = clubShortName
-		? `/profile?joinClub=${encodeURIComponent(clubShortName)}`
+		? `/join?clubShortName=${encodeURIComponent(clubShortName)}`
 		: undefined;
 	const [isScrolled, setIsScrolled] = useState(false);
 	const [mounted, setMounted] = useState(false);

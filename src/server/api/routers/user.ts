@@ -308,7 +308,11 @@ export const userRouter = createTRPCRouter({
 					create: {
 						clerkUserId: ctx.auth.userId,
 						userType: UserType.STUDENT, // Default to student
-						clubShortName: "cba",
+						// FK-valid placeholder club. The real "has the user picked a
+						// club?" signal is whether they have any UserClub rows — a brand
+						// new user has NONE, no activeFacilityId, and the OnboardedGuard
+						// redirects them to /join to find their organization + facility.
+						clubShortName: "shuttlementor",
 					},
 					include: {
 						studentProfile: true,
@@ -320,50 +324,6 @@ export const userRouter = createTRPCRouter({
 				console.log(
 					`Created new user profile for Clerk user: ${ctx.auth.userId}`,
 				);
-
-				// Backfill per-facility UserClub rows for the default club
-				if (user.clubShortName) {
-					const defaultFacilities = await ctx.db.clubFacility.findMany({
-						where: { clubShortName: user.clubShortName, isActive: true },
-						orderBy: { position: "asc" },
-						select: { facilityId: true },
-					});
-
-					for (const f of defaultFacilities) {
-						await ctx.db.userClub.upsert({
-							where: {
-								userId_facilityId: {
-									userId: user.userId,
-									facilityId: f.facilityId,
-								},
-							},
-							create: {
-								userId: user.userId,
-								clubShortName: user.clubShortName,
-								facilityId: f.facilityId,
-								role: user.userType,
-							},
-							update: {},
-						});
-					}
-
-					// Set active facility if not already set
-					if (!user.activeFacilityId && defaultFacilities[0]) {
-						await ctx.db.user.update({
-							where: { userId: user.userId },
-							data: { activeFacilityId: defaultFacilities[0].facilityId },
-						});
-						user = await ctx.db.user.findUnique({
-							where: { clerkUserId: ctx.auth.userId },
-							include: {
-								studentProfile: true,
-								coachProfile: true,
-								club: true,
-							},
-						});
-						if (!user) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-					}
-				}
 			} catch (error) {
 				// If there's a unique constraint violation, fetch the existing user
 				// This handles the extremely rare case of a race condition
@@ -1051,8 +1011,44 @@ export const userRouter = createTRPCRouter({
 			}));
 		}),
 
-	// Create a UserClub membership row for the calling user, then make it the active club.
-	// Idempotent — if already a member, just switches active club.
+	// List a club's active facilities — used by the /join facility picker for
+	// users who aren't members yet. Protected (parity with searchClubs).
+	listClubFacilities: protectedProcedure
+		.input(
+			z.object({
+				clubShortName: z
+					.string()
+					.regex(/^[a-zA-Z0-9-]+$/)
+					.min(1)
+					.max(50),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const sanitized = input.clubShortName.trim().toLowerCase();
+
+			const club = await ctx.db.club.findUnique({
+				where: { clubShortName: sanitized },
+				select: { clubShortName: true },
+			});
+			if (!club) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Club not found." });
+			}
+
+			return ctx.db.clubFacility.findMany({
+				where: { clubShortName: sanitized, isActive: true },
+				orderBy: { position: "asc" },
+				select: {
+					facilityId: true,
+					name: true,
+					city: true,
+					state: true,
+				},
+			});
+		}),
+
+	// Create a UserClub membership for the calling user at a SINGLE facility, then
+	// (for first-time joiners only) make it their active club + facility.
+	// Idempotent — re-joining a facility you already belong to is a no-op on the row.
 	joinClub: protectedProcedure
 		.input(
 			z.object({
@@ -1061,6 +1057,9 @@ export const userRouter = createTRPCRouter({
 					.regex(/^[a-zA-Z0-9-]+$/)
 					.min(1)
 					.max(50),
+				// Which facility to join. Optional only when the club has exactly one
+				// active facility (auto-selected); required when there are several.
+				facilityId: z.string().min(1).max(50).optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -1072,52 +1071,91 @@ export const userRouter = createTRPCRouter({
 				where: { clubShortName: sanitized },
 				select: { clubShortName: true, clubName: true },
 			});
-
 			if (!club) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Club not found.",
-				});
+				throw new TRPCError({ code: "NOT_FOUND", message: "Club not found." });
 			}
 
-			// Get all active facilities for this club
-			const clubFacilities = await ctx.db.clubFacility.findMany({
+			// Active facilities for this club
+			const activeFacilities = await ctx.db.clubFacility.findMany({
 				where: { clubShortName: sanitized, isActive: true },
 				orderBy: { position: "asc" },
 				select: { facilityId: true },
 			});
-
-			// Create one membership row per facility (idempotent — skip if already exists)
-			for (const f of clubFacilities) {
-				await ctx.db.userClub.upsert({
-					where: {
-						userId_facilityId: {
-							userId: user.userId,
-							facilityId: f.facilityId,
-						},
-					},
-					create: {
-						userId: user.userId,
-						clubShortName: sanitized,
-						facilityId: f.facilityId,
-						role: UserType.STUDENT,
-					},
-					update: {},
+			if (activeFacilities.length === 0) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "This club has no facilities yet.",
 				});
 			}
 
-			// Switch active club + set active facility to the first one
-			const firstFacilityId = clubFacilities[0]?.facilityId ?? null;
-			await ctx.db.user.update({
+			// Resolve the target facility: explicit choice, or auto-select the only one.
+			let targetFacilityId: string;
+			if (input.facilityId) {
+				const match = activeFacilities.find(
+					(f) => f.facilityId === input.facilityId,
+				);
+				if (!match) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Selected facility is not part of this club.",
+					});
+				}
+				targetFacilityId = match.facilityId;
+			} else {
+				// No explicit choice — only valid when the club has exactly one.
+				const only =
+					activeFacilities.length === 1 ? activeFacilities[0] : undefined;
+				if (!only) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Please choose a facility.",
+					});
+				}
+				targetFacilityId = only.facilityId;
+			}
+
+			// Only a first-ever join switches the user's active club/role. Joining an
+			// ADDITIONAL club must never demote an existing COACH/FACILITY user — their
+			// new membership is added but their active context is left untouched.
+			const priorMemberships = await ctx.db.userClub.count({
 				where: { userId: user.userId },
-				data: {
-					clubShortName: sanitized,
-					userType: UserType.STUDENT,
-					activeFacilityId: firstFacilityId,
+			});
+			const isFirstJoin = priorMemberships === 0;
+
+			// Create the membership row for the chosen facility (idempotent)
+			await ctx.db.userClub.upsert({
+				where: {
+					userId_facilityId: {
+						userId: user.userId,
+						facilityId: targetFacilityId,
+					},
 				},
+				create: {
+					userId: user.userId,
+					clubShortName: sanitized,
+					facilityId: targetFacilityId,
+					role: UserType.STUDENT,
+				},
+				update: {},
 			});
 
-			return { clubShortName: sanitized, clubName: club.clubName };
+			if (isFirstJoin) {
+				await ctx.db.user.update({
+					where: { userId: user.userId },
+					data: {
+						clubShortName: sanitized,
+						userType: UserType.STUDENT,
+						activeFacilityId: targetFacilityId,
+					},
+				});
+			}
+
+			return {
+				clubShortName: sanitized,
+				clubName: club.clubName,
+				facilityId: targetFacilityId,
+				switched: isFirstJoin,
+			};
 		}),
 
 	// Returns all clubs the current user is a member of (deduplicated from per-facility rows).
