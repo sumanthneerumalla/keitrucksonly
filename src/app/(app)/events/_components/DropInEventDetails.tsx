@@ -869,11 +869,11 @@ export default function DropInEventDetails({
 								{isStaff && (
 									<button
 										type="button"
-										title="Remove from the queue"
+										title="Take out of the queue (stays checked in)"
 										onClick={() =>
 											setCheckInStatus.mutate({
 												checkInId: c.checkInId,
-												status: "LEFT",
+												status: "IDLE",
 											})
 										}
 										className="text-[var(--muted-foreground)] hover:text-red-600"
