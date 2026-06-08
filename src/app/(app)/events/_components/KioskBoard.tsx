@@ -1,6 +1,7 @@
 "use client";
 
 import { Maximize2 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	Countdown,
@@ -50,6 +51,14 @@ export default function KioskBoard({
 			board?.courts.find((c) => c.resourceId === id)?.title ?? "Court",
 		[board],
 	);
+
+	// QR target: the kiosk is rendered ON the event page, so the current URL is
+	// exactly the page we want phones to open to sign in and join the queue.
+	// Resolved on mount to avoid SSR/hydration mismatch (no window on the server).
+	const [joinUrl, setJoinUrl] = useState("");
+	useEffect(() => {
+		setJoinUrl(`${window.location.origin}${window.location.pathname}`);
+	}, []);
 
 	// ---- audio horn + kiosk fullscreen ---------------------------------------
 	const audioCtxRef = useRef<AudioContext | null>(null);
@@ -117,12 +126,15 @@ export default function KioskBoard({
 	// No session yet.
 	if (!session) {
 		return (
-			<div className="rounded-lg border border-[var(--border)] p-6 text-center">
+			<div className="flex flex-col items-center rounded-lg border border-[var(--border)] p-6 text-center">
 				<p className="font-medium text-[var(--foreground)]">{eventTitle}</p>
 				<p className="mt-1 text-[var(--muted-foreground)] text-sm">
 					This Rotation Play session hasn't started yet. The board will appear
 					here once staff open it.
 				</p>
+				<div className="mt-4">
+					<JoinQueueQR url={joinUrl} />
+				</div>
 			</div>
 		);
 	}
@@ -195,9 +207,12 @@ export default function KioskBoard({
 						)}
 					</p>
 				</div>
-				<Button variant="outline" size="sm" onClick={enableKiosk}>
-					<Maximize2 size={14} /> Kiosk
-				</Button>
+				<div className="flex items-center gap-3">
+					<JoinQueueQR url={joinUrl} />
+					<Button variant="outline" size="sm" onClick={enableKiosk}>
+						<Maximize2 size={14} /> Kiosk
+					</Button>
+				</div>
 			</div>
 
 			{isPaused && (
@@ -310,6 +325,23 @@ export default function KioskBoard({
 
 			{/* Leaderboard (MATCH) */}
 			{isMatch && <Leaderboard rows={standingsQuery.data ?? []} />}
+		</div>
+	);
+}
+
+/**
+ * Small QR code captioned "Join the queue" — points phones at the current event
+ * page (sign in → join). Pure SVG via the already-bundled `qrcode.react`; renders
+ * nothing until `url` is resolved on the client (avoids an SSR placeholder code).
+ */
+function JoinQueueQR({ url }: { url: string }) {
+	if (!url) return null;
+	return (
+		<div className="flex flex-col items-center gap-1.5 rounded-xl border border-[var(--border)] bg-white p-2.5">
+			<QRCodeSVG value={url} size={88} level="M" />
+			<span className="font-medium text-[var(--foreground)] text-xs">
+				Join the queue
+			</span>
 		</div>
 	);
 }
