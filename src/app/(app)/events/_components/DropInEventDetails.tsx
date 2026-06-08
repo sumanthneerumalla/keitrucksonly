@@ -354,9 +354,13 @@ export default function DropInEventDetails({
 		);
 	}
 
-	// Ended / cancelled session — show a clear closed state (+ final leaderboard for
-	// MATCH, + a staff "Start a new session" shortcut that re-activates it).
-	if (session.status === "ENDED" || session.status === "CANCELLED") {
+	// Fully closed: cancelled, or ended with no games left to resolve. (A soft-ended
+	// session with games still in flight falls through to the board so those games can
+	// finish — see isWindingDown below.)
+	if (
+		session.status === "CANCELLED" ||
+		(session.status === "ENDED" && assignments.length === 0)
+	) {
 		return (
 			<div className="space-y-4">
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--muted)] p-5 text-center">
@@ -401,6 +405,10 @@ export default function DropInEventDetails({
 	const viewerStatus = viewerCheckIn?.status ?? null;
 	const isMatch = session.mode === "MATCH";
 	const isPaused = session.status === "PAUSED";
+	// Soft-ended but games are still resolving (the early return above handles the
+	// fully-closed case). Like paused, this blocks forming new games / joins.
+	const isWindingDown = session.status === "ENDED";
+	const blockNewGames = isPaused || isWindingDown;
 	const playersPerCourt = session.format === "SINGLES" ? 2 : 4;
 
 	const pool = board?.pool ?? [];
@@ -413,7 +421,7 @@ export default function DropInEventDetails({
 	// Staff can swap a player on a live game (e.g. seat a test account).
 	type Assignment = (typeof assignments)[number];
 	const canSwapPlayers = (status: string) =>
-		isStaff && (status === "IN_PROGRESS" || status === "PENDING_CONFIRM");
+		isStaff && status === "IN_PROGRESS";
 	const renderSide = (a: Assignment, side: "A" | "B") => {
 		const ps = a.participants.filter((p) => p.side === side);
 		if (ps.length === 0)
@@ -451,7 +459,9 @@ export default function DropInEventDetails({
 					<p className="text-[var(--muted-foreground)] text-xs">
 						{session.mode === "TIMED" ? "Timed rotation" : "Match play"} ·{" "}
 						{session.format ?? "—"} ·{" "}
-						{isPaused ? (
+						{isWindingDown ? (
+							<span className="text-amber-600">ending</span>
+						) : isPaused ? (
 							<span className="text-amber-600">paused</span>
 						) : (
 							<span className="text-green-600">live</span>
@@ -463,6 +473,7 @@ export default function DropInEventDetails({
 						<Maximize2 size={14} /> Kiosk
 					</Button>
 					{isStaff &&
+						!isWindingDown &&
 						(isPaused ? (
 							<Button
 								size="sm"
@@ -485,7 +496,7 @@ export default function DropInEventDetails({
 								Pause
 							</Button>
 						))}
-					{isStaff && (
+					{isStaff && !isWindingDown && (
 						<Button
 							variant="outline"
 							size="sm"
@@ -503,6 +514,12 @@ export default function DropInEventDetails({
 				<p className="rounded-md bg-amber-100 px-3 py-2 text-amber-800 text-sm">
 					Session paused — current games can finish, but no new games or queue
 					joins until a staff member resumes.
+				</p>
+			)}
+			{isWindingDown && (
+				<p className="rounded-md bg-amber-100 px-3 py-2 text-amber-800 text-sm">
+					Session ending — let the current games finish. No new games or queue
+					joins; use “Cancel game” to clear a court that can't finish.
 				</p>
 			)}
 
@@ -545,7 +562,7 @@ export default function DropInEventDetails({
 												size="sm"
 												disabled={
 													formNext.isPending ||
-													isPaused ||
+													blockNewGames ||
 													pool.length < playersPerCourt
 												}
 												onClick={() =>
@@ -756,7 +773,7 @@ export default function DropInEventDetails({
 			</div>
 
 			{/* Add a court mid-session (staff). */}
-			{isStaff && (
+			{isStaff && !blockNewGames && (
 				<div className="flex justify-center">
 					<Popover open={addCourtOpen} onOpenChange={setAddCourtOpen}>
 						<PopoverTrigger asChild>
@@ -830,7 +847,7 @@ export default function DropInEventDetails({
 						) : (
 							<Button
 								size="sm"
-								disabled={isPaused}
+								disabled={blockNewGames}
 								onClick={() =>
 									joinQueue.mutate({ sessionId: session.sessionId })
 								}

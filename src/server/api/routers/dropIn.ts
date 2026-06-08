@@ -174,9 +174,12 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
-	 * End a drop-in session. Cancels any games still in flight and marks everyone
-	 * present as DONE, so the board can render a clean "ended" state. Confirmed
-	 * results (and the leaderboard) are left intact.
+	 * End a drop-in session — SOFT end (E2). Stops forming new games and clears the
+	 * queue, but lets in-progress games finish + report/confirm (and sync, once GBR
+	 * is live). Only ASSIGNED (transient, never started) is cancelled; PLAYING /
+	 * AWAITING_RESULT players and their IN_PROGRESS/PENDING_CONFIRM/DISPUTED games are
+	 * left intact so they can resolve. Staff "Cancel game" can clear stragglers.
+	 * (Auto-cancel after a grace period is deferred — no scheduler yet.)
 	 */
 	endSession: facilityProcedure
 		.input(z.object({ sessionId: z.string() }))
@@ -190,19 +193,17 @@ export const dropInRouter = createTRPCRouter({
 			}
 			const now = new Date();
 			return ctx.db.$transaction(async (tx) => {
+				// Only cancel transient pre-assignments; leave live/pending games alone.
 				await tx.dropInAssignment.updateMany({
-					where: {
-						sessionId: input.sessionId,
-						status: {
-							in: ["ASSIGNED", "IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"],
-						},
-					},
+					where: { sessionId: input.sessionId, status: "ASSIGNED" },
 					data: { status: "CANCELLED", endedAt: now },
 				});
+				// Players not in a live game are done; PLAYING / AWAITING_RESULT stay so
+				// they can finish and report/confirm.
 				await tx.dropInCheckIn.updateMany({
 					where: {
 						sessionId: input.sessionId,
-						status: { in: ["WAITING", "PLAYING", "IDLE", "AWAITING_RESULT"] },
+						status: { in: ["WAITING", "IDLE"] },
 					},
 					data: { status: "DONE" },
 				});
@@ -460,9 +461,22 @@ export const dropInRouter = createTRPCRouter({
 		.mutation(async ({ ctx, input }) => {
 			const user = await ctx.db.user.findUnique({
 				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true },
+				select: { userId: true, clubShortName: true },
 			});
 			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: { clubShortName: true, status: true },
+			});
+			if (!session || session.clubShortName !== user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (session.status !== "ACTIVE") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Session is not active.",
+				});
+			}
 			return ctx.db.dropInCheckIn.updateMany({
 				where: {
 					sessionId: input.sessionId,
@@ -502,13 +516,14 @@ export const dropInRouter = createTRPCRouter({
 			) {
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
-			if (
-				assignment.status !== "IN_PROGRESS" &&
-				assignment.status !== "PENDING_CONFIRM"
-			) {
+			// Only while a game is IN_PROGRESS (not after a score is reported). Swapping
+			// during PENDING_CONFIRM could remove the reporter, which would make the
+			// opposing-side confirm guard fail open — so it's disallowed.
+			if (assignment.status !== "IN_PROGRESS") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Players can only be swapped on a live game.",
+					message:
+						"Players can only be swapped during a live game (before a score is reported).",
 				});
 			}
 			const outRow = assignment.participants.find(
@@ -1084,6 +1099,8 @@ export const dropInRouter = createTRPCRouter({
 						confirmedByUserId: user.userId,
 						confirmedAt: now,
 						gbrSyncStatus: "PENDING", // stub: DI-5 submission loop picks this up
+						// Idempotency key for GBR submission (data-model §5). == assignmentId.
+						externalMatchId: assignment.assignmentId,
 					},
 				});
 				// Stamp winners on the participant rows (per side).
@@ -1250,6 +1267,8 @@ export const dropInRouter = createTRPCRouter({
 						confirmedByUserId: ctx.user.userId,
 						confirmedAt: now,
 						gbrSyncStatus: "PENDING",
+						externalMatchId: assignment.assignmentId, // GBR idempotency key
+						ratingWeight: 1.0, // staff-set scores still count at 1.0x (C2)
 					},
 				});
 				await tx.dropInAssignmentParticipant.updateMany({
