@@ -16,6 +16,7 @@ import {
 	assertCallerInParty,
 	assertPartyHasRoom,
 	assertSessionAcceptsPartyOps,
+	capacityForFormat,
 	generateGuestClerkUserId,
 	loadPartyForOp,
 	loadPartySummaries,
@@ -601,6 +602,11 @@ export const dropInRouter = createTRPCRouter({
 			// (no live members) are filtered out. Each entry includes member
 			// list so the client can render "Party of 4: Alice + Bob queued,
 			// Charlie on Court 2" while the party is held.
+			//
+			// `capacity` + `needsCount` are computed server-side from the session
+			// format so the client never has to re-derive SINGLES/DOUBLES rules.
+			// Used by QueueByParty, JoinPartyPopover, and YourPartyCard.
+			const capacity = capacityForFormat(session.format);
 			const parties = session.parties
 				.filter((p) => p.members.length > 0)
 				.map((p) => {
@@ -614,11 +620,17 @@ export const dropInRouter = createTRPCRouter({
 							: anyAwaiting
 								? "AWAITING_RESULT"
 								: "WAITING";
+					const memberCount = p.members.length;
 					return {
 						partyId: p.partyId,
 						openToFill: p.openToFill,
 						queuedAt: p.queuedAt,
-						memberCount: p.members.length,
+						memberCount,
+						capacity,
+						// How many more members the party would need to hit court
+						// capacity. 0 for parties already at-or-over capacity. Used
+						// by the UI to render "Needs N more" indicators.
+						needsCount: Math.max(0, capacity - memberCount),
 						members: p.members.map((m) => ({
 							userId: m.userId,
 							firstName: m.user.firstName,
@@ -1206,6 +1218,113 @@ export const dropInRouter = createTRPCRouter({
 					data: { openToFill: input.openToFill },
 					select: { partyId: true, openToFill: true },
 				});
+			});
+		}),
+
+	/**
+	 * An OUTSIDER joins an existing open party. Used by the "Join this group"
+	 * button on `openToFill=true` parties in the queue display — the spec says
+	 * those should be one-click joinable so other players can decisively fill a
+	 * "needs N more" group instead of waiting passively for the algorithm.
+	 *
+	 * Position semantic ("position them to whoever's ahead in the position"):
+	 * if the caller is currently solo-WAITING with an earlier queuedAt than the
+	 * target party, the party SNAPS UP to the caller's queuedAt (caller gets
+	 * the *better* of the two positions). This mirrors B2 (addPartyMember's
+	 * MIN snap) but from the joiner's side. If the caller is IDLE / has no
+	 * check-in, no snap — the caller adopts the party's existing position.
+	 *
+	 * NOT to be confused with `addPartyMember` (which requires the caller to
+	 * ALREADY be in the party). This one is for outsiders adding themselves.
+	 */
+	joinExistingParty: protectedProcedure
+		.input(z.object({ partyId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const caller = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { userId: true, clubShortName: true },
+			});
+			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+
+			return ctx.db.$transaction(async (tx) => {
+				const party = await loadPartyForOp(tx, input.partyId);
+				const session = await loadSessionForPartyOp(
+					tx,
+					party.sessionId,
+					caller.clubShortName,
+				);
+				assertSessionAcceptsPartyOps(session);
+
+				if (!party.openToFill) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "This party is closed to new members.",
+					});
+				}
+
+				// Reject if caller is already a live member.
+				if (party.liveMembers.some((m) => m.userId === caller.userId)) {
+					return { partyId: input.partyId, joined: false };
+				}
+
+				// C1 capacity check — must leave room for the caller.
+				assertPartyHasRoom(party.liveMembers.length, session.format);
+
+				// Find caller's existing check-in (if any) in this session.
+				const existing = await tx.dropInCheckIn.findUnique({
+					where: {
+						sessionId_userId: {
+							sessionId: party.sessionId,
+							userId: caller.userId,
+						},
+					},
+					select: { partyId: true, queuedAt: true, status: true },
+				});
+
+				const now = new Date();
+
+				// B2-style snap: ONLY when the joiner is currently solo-WAITING
+				// with an earlier queuedAt. IDLE / DONE / first-time joiners
+				// have no "position" to bring — they inherit the party's spot.
+				if (
+					existing &&
+					existing.status === "WAITING" &&
+					existing.queuedAt < party.queuedAt
+				) {
+					await tx.dropInParty.update({
+						where: { partyId: input.partyId },
+						data: { queuedAt: existing.queuedAt },
+					});
+				}
+
+				if (existing) {
+					await tx.dropInCheckIn.update({
+						where: {
+							sessionId_userId: {
+								sessionId: party.sessionId,
+								userId: caller.userId,
+							},
+						},
+						data: {
+							partyId: input.partyId,
+							status: "WAITING",
+							queuedAt: now,
+							leftAt: null,
+						},
+					});
+				} else {
+					await tx.dropInCheckIn.create({
+						data: {
+							sessionId: party.sessionId,
+							userId: caller.userId,
+							partyId: input.partyId,
+							status: "WAITING",
+							queuedAt: now,
+						},
+					});
+				}
+
+				return { partyId: input.partyId, joined: true };
 			});
 		}),
 

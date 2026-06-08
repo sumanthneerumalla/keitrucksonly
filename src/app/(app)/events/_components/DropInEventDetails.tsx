@@ -7,6 +7,7 @@ import {
 	JoinPartyPopover,
 	Leaderboard,
 	MemberSearchPopover,
+	QueueByParty,
 	ScoreEntry,
 	StaffAddToQueue,
 	SwapPlayer,
@@ -829,7 +830,6 @@ export default function DropInEventDetails({
 					party={viewerParty}
 					sessionId={session.sessionId}
 					viewerUserId={userId}
-					format={session.format}
 					onChange={refresh}
 				/>
 			)}
@@ -882,7 +882,7 @@ export default function DropInEventDetails({
 								</Button>
 								<JoinPartyPopover
 									sessionId={session.sessionId}
-									format={session.format}
+									capacity={playersPerCourt}
 									disabled={blockNewGames}
 									onDone={refresh}
 								/>
@@ -890,44 +890,14 @@ export default function DropInEventDetails({
 						)}
 					</div>
 				</div>
-				{pool.length === 0 ? (
-					<p className="text-[var(--muted-foreground)] text-sm">
-						No one waiting.
-					</p>
-				) : (
-					<ol className="space-y-1">
-						{pool.map((c, i) => (
-							<li
-								key={c.checkInId}
-								className={`flex items-center gap-2 text-sm ${
-									c.userId === userId
-										? "font-medium text-[var(--primary)]"
-										: "text-[var(--foreground)]"
-								}`}
-							>
-								<span className="text-[var(--muted-foreground)] text-xs">
-									{i + 1}.
-								</span>
-								<span className="flex-1">{fullName(c.user)}</span>
-								{isStaff && (
-									<button
-										type="button"
-										title="Take out of the queue (stays checked in)"
-										onClick={() =>
-											setCheckInStatus.mutate({
-												checkInId: c.checkInId,
-												status: "IDLE",
-											})
-										}
-										className="text-[var(--muted-foreground)] hover:text-red-600"
-									>
-										<X size={14} />
-									</button>
-								)}
-							</li>
-						))}
-					</ol>
-				)}
+				<QueueByParty
+					parties={parties}
+					pool={pool}
+					viewerUserId={userId}
+					viewerPartyId={viewerCheckIn?.partyId ?? null}
+					isStaff={isStaff}
+					onChange={refresh}
+				/>
 			</div>
 
 			{/* Leaderboard (MATCH) */}

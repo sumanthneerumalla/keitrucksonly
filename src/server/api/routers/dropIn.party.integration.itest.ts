@@ -585,3 +585,190 @@ describe("createParty", () => {
 		expect(second.isNew).toBe(false);
 	});
 });
+
+// =============================================================================
+// joinExistingParty (outsider one-click join into an open party)
+// =============================================================================
+
+describe("joinExistingParty", () => {
+	let sessionId: string;
+	let owner: TestUser;
+	let outsider: TestUser;
+	let allUserIds: string[];
+
+	beforeEach(async () => {
+		sessionId = await createTestSession({});
+		owner = await createTestUser("Owner");
+		outsider = await createTestUser("Outsider");
+		allUserIds = [owner.userId, outsider.userId];
+	});
+	afterEach(async () => {
+		await cleanup(sessionId, allUserIds);
+	});
+
+	it("adds an outsider with no prior check-in into the open party", async () => {
+		const party = await caller(owner.clerkUserId).createParty({
+			sessionId,
+			openToFill: true,
+		});
+		const r = await caller(outsider.clerkUserId).joinExistingParty({
+			partyId: party.partyId,
+		});
+		expect(r.joined).toBe(true);
+
+		const checkIn = await db.dropInCheckIn.findUniqueOrThrow({
+			where: {
+				sessionId_userId: { sessionId, userId: outsider.userId },
+			},
+			select: { partyId: true, status: true },
+		});
+		expect(checkIn.partyId).toBe(party.partyId);
+		expect(checkIn.status).toBe("WAITING");
+	});
+
+	it("snaps party.queuedAt to the joiner's earlier WAITING position (their better position wins)", async () => {
+		// Outsider joins solo first → earlier queuedAt.
+		await caller(outsider.clerkUserId).joinQueue({ sessionId });
+		const outsiderCheckIn = await db.dropInCheckIn.findFirstOrThrow({
+			where: { sessionId, userId: outsider.userId },
+			select: { queuedAt: true },
+		});
+		await new Promise((r) => setTimeout(r, 20));
+
+		// Owner creates an open party LATER.
+		const party = await caller(owner.clerkUserId).createParty({
+			sessionId,
+			openToFill: true,
+		});
+		const partyBefore = await db.dropInParty.findUniqueOrThrow({
+			where: { partyId: party.partyId },
+			select: { queuedAt: true },
+		});
+		expect(partyBefore.queuedAt.getTime()).toBeGreaterThan(
+			outsiderCheckIn.queuedAt.getTime(),
+		);
+
+		// Outsider joins owner's party → party snaps to outsider's earlier
+		// queuedAt.
+		await caller(outsider.clerkUserId).joinExistingParty({
+			partyId: party.partyId,
+		});
+
+		const partyAfter = await db.dropInParty.findUniqueOrThrow({
+			where: { partyId: party.partyId },
+			select: { queuedAt: true },
+		});
+		expect(partyAfter.queuedAt.getTime()).toBe(
+			outsiderCheckIn.queuedAt.getTime(),
+		);
+	});
+
+	it("does NOT snap when joiner is IDLE (no queue position to bring)", async () => {
+		// Outsider is IDLE (checked in, never joined queue) — they have no
+		// "position" so the party stays where it is.
+		const party = await caller(owner.clerkUserId).createParty({
+			sessionId,
+			openToFill: true,
+		});
+		const partyBefore = await db.dropInParty.findUniqueOrThrow({
+			where: { partyId: party.partyId },
+			select: { queuedAt: true },
+		});
+
+		await db.dropInCheckIn.create({
+			data: {
+				sessionId,
+				userId: outsider.userId,
+				partyId: (
+					await db.dropInParty.create({
+						data: {
+							sessionId,
+							openToFill: true,
+							createdByUserId: outsider.userId,
+						},
+						select: { partyId: true },
+					})
+				).partyId,
+				status: "IDLE",
+			},
+		});
+
+		await caller(outsider.clerkUserId).joinExistingParty({
+			partyId: party.partyId,
+		});
+
+		const partyAfter = await db.dropInParty.findUniqueOrThrow({
+			where: { partyId: party.partyId },
+			select: { queuedAt: true },
+		});
+		expect(partyAfter.queuedAt.getTime()).toBe(partyBefore.queuedAt.getTime());
+	});
+
+	it("rejects when the party is at capacity (C1)", async () => {
+		const party = await caller(owner.clerkUserId).createParty({
+			sessionId,
+			openToFill: true,
+		});
+		// Pack the party to capacity (4 for DOUBLES). Add 3 more members via
+		// addPartyMember — owner is already member #1, plus 3 makes 4.
+		const fillers = await Promise.all(
+			["F1", "F2", "F3"].map((n) => createTestUser(n)),
+		);
+		allUserIds.push(...fillers.map((u) => u.userId));
+		for (const f of fillers) {
+			await caller(owner.clerkUserId).addPartyMember({
+				partyId: party.partyId,
+				targetUserId: f.userId,
+			});
+		}
+
+		await expect(
+			caller(outsider.clerkUserId).joinExistingParty({
+				partyId: party.partyId,
+			}),
+		).rejects.toThrow(/capacity/i);
+	});
+
+	it("rejects a closed (openToFill=false) party", async () => {
+		const party = await caller(owner.clerkUserId).createParty({
+			sessionId,
+			openToFill: false,
+		});
+		await expect(
+			caller(outsider.clerkUserId).joinExistingParty({
+				partyId: party.partyId,
+			}),
+		).rejects.toThrow(/closed/i);
+	});
+
+	it("rejects when session is PAUSED", async () => {
+		const party = await caller(owner.clerkUserId).createParty({
+			sessionId,
+			openToFill: true,
+		});
+		await db.dropInSession.update({
+			where: { sessionId },
+			data: { status: "PAUSED" },
+		});
+		await expect(
+			caller(outsider.clerkUserId).joinExistingParty({
+				partyId: party.partyId,
+			}),
+		).rejects.toThrow(/not active/i);
+	});
+
+	it("returns joined=false (no-op) if caller is already in the party", async () => {
+		const party = await caller(owner.clerkUserId).createParty({
+			sessionId,
+			openToFill: true,
+		});
+		await caller(owner.clerkUserId).addPartyMember({
+			partyId: party.partyId,
+			targetUserId: outsider.userId,
+		});
+		const r = await caller(outsider.clerkUserId).joinExistingParty({
+			partyId: party.partyId,
+		});
+		expect(r.joined).toBe(false);
+	});
+});

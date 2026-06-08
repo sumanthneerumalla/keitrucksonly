@@ -1,6 +1,15 @@
 "use client";
 
-import { Check, LogOut, Trophy, Unlock, UserPlus, Volume2 } from "lucide-react";
+import {
+	Check,
+	LogOut,
+	Trophy,
+	Unlock,
+	UserPlus,
+	Users,
+	Volume2,
+	X,
+} from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
@@ -410,12 +419,15 @@ export function StaffAddToQueue({
  */
 export function JoinPartyPopover({
 	sessionId,
-	format,
+	capacity,
 	disabled,
 	onDone,
 }: {
 	sessionId: string;
-	format: "SINGLES" | "DOUBLES" | "MIXED_DOUBLES" | null;
+	/** Court capacity for this session (2 for SINGLES, 4 otherwise). Passed in
+	 *  rather than re-derived per-component so SINGLES/DOUBLES rules live in
+	 *  one place (server's `capacityForFormat`). */
+	capacity: number;
 	disabled?: boolean;
 	onDone: () => void;
 }) {
@@ -440,7 +452,6 @@ export function JoinPartyPopover({
 	const setOpenToFillM = api.dropIn.setPartyOpenToFill.useMutation();
 	const addPartyMember = api.dropIn.addPartyMember.useMutation();
 
-	const capacity = format === "SINGLES" ? 2 : 4;
 	const maxAddable = capacity - 1; // caller counts as 1 of the party
 	const ids = [...selected];
 	const submitting =
@@ -612,11 +623,11 @@ export function YourPartyCard({
 	party,
 	sessionId,
 	viewerUserId,
-	format,
 	onChange,
 }: {
 	sessionId: string;
 	party: {
+		capacity: number;
 		partyId: string;
 		openToFill: boolean;
 		memberCount: number;
@@ -639,12 +650,10 @@ export function YourPartyCard({
 		}>;
 	};
 	viewerUserId: string;
-	format: "SINGLES" | "DOUBLES" | "MIXED_DOUBLES" | null;
 	onChange: () => void;
 }) {
 	const { toast } = useToast();
-	const capacity = format === "SINGLES" ? 2 : 4;
-	const atCapacity = party.memberCount >= capacity;
+	const atCapacity = party.memberCount >= party.capacity;
 
 	const addPartyMember = api.dropIn.addPartyMember.useMutation({
 		onSuccess: onChange,
@@ -665,8 +674,8 @@ export function YourPartyCard({
 			: party.derivedState === "AWAITING_RESULT"
 				? "Awaiting result"
 				: party.openToFill
-					? `Open to fill (${party.memberCount}/${capacity})`
-					: `Closed group (${party.memberCount}/${capacity})`;
+					? `Open to fill (${party.memberCount}/${party.capacity})`
+					: `Closed group (${party.memberCount}/${party.capacity})`;
 
 	return (
 		<div className="rounded-lg border border-[var(--primary)]/40 bg-[var(--primary)]/5 p-3">
@@ -749,5 +758,303 @@ export function YourPartyCard({
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+// =============================================================================
+// QueueByParty — grouped waitlist rendering. One row per party with ≥1 WAITING
+// member. Replaces the old per-checkin flat list. Position numbers are
+// per-party in FIFO order (matches what pickNextOccupants will select against).
+//
+// Visual rules:
+//  - Solo + openToFill=true                → flat row (just name, no border)
+//  - Solo + openToFill=false               → bordered row, "Waiting for friends"
+//  - Multi-member, complete                → bordered row, "Group of N"
+//  - Multi-member, needs more (closed)     → bordered row, "Needs N more — closed group"
+//  - Multi-member, needs more (open)       → bordered row, "Needs N more — open to anyone"
+//                                            + "Join this group" button for outsiders
+//  - Any party w/ PLAYING/AWAITING_RESULT
+//    member (A1-blocked, mixed state)      → ghost pills for non-WAITING members
+//                                            + "Will play when …" label
+// =============================================================================
+
+export type QueueByPartyEntry = {
+	partyId: string;
+	openToFill: boolean;
+	queuedAt: string | Date;
+	memberCount: number;
+	capacity: number;
+	needsCount: number;
+	hasGuest: boolean;
+	isReady: boolean;
+	derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT";
+	members: Array<{
+		userId: string;
+		firstName: string | null;
+		lastName: string | null;
+		isGuest: boolean;
+		status:
+			| "WAITING"
+			| "IDLE"
+			| "PLAYING"
+			| "AWAITING_RESULT"
+			| "DONE"
+			| "LEFT"
+			| "CANCELLED";
+	}>;
+};
+
+type CheckInForQueue = {
+	checkInId: string;
+	userId: string;
+};
+
+const PILL_STATUS_LABEL: Record<string, string> = {
+	IDLE: "idle",
+	PLAYING: "on court",
+	AWAITING_RESULT: "score pending",
+	DONE: "done",
+};
+
+function memberDisplayName(m: {
+	firstName: string | null;
+	lastName: string | null;
+}): string {
+	return `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
+}
+
+export function QueueByParty({
+	parties,
+	pool,
+	viewerUserId,
+	viewerPartyId,
+	isStaff,
+	onChange,
+}: {
+	parties: QueueByPartyEntry[];
+	/** Flat WAITING check-ins — used only to map userId → checkInId for the
+	 *  staff X-out button. (The grouping logic itself iterates `parties[]`.) */
+	pool: CheckInForQueue[];
+	viewerUserId: string;
+	viewerPartyId: string | null;
+	isStaff: boolean;
+	onChange: () => void;
+}) {
+	const { toast } = useToast();
+	const setCheckInStatus = api.dropIn.setCheckInStatus.useMutation({
+		onSuccess: onChange,
+		onError: (e) => toast(e.message, "error"),
+	});
+	const joinExistingParty = api.dropIn.joinExistingParty.useMutation({
+		onSuccess: onChange,
+		onError: (e) => toast(e.message, "error"),
+	});
+
+	const checkInByUserId = new Map(pool.map((c) => [c.userId, c.checkInId]));
+
+	// Parties to show in the waitlist: anyone with at least one WAITING member.
+	// All-IDLE parties (checked in but not queued) and DEFUNCT parties are
+	// implicitly filtered (DEFUNCT was already filtered server-side).
+	const queueRows = parties
+		.map((p) => ({
+			party: p,
+			waitingMembers: p.members.filter((m) => m.status === "WAITING"),
+			nonWaitingLiveMembers: p.members.filter(
+				(m) => m.status !== "WAITING" && m.status !== "LEFT" && m.status !== "CANCELLED",
+			),
+		}))
+		.filter((r) => r.waitingMembers.length > 0);
+
+	if (queueRows.length === 0) {
+		return (
+			<p className="text-[var(--muted-foreground)] text-sm">No one waiting.</p>
+		);
+	}
+
+	return (
+		<ol className="space-y-1.5">
+			{queueRows.map((row, i) => {
+				const { party } = row;
+				const isSolo = party.memberCount === 1;
+				const isViewerInParty = party.partyId === viewerPartyId;
+				const isOpenIncomplete =
+					party.openToFill && party.needsCount > 0 && party.memberCount > 1;
+				const isClosedIncomplete = !party.openToFill && party.needsCount > 0;
+				const hasNonReadyMember =
+					party.derivedState === "PLAYING" ||
+					party.derivedState === "AWAITING_RESULT";
+
+				const showJoinButton =
+					isOpenIncomplete && !isViewerInParty && !!viewerUserId;
+
+				// A trivial solo (openToFill=true, party of 1) is rendered as a
+				// flat row — no border, no group framing. Anything else gets the
+				// party card treatment so the user sees the structure.
+				const isTrivialSolo = isSolo && party.openToFill;
+
+				return (
+					<li
+						key={party.partyId}
+						className={`flex items-start gap-2 text-sm ${
+							isTrivialSolo
+								? ""
+								: "rounded border border-[var(--border)] bg-[var(--muted)]/30 p-2"
+						} ${
+							isViewerInParty
+								? "border-[var(--primary)]/60 bg-[var(--primary)]/5"
+								: ""
+						}`}
+					>
+						<span className="pt-0.5 text-[var(--muted-foreground)] text-xs">
+							{i + 1}.
+						</span>
+						<div className="flex-1">
+							{/* Header line — only for non-trivial parties */}
+							{!isTrivialSolo && (
+								<div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+									<span className="inline-flex items-center gap-1 font-medium text-[var(--foreground)]">
+										<Users size={12} />
+										{isSolo
+											? "Solo"
+											: `Group of ${party.memberCount}`}
+									</span>
+									{isClosedIncomplete && (
+										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+											Needs {party.needsCount} more — closed group
+										</span>
+									)}
+									{isOpenIncomplete && (
+										<span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200">
+											Needs {party.needsCount} more — open to anyone
+										</span>
+									)}
+									{hasNonReadyMember && (
+										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+											Will play when{" "}
+											{row.nonWaitingLiveMembers
+												.map((m) => memberDisplayName(m))
+												.join(", ")}
+											{row.nonWaitingLiveMembers.length === 1
+												? " finishes"
+												: " finish"}
+										</span>
+									)}
+									{party.hasGuest && (
+										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+											Has guest
+										</span>
+									)}
+									{showJoinButton && (
+										<button
+											type="button"
+											onClick={() =>
+												joinExistingParty.mutate({
+													partyId: party.partyId,
+												})
+											}
+											disabled={joinExistingParty.isPending}
+											className="ml-auto rounded-full bg-[var(--primary)] px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+										>
+											Join this group
+										</button>
+									)}
+								</div>
+							)}
+
+							{/* Member pills (or flat name for trivial solo) */}
+							{isTrivialSolo ? (
+								<div className="flex items-center gap-2">
+									{row.waitingMembers.map((m) => (
+										<span
+											key={m.userId}
+											className={
+												m.userId === viewerUserId
+													? "font-medium text-[var(--primary)]"
+													: "text-[var(--foreground)]"
+											}
+										>
+											{memberDisplayName(m)}
+											{m.isGuest && (
+												<span className="ml-1 text-[10px] text-[var(--muted-foreground)]">
+													guest
+												</span>
+											)}
+											{isStaff && (
+												<button
+													type="button"
+													title="Take out of the queue (stays checked in)"
+													onClick={() => {
+														const checkInId = checkInByUserId.get(m.userId);
+														if (!checkInId) return;
+														setCheckInStatus.mutate({
+															checkInId,
+															status: "IDLE",
+														});
+													}}
+													className="ml-1 text-[var(--muted-foreground)] hover:text-red-600"
+												>
+													<X size={12} />
+												</button>
+											)}
+										</span>
+									))}
+								</div>
+							) : (
+								<div className="flex flex-wrap items-center gap-1.5">
+									{row.waitingMembers.map((m) => (
+										<span
+											key={m.userId}
+											className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${
+												m.userId === viewerUserId
+													? "border-[var(--primary)] bg-[var(--primary)]/10 font-medium text-[var(--primary)]"
+													: "border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
+											}`}
+										>
+											{memberDisplayName(m)}
+											{m.isGuest && (
+												<span className="text-[var(--muted-foreground)] text-[10px]">
+													guest
+												</span>
+											)}
+											{isStaff && (
+												<button
+													type="button"
+													title="Take out of the queue (stays checked in)"
+													onClick={() => {
+														const checkInId = checkInByUserId.get(m.userId);
+														if (!checkInId) return;
+														setCheckInStatus.mutate({
+															checkInId,
+															status: "IDLE",
+														});
+													}}
+													className="text-[var(--muted-foreground)] hover:text-red-600"
+												>
+													<X size={12} />
+												</button>
+											)}
+										</span>
+									))}
+									{/* Ghost pills for non-WAITING members so the user
+									    can see "this party has 2 waiting, 2 on courts". */}
+									{row.nonWaitingLiveMembers.map((m) => (
+										<span
+											key={m.userId}
+											className="inline-flex items-center gap-1 rounded-full border border-dashed border-[var(--border)] bg-[var(--muted)]/40 px-2 py-0.5 text-[var(--muted-foreground)] text-xs"
+											title={`Status: ${m.status}`}
+										>
+											{memberDisplayName(m)}
+											<span className="text-[10px]">
+												{PILL_STATUS_LABEL[m.status] ?? m.status.toLowerCase()}
+											</span>
+										</span>
+									))}
+								</div>
+							)}
+						</div>
+					</li>
+				);
+			})}
+		</ol>
 	);
 }
