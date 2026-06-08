@@ -448,6 +448,7 @@ export default function DropInEventDetails({
 				<SwapPlayer
 					name={fullName(p.user)}
 					canSwap={canSwapPlayers(a.status)}
+					sessionId={session.sessionId}
 					onPick={(inUserId) =>
 						swapParticipant.mutate({
 							assignmentId: a.assignmentId,
@@ -630,6 +631,7 @@ export default function DropInEventDetails({
 													<SwapPlayer
 														name={fullName(p.user)}
 														canSwap={canSwapPlayers(a.status)}
+														sessionId={session.sessionId}
 														onPick={(inUserId) =>
 															swapParticipant.mutate({
 																assignmentId: a.assignmentId,
@@ -825,6 +827,7 @@ export default function DropInEventDetails({
 			{showYourPartyCard && viewerParty && (
 				<YourPartyCard
 					party={viewerParty}
+					sessionId={session.sessionId}
 					viewerUserId={userId}
 					format={session.format}
 					onChange={refresh}

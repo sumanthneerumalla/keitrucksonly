@@ -96,15 +96,17 @@ export function Countdown({
 export function SwapPlayer({
 	name,
 	canSwap,
+	sessionId,
 	onPick,
 }: {
 	name: string;
 	canSwap: boolean;
+	sessionId: string;
 	onPick: (inUserId: string) => void;
 }) {
 	if (!canSwap) return <span className="text-[var(--foreground)]">{name}</span>;
 	return (
-		<MemberSearchPopover onPick={onPick}>
+		<MemberSearchPopover sessionId={sessionId} onPick={onPick}>
 			<button
 				type="button"
 				title="Swap player"
@@ -119,9 +121,11 @@ export function SwapPlayer({
 /** Single-select club member typeahead in a popover. */
 export function MemberSearchPopover({
 	children,
+	sessionId,
 	onPick,
 }: {
 	children: ReactNode;
+	sessionId: string;
 	onPick: (userId: string) => void;
 }) {
 	const [open, setOpen] = useState(false);
@@ -131,11 +135,12 @@ export function MemberSearchPopover({
 		const t = setTimeout(() => setDebounced(query.trim()), 300);
 		return () => clearTimeout(t);
 	}, [query]);
-	// Use the protected `searchPartyMembers` rather than the facility-gated
-	// `user.searchMembers` so this popover works for both player flows
-	// (YourPartyCard) and staff flows (SwapPlayer). Includes guests.
+	// `searchPartyMembers` is protectedProcedure and scoped to the session's
+	// roster — only people with a live DropInCheckIn for this session are
+	// returned. Works for both player flows (YourPartyCard) and staff flows
+	// (SwapPlayer). Includes guests.
 	const search = api.dropIn.searchPartyMembers.useQuery(
-		{ query: debounced },
+		{ sessionId, query: debounced },
 		{ enabled: open && debounced.length > 0 },
 	);
 	return (
@@ -426,10 +431,9 @@ export function JoinPartyPopover({
 		return () => clearTimeout(t);
 	}, [query]);
 
-	// Player-facing search (any member can call this). The staff-only
-	// `user.searchMembers` would return UNAUTHORIZED here.
+	// Player-facing search, scoped to this session's checked-in roster.
 	const search = api.dropIn.searchPartyMembers.useQuery(
-		{ query: debounced },
+		{ sessionId, query: debounced },
 		{ enabled: open && debounced.length > 0 },
 	);
 	const createParty = api.dropIn.createParty.useMutation();
@@ -606,10 +610,12 @@ export function JoinPartyPopover({
  */
 export function YourPartyCard({
 	party,
+	sessionId,
 	viewerUserId,
 	format,
 	onChange,
 }: {
+	sessionId: string;
 	party: {
 		partyId: string;
 		openToFill: boolean;
@@ -709,6 +715,7 @@ export function YourPartyCard({
 			</ul>
 			<div className="flex flex-wrap gap-2">
 				<MemberSearchPopover
+					sessionId={sessionId}
 					onPick={(targetUserId) =>
 						addPartyMember.mutate({ partyId: party.partyId, targetUserId })
 					}

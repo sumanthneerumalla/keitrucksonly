@@ -1275,18 +1275,24 @@ export const dropInRouter = createTRPCRouter({
 
 	/**
 	 * Player-facing typeahead used by the "Join queue as a group" + "Add member"
-	 * popovers. Returns real members AND guests in the caller's club so the user
-	 * can add either kind in one search. Scoped to caller's club; the caller is
-	 * excluded (no point adding yourself to your own party).
+	 * popovers. Returns ONLY people actually present at this session — i.e.
+	 * users who have a `DropInCheckIn` row for the given sessionId with a live
+	 * status (WAITING / IDLE / PLAYING / AWAITING_RESULT). LEFT / CANCELLED
+	 * are excluded; the caller is excluded too (no point adding yourself).
+	 *
+	 * Restricting to checked-in users is what the owner asked for ("only the
+	 * ones that are participating for the event and checked in"): the search
+	 * shouldn't surface pre-registered no-shows or arbitrary club members.
 	 *
 	 * NOT to be confused with `user.searchMembers` (facilityProcedure) which is
-	 * staff-only. This is the equivalent surface for regular members and only
-	 * exposes names + isGuest flag (no email) to keep the privacy footprint
-	 * smaller.
+	 * staff-only and club-wide. This is the equivalent surface for regular
+	 * members, narrowed to the session's roster, and only exposes names +
+	 * isGuest flag (no email).
 	 */
 	searchPartyMembers: protectedProcedure
 		.input(
 			z.object({
+				sessionId: z.string(),
 				query: z.string().trim().min(1).max(60),
 			}),
 		)
@@ -1297,6 +1303,14 @@ export const dropInRouter = createTRPCRouter({
 			});
 			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
 
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: { clubShortName: true },
+			});
+			if (!session || session.clubShortName !== caller.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
 			const q = input.query;
 			return ctx.db.user.findMany({
 				where: {
@@ -1306,6 +1320,21 @@ export const dropInRouter = createTRPCRouter({
 						{ firstName: { contains: q, mode: "insensitive" } },
 						{ lastName: { contains: q, mode: "insensitive" } },
 					],
+					// Scope to people who are actually at this session.
+					dropInCheckIns: {
+						some: {
+							sessionId: input.sessionId,
+							status: {
+								in: [
+									"WAITING",
+									"IDLE",
+									"PLAYING",
+									"AWAITING_RESULT",
+									"DONE",
+								],
+							},
+						},
+					},
 				},
 				orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
 				take: 10,
