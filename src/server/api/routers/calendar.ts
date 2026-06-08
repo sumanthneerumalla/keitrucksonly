@@ -17,7 +17,10 @@ import {
 	staffProcedure, // user must be FACILITY, ADMIN, or COACH
 } from "~/server/api/trpc";
 import { validateDateRange } from "~/server/utils/dateUtils";
-import { formatEventTimeInZone } from "~/server/utils/dateUtils";
+import {
+	formatEventTimeInZone,
+	getDayRangeInZone,
+} from "~/server/utils/dateUtils";
 import {
 	assertRegistrable,
 	createRegistrationTx,
@@ -2347,6 +2350,196 @@ export const calendarRouter = createTRPCRouter({
 
 		return { registrations };
 	}),
+
+	// Member dashboard: public, registrable events happening on a given day (today
+	// by default, in the member's timezone) at the member's *active facility*.
+	// Returns recurring occurrences expanded to that day and each event's
+	// registration state, so the dashboard can render registration-aware badges
+	// (reusing CalendarEventBadge) that link to the event page.
+	getMemberTodayEvents: protectedProcedure
+		.input(z.object({ date: z.date().optional() }).optional())
+		.query(async ({ ctx, input }) => {
+			const user = await getCurrentUser(ctx);
+			const facilityId = user.activeFacilityId;
+			if (!facilityId) {
+				return { facility: null, events: [] };
+			}
+
+			const facility = await ctx.db.clubFacility.findFirst({
+				where: {
+					facilityId,
+					clubShortName: user.clubShortName,
+					isActive: true,
+				},
+				select: { facilityId: true, name: true, timezone: true },
+			});
+			if (!facility) {
+				return { facility: null, events: [] };
+			}
+
+			// "Today" is the member's local day (their timezone), so the dashboard
+			// matches what they'd consider today regardless of facility/server tz.
+			const { startOfDay, endOfDay } = getDayRangeInZone(
+				user.timeZone,
+				input?.date,
+			);
+
+			const candidates = await ctx.db.calendarEvent.findMany({
+				where: {
+					clubShortName: user.clubShortName,
+					facilityId,
+					isDeleted: false,
+					isPublic: true,
+					eventType: {
+						in: [
+							EventType.BOOKABLE,
+							EventType.COACHING_SLOT,
+							EventType.DROP_IN,
+						],
+					},
+					OR: [
+						{ rrule: null, start: { lt: endOfDay }, end: { gt: startOfDay } },
+						{ rrule: { not: null }, start: { lte: endOfDay } },
+					],
+				},
+				include: {
+					resource: { select: { title: true, color: true } },
+					product: { select: { priceInCents: true } },
+					modifiedInstances: {
+						where: { isDeleted: false },
+						select: { recurrenceId: true },
+					},
+					_count: {
+						select: {
+							registrations: {
+								where: {
+									status: {
+										in: [
+											RegistrationStatus.REGISTERED,
+											RegistrationStatus.CHECKED_IN,
+										],
+									},
+								},
+							},
+						},
+					},
+				},
+			});
+
+			// My active registrations for these events — to mark badges "registered".
+			const myRegs = await ctx.db.eventRegistration.findMany({
+				where: {
+					userId: user.userId,
+					eventId: { in: candidates.map((e) => e.eventId) },
+					status: {
+						in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN],
+					},
+				},
+				select: { eventId: true, instanceDate: true },
+			});
+			// PER_SERIES (instanceDate null) covers every occurrence; PER_INSTANCE
+			// matches a single occurrence by its start.
+			const seriesReg = new Set(
+				myRegs.filter((r) => r.instanceDate === null).map((r) => r.eventId),
+			);
+			const instanceReg = new Set(
+				myRegs
+					.filter((r) => r.instanceDate !== null)
+					.map((r) => `${r.eventId}|${r.instanceDate?.toISOString()}`),
+			);
+
+			type DayEvent = {
+				eventId: string;
+				title: string;
+				description: string | null;
+				eventType: EventType;
+				start: Date;
+				end: Date;
+				instanceDate: Date | null;
+				maxParticipants: number | null;
+				currentRegistrations: number;
+				priceInCents: number | null;
+				productId: string | null;
+				creditCost: number | null;
+				isFree: boolean;
+				isFull: boolean;
+				isRegistered: boolean;
+				color: string | null;
+				backgroundColor: string | null;
+				resourceTitle: string | null;
+			};
+
+			const toDayEvent = (
+				e: (typeof candidates)[number],
+				start: Date,
+				end: Date,
+				instanceDate: Date | null,
+			): DayEvent => {
+				const currentRegistrations = e._count.registrations;
+				const isFree =
+					(e.productId === null || e.product?.priceInCents === 0) &&
+					(e.creditCost === null || e.creditCost === 0);
+				const instanceKey = instanceDate
+					? `${e.eventId}|${instanceDate.toISOString()}`
+					: null;
+				const isRegistered =
+					seriesReg.has(e.eventId) ||
+					(instanceKey !== null && instanceReg.has(instanceKey));
+				return {
+					eventId: e.eventId,
+					title: e.title,
+					description: e.description,
+					eventType: e.eventType,
+					start,
+					end,
+					instanceDate,
+					maxParticipants: e.maxParticipants,
+					currentRegistrations,
+					priceInCents: e.product?.priceInCents ?? null,
+					productId: e.productId,
+					creditCost: e.creditCost,
+					isFree,
+					isFull:
+						e.maxParticipants !== null &&
+						currentRegistrations >= e.maxParticipants,
+					isRegistered,
+					color: e.color,
+					backgroundColor: e.backgroundColor,
+					resourceTitle: e.resource?.title ?? null,
+				};
+			};
+
+			const events: DayEvent[] = [];
+			for (const e of candidates) {
+				if (!e.rrule) {
+					events.push(toDayEvent(e, e.start, e.end, null));
+					continue;
+				}
+				// Recurring: expand today's occurrences, honoring exdates and
+				// modified-instance overrides (those render as their own rows).
+				const durationMs = e.end.getTime() - e.start.getTime();
+				const childExdates = e.modifiedInstances
+					.map((c) => c.recurrenceId)
+					.filter((r): r is string => r !== null)
+					.map((r) => new Date(r));
+				const ruleSet = buildRuleSetFromEvent(
+					e.rrule,
+					[...e.exdates, ...childExdates],
+					e.start,
+				);
+				for (const occStart of ruleSet.between(startOfDay, endOfDay, true)) {
+					const occEnd = new Date(occStart.getTime() + durationMs);
+					events.push(toDayEvent(e, occStart, occEnd, occStart));
+				}
+			}
+
+			events.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+			return {
+				facility: { facilityId: facility.facilityId, name: facility.name },
+				events,
+			};
+		}),
 
 	// Admin-facing: return one user's active EventRegistrations, split by
 	// PER_INSTANCE (one occurrence) vs PER_SERIES (whole series). Series rows
