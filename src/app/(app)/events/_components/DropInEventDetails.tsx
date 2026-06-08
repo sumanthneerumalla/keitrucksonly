@@ -4,11 +4,13 @@ import { Check, Maximize2, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	Countdown,
+	JoinPartyPopover,
 	Leaderboard,
 	MemberSearchPopover,
 	ScoreEntry,
 	StaffAddToQueue,
 	SwapPlayer,
+	YourPartyCard,
 	formatGames,
 } from "~/app/(app)/events/_components/dropin-ui";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
@@ -412,6 +414,16 @@ export default function DropInEventDetails({
 	const playersPerCourt = session.format === "SINGLES" ? 2 : 4;
 
 	const pool = board?.pool ?? [];
+	const parties = board?.parties ?? [];
+	// Find the viewer's party (if any). A "non-trivial" party is one worth
+	// showing controls for — either multi-member, or a closed solo (the user
+	// expressed party intent and is waiting for friends).
+	const viewerParty = viewerCheckIn?.partyId
+		? parties.find((p) => p.partyId === viewerCheckIn.partyId)
+		: undefined;
+	const showYourPartyCard =
+		!!viewerParty &&
+		(viewerParty.memberCount > 1 || viewerParty.openToFill === false);
 	const availableCourts = (resourcesQuery.data?.resources ?? []).filter(
 		(r) => !session.courtIds.includes(r.resourceId),
 	);
@@ -810,6 +822,15 @@ export default function DropInEventDetails({
 				</div>
 			)}
 
+			{showYourPartyCard && viewerParty && (
+				<YourPartyCard
+					party={viewerParty}
+					viewerUserId={userId}
+					format={session.format}
+					onChange={refresh}
+				/>
+			)}
+
 			{/* Queue + your controls */}
 			<div className="rounded-lg border border-[var(--border)] p-3">
 				<div className="mb-2 flex items-center justify-between">
@@ -846,15 +867,23 @@ export default function DropInEventDetails({
 								You're on a court
 							</span>
 						) : (
-							<Button
-								size="sm"
-								disabled={blockNewGames}
-								onClick={() =>
-									joinQueue.mutate({ sessionId: session.sessionId })
-								}
-							>
-								Join queue
-							</Button>
+							<>
+								<Button
+									size="sm"
+									disabled={blockNewGames}
+									onClick={() =>
+										joinQueue.mutate({ sessionId: session.sessionId })
+									}
+								>
+									Join queue
+								</Button>
+								<JoinPartyPopover
+									sessionId={session.sessionId}
+									format={session.format}
+									disabled={blockNewGames}
+									onDone={refresh}
+								/>
+							</>
 						)}
 					</div>
 				</div>

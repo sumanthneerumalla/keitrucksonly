@@ -608,11 +608,12 @@ export const dropInRouter = createTRPCRouter({
 					const anyAwaiting = p.members.some(
 						(m) => m.status === "AWAITING_RESULT",
 					);
-					const derivedState = anyPlaying
-						? "PLAYING"
-						: anyAwaiting
-							? "AWAITING_RESULT"
-							: "WAITING";
+					const derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT" =
+						anyPlaying
+							? "PLAYING"
+							: anyAwaiting
+								? "AWAITING_RESULT"
+								: "WAITING";
 					return {
 						partyId: p.partyId,
 						openToFill: p.openToFill,
