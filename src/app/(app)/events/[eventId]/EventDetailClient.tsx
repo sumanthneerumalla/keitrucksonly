@@ -200,6 +200,14 @@ export default function EventDetailClient({
 		);
 	}
 
+	// When a logged-out viewer signs in from this event, send them to /join with
+	// this event's club (and facility, when the event has one) prefilled. /join
+	// auto-joins and forwards through onboarding to /home — so they end up a member
+	// of the right place seeing today's events, instead of bouncing back here.
+	const joinRedirectUrl = `/join?clubShortName=${encodeURIComponent(
+		event.clubShortName,
+	)}${event.facilityId ? `&facilityId=${encodeURIComponent(event.facilityId)}` : ""}`;
+
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-6">
 			{/* Back nav */}
@@ -341,6 +349,8 @@ export default function EventDetailClient({
 									<SignInButton
 										mode="modal"
 										initialValues={{ emailAddress: guestRegisteredEmail }}
+										forceRedirectUrl={joinRedirectUrl}
+										signUpForceRedirectUrl={joinRedirectUrl}
 									>
 										<button
 											type="button"
@@ -452,7 +462,11 @@ export default function EventDetailClient({
 									</>
 								) : (
 									<p className="text-[var(--muted-foreground)] text-sm">
-										<SignInButton mode="modal">
+										<SignInButton
+											mode="modal"
+											forceRedirectUrl={joinRedirectUrl}
+											signUpForceRedirectUrl={joinRedirectUrl}
+										>
 											<button
 												type="button"
 												className="cursor-pointer bg-transparent p-0 text-[var(--primary)] underline"

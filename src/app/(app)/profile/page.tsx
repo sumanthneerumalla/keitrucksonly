@@ -98,11 +98,28 @@ function ProfilePageContent() {
 		e.preventDefault();
 		setServerError("");
 
+		// Detect the not-onboarded → onboarded transition so we can forward the user
+		// straight to /home (today's events) once they finish onboarding. Gender is
+		// set-once, so the effective value is the new input or the existing one.
+		const wasOnboarded = isOnboardedUser(user ?? {});
+		const willBeOnboarded = isOnboardedUser({
+			firstName: formData.firstName,
+			lastName: formData.lastName,
+			email: formData.email,
+			gender: genderInput || user?.gender || "",
+		});
+
 		// Store current form data in case we need to restore it on error
 		const currentFormData = { ...formData };
 		updateProfile.mutate(
 			{ ...formData, gender: genderInput || undefined },
 			{
+				onSuccess: () => {
+					if (!wasOnboarded && willBeOnboarded) {
+						router.push("/home");
+						router.refresh();
+					}
+				},
 				onError: () => {
 					// Preserve form data on error so user doesn't lose their changes
 					setFormData(currentFormData);

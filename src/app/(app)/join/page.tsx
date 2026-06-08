@@ -1,7 +1,7 @@
 "use client";
 
 import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
-import { ArrowLeft, MapPin, Search } from "lucide-react";
+import { ArrowLeft, Loader2, MapPin, Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ErrorBanner } from "~/app/_components/shared/ErrorBanner";
@@ -16,29 +16,56 @@ function JoinPageContent() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 
+	const clubParam =
+		searchParams.get("clubShortName")?.trim().toLowerCase() || null;
+	const facilityParam = searchParams.get("facilityId")?.trim() || null;
+
 	// Two-step flow: pick a club (search) → pick a facility within it.
 	const [selectedClub, setSelectedClub] = useState<SelectedClub | null>(null);
 
-	// Pre-select a club when arriving from a club landing page (?clubShortName=),
-	// jumping straight to the facility picker.
-	const preselectApplied = useRef(false);
-	useEffect(() => {
-		if (preselectApplied.current) return;
-		const fromUrl = searchParams.get("clubShortName");
-		if (fromUrl) {
-			preselectApplied.current = true;
-			setSelectedClub({ clubShortName: fromUrl.trim().toLowerCase() });
-		}
-	}, [searchParams]);
+	// True when this join was triggered by a deep link carrying BOTH club and
+	// facility (e.g. an event sign-in link). Controls the returning-member
+	// landing target: event-origin joins go to /home so the user immediately
+	// sees today's events; manual "add another club" joins keep going to /dashboard.
+	const autoJoinedRef = useRef(false);
 
 	const joinClub = api.user.joinClub.useMutation({
 		onSuccess: (data) => {
-			// First-time joiners continue onboarding at /profile; existing users
-			// adding another club go back to the dashboard.
-			router.push(data.switched ? "/profile" : "/dashboard");
+			// First-time joiners continue onboarding at /profile (which forwards to
+			// /home once the profile is complete). Returning members land on /home
+			// when they arrived via an event/deep link, else the dashboard.
+			if (data.switched) {
+				router.push("/profile");
+			} else {
+				router.push(autoJoinedRef.current ? "/home" : "/dashboard");
+			}
 			router.refresh();
 		},
 	});
+
+	// Deep-link handling (run once): both params → auto-join with no clicks;
+	// club only → preselect and jump to the facility picker.
+	const initApplied = useRef(false);
+	useEffect(() => {
+		if (initApplied.current) return;
+		if (clubParam && facilityParam) {
+			initApplied.current = true;
+			autoJoinedRef.current = true;
+			setSelectedClub({ clubShortName: clubParam });
+			joinClub.mutate({ clubShortName: clubParam, facilityId: facilityParam });
+		} else if (clubParam) {
+			initApplied.current = true;
+			setSelectedClub({ clubShortName: clubParam });
+		}
+	}, [clubParam, facilityParam, joinClub.mutate]);
+
+	// While an auto-join is in flight (or the post-success redirect is pending),
+	// show a dedicated screen instead of flashing the facility picker. On error we
+	// fall through to FacilityStep below, which surfaces the message and lets the
+	// user pick a different facility manually.
+	if (autoJoinedRef.current && (joinClub.isPending || joinClub.isSuccess)) {
+		return <AutoJoiningScreen />;
+	}
 
 	if (selectedClub) {
 		return (
@@ -58,13 +85,37 @@ function JoinPageContent() {
 		);
 	}
 
-	return <ClubSearchStep onSelect={setSelectedClub} />;
+	return (
+		<ClubSearchStep
+			onJoin={(clubShortName, facilityId) =>
+				joinClub.mutate({ clubShortName, facilityId })
+			}
+			isJoining={joinClub.isPending}
+			joiningFacilityId={joinClub.variables?.facilityId}
+			joinError={joinClub.isError ? joinClub.error.message : null}
+		/>
+	);
+}
+
+function AutoJoiningScreen() {
+	return (
+		<div className="mx-auto flex max-w-xl flex-col items-center px-4 py-24 text-center">
+			<Loader2 className="h-8 w-8 animate-spin text-[var(--primary)]" />
+			<p className="mt-4 text-gray-500 text-sm">Joining your club…</p>
+		</div>
+	);
 }
 
 function ClubSearchStep({
-	onSelect,
+	onJoin,
+	isJoining,
+	joiningFacilityId,
+	joinError,
 }: {
-	onSelect: (club: SelectedClub) => void;
+	onJoin: (clubShortName: string, facilityId: string) => void;
+	isJoining: boolean;
+	joiningFacilityId: string | undefined;
+	joinError: string | null;
 }) {
 	const [query, setQuery] = useState("");
 	const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -99,8 +150,8 @@ function ClubSearchStep({
 					Find your organization
 				</h1>
 				<p className="mt-2 text-gray-500 text-sm">
-					Search by club name or short ID. Results appear after {MIN_QUERY_LEN}{" "}
-					characters.
+					Search by club name or short ID, then pick your location. Results
+					appear after {MIN_QUERY_LEN} characters.
 				</p>
 			</div>
 
@@ -138,20 +189,13 @@ function ClubSearchStep({
 			)}
 
 			{isSearchReady && results && results.length > 0 && (
-				<div className="glass-panel divide-y divide-gray-100 overflow-hidden rounded-lg">
+				<div className="space-y-4">
 					{results.map((club) => (
-						<button
+						<div
 							key={club.clubShortName}
-							type="button"
-							onClick={() =>
-								onSelect({
-									clubShortName: club.clubShortName,
-									clubName: club.clubName,
-								})
-							}
-							className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-gray-50"
+							className="glass-panel overflow-hidden rounded-lg"
 						>
-							<div className="min-w-0">
+							<div className="border-gray-100 border-b px-4 py-3">
 								<p className="truncate font-medium text-gray-900 text-sm">
 									{club.clubName}
 								</p>
@@ -159,13 +203,58 @@ function ClubSearchStep({
 									{club.clubShortName}
 								</p>
 							</div>
-							<span className="shrink-0 font-medium text-[var(--primary)] text-xs">
-								Select →
-							</span>
-						</button>
+
+							{club.facilities.length === 0 ? (
+								<p className="px-4 py-3 text-gray-400 text-xs">
+									No locations yet.
+								</p>
+							) : (
+								<div className="divide-y divide-gray-100">
+									{club.facilities.map((facility) => {
+										const isPending =
+											isJoining && joiningFacilityId === facility.facilityId;
+										const location = [facility.city, facility.state]
+											.filter(Boolean)
+											.join(", ");
+										return (
+											<div
+												key={facility.facilityId}
+												className="flex items-center justify-between gap-4 px-4 py-3"
+											>
+												<div className="flex min-w-0 items-center gap-3">
+													<MapPin className="h-4 w-4 shrink-0 text-gray-400" />
+													<div className="min-w-0">
+														<p className="truncate font-medium text-gray-900 text-sm">
+															{facility.name}
+														</p>
+														{location && (
+															<p className="truncate text-gray-500 text-xs">
+																{location}
+															</p>
+														)}
+													</div>
+												</div>
+												<button
+													type="button"
+													disabled={isJoining}
+													onClick={() =>
+														onJoin(club.clubShortName, facility.facilityId)
+													}
+													className="shrink-0 rounded-lg bg-[var(--primary)] px-4 py-1.5 font-medium text-white text-xs transition-colors hover:bg-[var(--primary-dark)] disabled:cursor-not-allowed disabled:opacity-50"
+												>
+													{isPending ? "Joining…" : "Join"}
+												</button>
+											</div>
+										);
+									})}
+								</div>
+							)}
+						</div>
 					))}
 				</div>
 			)}
+
+			{joinError && <ErrorBanner message={joinError} className="mt-4" />}
 		</div>
 	);
 }

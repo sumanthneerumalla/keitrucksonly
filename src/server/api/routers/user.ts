@@ -1000,7 +1000,22 @@ export const userRouter = createTRPCRouter({
 						{ clubShortName: { contains: normalized, mode: "insensitive" } },
 					],
 				},
-				select: { clubShortName: true, clubName: true },
+				select: {
+					clubShortName: true,
+					clubName: true,
+					// Eager-load active facilities so the /join search can show each
+					// club's locations inline and let users join in a single press.
+					facilities: {
+						where: { isActive: true },
+						orderBy: { position: "asc" },
+						select: {
+							facilityId: true,
+							name: true,
+							city: true,
+							state: true,
+						},
+					},
+				},
 				orderBy: { clubName: "asc" },
 				take: 20,
 			});
@@ -1008,6 +1023,7 @@ export const userRouter = createTRPCRouter({
 			return clubs.map((c) => ({
 				clubShortName: c.clubShortName,
 				clubName: c.clubName,
+				facilities: c.facilities,
 			}));
 		}),
 
