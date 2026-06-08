@@ -11,7 +11,7 @@ import {
 	Calendar,
 	CalendarClock,
 	ChevronDown,
-	LayoutDashboard,
+	Home,
 	Mail,
 	Receipt,
 	Settings,
@@ -70,9 +70,9 @@ const ALL_TYPES: UserType[] = [
 
 export const navItems: NavItem[] = [
 	{
-		label: "Dashboard",
-		href: "/dashboard",
-		icon: <LayoutDashboard size={20} />,
+		label: "Home",
+		href: "/home",
+		icon: <Home size={20} />,
 		userTypes: ALL_TYPES,
 	},
 	{
