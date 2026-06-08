@@ -11,6 +11,7 @@ import {
 	facilityProcedure,
 	protectedProcedure,
 } from "~/server/api/trpc";
+import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
 
 /**
  * Drop-in sessions (designFiles/drop-in). DI-1 ships MANUAL mode: a session is
@@ -718,6 +719,168 @@ export const dropInRouter = createTRPCRouter({
 					},
 				});
 				return updated;
+			});
+		}),
+
+	/**
+	 * Staff (facility+): cancel a game on a court — frees the court and returns the
+	 * present players to the pool (WAITING), without counting it as a game played.
+	 */
+	cancelAssignment: facilityProcedure
+		.input(z.object({ assignmentId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const assignment = await ctx.db.dropInAssignment.findUnique({
+				where: { assignmentId: input.assignmentId },
+				include: {
+					participants: { select: { userId: true } },
+					session: { select: { clubShortName: true, sessionId: true } },
+				},
+			});
+			if (
+				!assignment ||
+				assignment.session.clubShortName !== ctx.user.clubShortName
+			) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (
+				assignment.status === "COMPLETED" ||
+				assignment.status === "CONFIRMED" ||
+				assignment.status === "CANCELLED"
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "This game is already finished.",
+				});
+			}
+			const now = new Date();
+			return ctx.db.$transaction(async (tx) => {
+				const updated = await tx.dropInAssignment.update({
+					where: { assignmentId: assignment.assignmentId },
+					data: { status: "CANCELLED", endedAt: now },
+				});
+				// Present players go back to the pool; the cancelled game isn't counted.
+				await tx.dropInCheckIn.updateMany({
+					where: {
+						sessionId: assignment.session.sessionId,
+						userId: { in: assignment.participants.map((p) => p.userId) },
+					},
+					data: { status: "WAITING", queuedAt: now },
+				});
+				return updated;
+			});
+		}),
+
+	/**
+	 * Staff (facility+): add a court to a live session. Validates the court is an
+	 * active club resource; unless `force`, it checks the calendar for a conflicting
+	 * event over the session's window and returns `{ conflictTitle }` so the UI can
+	 * ask "this court is reserved by another event — proceed anyway?".
+	 */
+	addCourt: facilityProcedure
+		.input(
+			z.object({
+				sessionId: z.string(),
+				courtId: z.string(),
+				force: z.boolean().optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: {
+					clubShortName: true,
+					status: true,
+					courtIds: true,
+					eventId: true,
+				},
+			});
+			if (!session || session.clubShortName !== ctx.user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (session.status === "ENDED" || session.status === "CANCELLED") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Session has ended.",
+				});
+			}
+			if (session.courtIds.includes(input.courtId)) {
+				return { added: true as const };
+			}
+			const resource = await ctx.db.clubResource.findUnique({
+				where: { resourceId: input.courtId },
+				select: { clubShortName: true, isActive: true },
+			});
+			if (
+				!resource ||
+				resource.clubShortName !== ctx.user.clubShortName ||
+				!resource.isActive
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Court not found in your club.",
+				});
+			}
+			if (!input.force) {
+				const event = await ctx.db.calendarEvent.findUnique({
+					where: { eventId: session.eventId },
+					select: { start: true, end: true, eventId: true },
+				});
+				if (event) {
+					const conflicts = await checkResourceConflicts({
+						db: ctx.db,
+						resourceId: input.courtId,
+						start: event.start,
+						end: event.end,
+						excludeEventId: event.eventId,
+					});
+					if (conflicts.length > 0) {
+						return {
+							added: false as const,
+							conflictTitle: conflicts[0]?.title ?? "another event",
+						};
+					}
+				}
+			}
+			await ctx.db.dropInSession.update({
+				where: { sessionId: input.sessionId },
+				data: { courtIds: { push: input.courtId } },
+			});
+			return { added: true as const };
+		}),
+
+	/**
+	 * Staff (facility+): remove a court from a live session (the event still reserves
+	 * it on the calendar — it just goes unused). Blocked while a game is on it.
+	 */
+	removeCourt: facilityProcedure
+		.input(z.object({ sessionId: z.string(), courtId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: { clubShortName: true, courtIds: true },
+			});
+			if (!session || session.clubShortName !== ctx.user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			const active = await ctx.db.dropInAssignment.findFirst({
+				where: {
+					sessionId: input.sessionId,
+					courtId: input.courtId,
+					status: { in: ["IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"] },
+				},
+				select: { assignmentId: true },
+			});
+			if (active) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "End the game on this court before removing it.",
+				});
+			}
+			return ctx.db.dropInSession.update({
+				where: { sessionId: input.sessionId },
+				data: {
+					courtIds: { set: session.courtIds.filter((c) => c !== input.courtId) },
+				},
 			});
 		}),
 

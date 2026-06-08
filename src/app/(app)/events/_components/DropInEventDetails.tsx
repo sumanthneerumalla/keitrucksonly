@@ -1,6 +1,14 @@
 "use client";
 
-import { Check, Maximize2, Trophy, UserPlus, Volume2 } from "lucide-react";
+import {
+	Check,
+	Maximize2,
+	Plus,
+	Trophy,
+	UserPlus,
+	Volume2,
+	X,
+} from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -9,6 +17,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -133,6 +142,33 @@ export default function DropInEventDetails({
 		},
 		onError: (e) => toast(e.message, "error"),
 	});
+	const cancelAssignment = api.dropIn.cancelAssignment.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
+	const removeCourt = api.dropIn.removeCourt.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
+	const setCheckInStatus = api.dropIn.setCheckInStatus.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
+	const addCourt = api.dropIn.addCourt.useMutation({
+		onSuccess: (res, variables) => {
+			if (res.added) {
+				setCourtConflict(null);
+				refresh();
+			} else {
+				// Court is reserved by another event — ask staff to confirm.
+				setCourtConflict({
+					courtId: variables.courtId,
+					title: res.conflictTitle,
+				});
+			}
+		},
+		onError: (e) => toast(e.message, "error"),
+	});
 
 	// ---- start-session form (staff, before a session exists) -----------------
 	const [mode, setMode] = useState<"TIMED" | "MATCH">("TIMED");
@@ -144,6 +180,12 @@ export default function DropInEventDetails({
 		id: string;
 		staff: boolean;
 	} | null>(null);
+	// Add-court conflict confirmation ("reserved by X — proceed anyway?").
+	const [courtConflict, setCourtConflict] = useState<{
+		courtId: string;
+		title: string;
+	} | null>(null);
+	const [addCourtOpen, setAddCourtOpen] = useState(false);
 
 	// ---- audio horn + kiosk --------------------------------------------------
 	const audioCtxRef = useRef<AudioContext | null>(null);
@@ -353,6 +395,9 @@ export default function DropInEventDetails({
 	const playersPerCourt = session.format === "SINGLES" ? 2 : 4;
 
 	const pool = board?.pool ?? [];
+	const availableCourts = (resourcesQuery.data?.resources ?? []).filter(
+		(r) => !session.courtIds.includes(r.resourceId),
+	);
 	const fullName = (u: { firstName: string | null; lastName: string | null }) =>
 		`${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "Player";
 
@@ -452,20 +497,35 @@ export default function DropInEventDetails({
 										Empty
 									</span>
 									{isStaff && (
-										<Button
-											size="sm"
-											disabled={
-												formNext.isPending || pool.length < playersPerCourt
-											}
-											onClick={() =>
-												formNext.mutate({
-													sessionId: session.sessionId,
-													courtId,
-												})
-											}
-										>
-											Start next
-										</Button>
+										<div className="flex items-center gap-1.5">
+											<Button
+												size="sm"
+												disabled={
+													formNext.isPending || pool.length < playersPerCourt
+												}
+												onClick={() =>
+													formNext.mutate({
+														sessionId: session.sessionId,
+														courtId,
+													})
+												}
+											>
+												Start next
+											</Button>
+											<Button
+												variant="outline"
+												size="sm"
+												title="Remove this court from the session"
+												onClick={() =>
+													removeCourt.mutate({
+														sessionId: session.sessionId,
+														courtId,
+													})
+												}
+											>
+												<X size={14} />
+											</Button>
+										</div>
 									)}
 								</div>
 							)}
@@ -518,6 +578,21 @@ export default function DropInEventDetails({
 									</div>
 
 									{/* Controls */}
+									{isStaff && (
+										<Button
+											variant="outline"
+											size="sm"
+											className="border-red-200 text-red-600 hover:bg-red-50"
+											disabled={cancelAssignment.isPending}
+											onClick={() =>
+												cancelAssignment.mutate({
+													assignmentId: a.assignmentId,
+												})
+											}
+										>
+											Cancel game
+										</Button>
+									)}
 									{!isMatch && isStaff && (
 										<Button
 											variant="outline"
@@ -635,6 +710,43 @@ export default function DropInEventDetails({
 				})}
 			</div>
 
+			{/* Add a court mid-session (staff). */}
+			{isStaff && (
+				<div className="flex justify-center">
+					<Popover open={addCourtOpen} onOpenChange={setAddCourtOpen}>
+						<PopoverTrigger asChild>
+							<Button variant="outline" size="sm">
+								<Plus size={14} /> Add court
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent className="w-56 p-2" align="center">
+							{availableCourts.length === 0 ? (
+								<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
+									No other courts available.
+								</p>
+							) : (
+								availableCourts.map((r) => (
+									<button
+										key={r.resourceId}
+										type="button"
+										onClick={() => {
+											addCourt.mutate({
+												sessionId: session.sessionId,
+												courtId: r.resourceId,
+											});
+											setAddCourtOpen(false);
+										}}
+										className="block w-full rounded px-2 py-1 text-left text-[var(--foreground)] text-sm hover:bg-[var(--muted)]"
+									>
+										{r.title}
+									</button>
+								))
+							)}
+						</PopoverContent>
+					</Popover>
+				</div>
+			)}
+
 			{/* Queue + your controls */}
 			<div className="rounded-lg border border-[var(--border)] p-3">
 				<div className="mb-2 flex items-center justify-between">
@@ -700,7 +812,22 @@ export default function DropInEventDetails({
 								<span className="text-[var(--muted-foreground)] text-xs">
 									{i + 1}.
 								</span>
-								{fullName(c.user)}
+								<span className="flex-1">{fullName(c.user)}</span>
+								{isStaff && (
+									<button
+										type="button"
+										title="Remove from the queue"
+										onClick={() =>
+											setCheckInStatus.mutate({
+												checkInId: c.checkInId,
+												status: "LEFT",
+											})
+										}
+										className="text-[var(--muted-foreground)] hover:text-red-600"
+									>
+										<X size={14} />
+									</button>
+								)}
 							</li>
 						))}
 					</ol>
@@ -709,6 +836,25 @@ export default function DropInEventDetails({
 
 			{/* Leaderboard (MATCH) */}
 			{isMatch && <Leaderboard rows={standingsQuery.data ?? []} />}
+
+			{/* Add-court conflict confirmation. */}
+			<AlertDialog
+				open={courtConflict !== null}
+				title="Court reserved on the calendar"
+				description={`This court is reserved by "${courtConflict?.title ?? "another event"}" during this session. Add it anyway?`}
+				confirmLabel="Add anyway"
+				onConfirm={() => {
+					if (courtConflict) {
+						addCourt.mutate({
+							sessionId: session.sessionId,
+							courtId: courtConflict.courtId,
+							force: true,
+						});
+					}
+					setCourtConflict(null);
+				}}
+				onCancel={() => setCourtConflict(null)}
+			/>
 		</div>
 	);
 }
