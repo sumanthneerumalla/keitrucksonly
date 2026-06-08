@@ -17,8 +17,10 @@ import {
 	assertSessionAcceptsPartyOps,
 	generateGuestClerkUserId,
 	loadPartyForOp,
+	loadPartySummaries,
 	loadSessionForPartyOp,
 } from "~/server/services/dropIn/party";
+import { pickNextOccupants } from "~/server/services/dropIn/pickNextOccupants";
 import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
 
 /**
@@ -1310,36 +1312,64 @@ export const dropInRouter = createTRPCRouter({
 					});
 				}
 
-				const waiting = await tx.dropInCheckIn.findMany({
-					where: { sessionId: session.sessionId, status: "WAITING" },
-					orderBy: [
-						{ gamesPlayed: "asc" },
-						{ lastPlayedAt: { sort: "asc", nulls: "first" } },
-						{ queuedAt: "asc" },
-					],
-				});
-				if (waiting.length < playersPerCourt) {
+				// Party-aware selection (designFiles/drop-in/group-join-feature-plan.md §3).
+				// Replaces the prior slice(0, playersPerCourt) over per-checkin
+				// rows — see plan §3 for the algorithm + A1-vs-combinatorial
+				// divergence.
+				const parties = await loadPartySummaries(tx, session.sessionId);
+				const pick = pickNextOccupants(parties, playersPerCourt);
+				if (!pick) {
 					throw new TRPCError({
 						code: "BAD_REQUEST",
-						message: `Need ${playersPerCourt} waiting players; have ${waiting.length}.`,
+						message: "No ready group can fill this court right now.",
 					});
 				}
-				const picked = waiting.slice(0, playersPerCourt);
 
 				const claim = await tx.dropInCheckIn.updateMany({
 					where: {
 						sessionId: session.sessionId,
-						userId: { in: picked.map((c) => c.userId) },
+						userId: { in: pick.userIds },
 						status: "WAITING",
 					},
 					data: { status: "PLAYING" },
 				});
-				if (claim.count !== playersPerCourt) {
+				if (claim.count !== pick.userIds.length) {
 					throw new TRPCError({
 						code: "CONFLICT",
 						message: "Players were just assigned elsewhere — try again.",
 					});
 				}
+
+				// Race guard: an `addPartyMember` landing between our snapshot
+				// and the claim could leave a just-added member out of pick.
+				// Re-read each chosen party's live-WAITING-or-PLAYING count;
+				// if any party's expected size doesn't match what we just
+				// claimed, abort + retry.
+				const counts = await tx.dropInCheckIn.groupBy({
+					by: ["partyId"],
+					where: {
+						sessionId: session.sessionId,
+						partyId: { in: pick.partyIds },
+						status: { in: ["PLAYING", "WAITING"] },
+					},
+					_count: { userId: true },
+				});
+				for (const p of parties) {
+					if (!pick.partyIds.includes(p.partyId)) continue;
+					const actual = counts.find((c) => c.partyId === p.partyId)
+						?._count.userId ?? 0;
+					if (actual !== p.memberUserIds.length) {
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: "Party changed during selection — retry.",
+						});
+					}
+				}
+
+				// ratingWeight = null when TIMED (no GBR sync ever) OR when
+				// any party in this assignment contains a guest member.
+				const ratingWeight =
+					isTimed || !pick.ratingEligible ? null : 1.0;
 
 				return tx.dropInAssignment.create({
 					data: {
@@ -1349,11 +1379,11 @@ export const dropInRouter = createTRPCRouter({
 						status: "IN_PROGRESS",
 						startedAt: now,
 						expiresAt,
-						ratingWeight: isTimed ? null : 1.0,
+						ratingWeight,
 						participants: {
-							create: picked.map((c, i) => ({
+							create: pick.userIds.map((userId, i) => ({
 								sessionId: session.sessionId,
-								userId: c.userId,
+								userId,
 								side: isTimed ? null : i < half ? DropInSide.A : DropInSide.B,
 							})),
 						},
@@ -1721,7 +1751,13 @@ export const dropInRouter = createTRPCRouter({
 						status: "CONFIRMED",
 						confirmedByUserId: user.userId,
 						confirmedAt: now,
-						gbrSyncStatus: "PENDING", // stub: DI-5 submission loop picks this up
+						// GBR sync ONLY when this assignment is rating-eligible.
+						// Guest-containing assignments have ratingWeight=null
+						// (set in formNext) — they must NEVER reach GBR.
+						// TIMED assignments are also null (no scores at all).
+						// Both leave gbrSyncStatus at NOT_APPLICABLE.
+						gbrSyncStatus:
+							assignment.ratingWeight === null ? "NOT_APPLICABLE" : "PENDING",
 						// Idempotency key for GBR submission (data-model §5). == assignmentId.
 						externalMatchId: assignment.assignmentId,
 					},
@@ -1836,7 +1872,16 @@ export const dropInRouter = createTRPCRouter({
 			const assignment = await ctx.db.dropInAssignment.findUnique({
 				where: { assignmentId: input.assignmentId },
 				include: {
-					participants: { select: { userId: true } },
+					participants: {
+						select: {
+							userId: true,
+							// Guest membership in the original assignment must be
+							// honored here too — a staff score correction cannot
+							// retroactively promote a guest-containing match to
+							// GBR-eligible (designFiles/drop-in/group-join-feature-plan.md §6).
+							user: { select: { isGuest: true } },
+						},
+					},
 					session: {
 						select: {
 							clubShortName: true,
@@ -1876,6 +1921,7 @@ export const dropInRouter = createTRPCRouter({
 			const gamesA = input.gameScores.filter((g) => g.a > g.b).length;
 			const gamesB = input.gameScores.filter((g) => g.b > g.a).length;
 			const winnerSide = gamesA > gamesB ? DropInSide.A : DropInSide.B;
+			const hasGuest = assignment.participants.some((p) => p.user.isGuest);
 			const now = new Date();
 			return ctx.db.$transaction(async (tx) => {
 				const updated = await tx.dropInAssignment.update({
@@ -1889,9 +1935,12 @@ export const dropInRouter = createTRPCRouter({
 						winnerSide,
 						confirmedByUserId: ctx.user.userId,
 						confirmedAt: now,
-						gbrSyncStatus: "PENDING",
+						// Guest-containing assignments stay GBR-excluded even on
+						// staff override. Non-guest assignments: 1.0x weight, GBR
+						// sync queued.
+						ratingWeight: hasGuest ? null : 1.0,
+						gbrSyncStatus: hasGuest ? "NOT_APPLICABLE" : "PENDING",
 						externalMatchId: assignment.assignmentId, // GBR idempotency key
-						ratingWeight: 1.0, // staff-set scores still count at 1.0x (C2)
 					},
 				});
 				await tx.dropInAssignmentParticipant.updateMany({
@@ -2036,31 +2085,46 @@ export const dropInRouter = createTRPCRouter({
 							},
 						});
 
-						// Pull the next group from whoever is still WAITING (fairness order).
-						const waiting = await tx.dropInCheckIn.findMany({
-							where: { sessionId: input.sessionId, status: "WAITING" },
-							orderBy: [
-								{ gamesPlayed: "asc" },
-								{ lastPlayedAt: { sort: "asc", nulls: "first" } },
-								{ queuedAt: "asc" },
-							],
-						});
-						if (waiting.length < playersPerCourt) return false; // court empty
+						// Party-aware selection (designFiles/drop-in/group-join-feature-plan.md §3).
+						// Court stays empty when no group can play (e.g. open
+						// head + no clean fill, or all closed parties incomplete) —
+						// next tick retries once the queue shape changes.
+						const parties = await loadPartySummaries(tx, input.sessionId);
+						const pick = pickNextOccupants(parties, playersPerCourt);
+						if (!pick) return false;
 
-						const picked = waiting.slice(0, playersPerCourt);
-						// Atomically claim the next group; if another court grabbed some
-						// first, abort this slot (throws → rolls back; retries next tick).
 						const claim = await tx.dropInCheckIn.updateMany({
 							where: {
 								sessionId: input.sessionId,
-								userId: { in: picked.map((c) => c.userId) },
+								userId: { in: pick.userIds },
 								status: "WAITING",
 							},
 							data: { status: "PLAYING" },
 						});
-						if (claim.count !== playersPerCourt) {
+						if (claim.count !== pick.userIds.length) {
 							throw new Error("CONTENDED");
 						}
+
+						// Race guard — see formNext for rationale.
+						const counts = await tx.dropInCheckIn.groupBy({
+							by: ["partyId"],
+							where: {
+								sessionId: input.sessionId,
+								partyId: { in: pick.partyIds },
+								status: { in: ["PLAYING", "WAITING"] },
+							},
+							_count: { userId: true },
+						});
+						for (const p of parties) {
+							if (!pick.partyIds.includes(p.partyId)) continue;
+							const actual = counts.find((c) => c.partyId === p.partyId)
+								?._count.userId ?? 0;
+							if (actual !== p.memberUserIds.length) {
+								throw new Error("PARTY_CHANGED");
+							}
+						}
+
+						// TIMED mode → ratingWeight stays null (no GBR sync).
 						await tx.dropInAssignment.create({
 							data: {
 								sessionId: input.sessionId,
@@ -2072,9 +2136,9 @@ export const dropInRouter = createTRPCRouter({
 									now.getTime() + (session.rotationMinutes ?? 15) * 60_000,
 								),
 								participants: {
-									create: picked.map((c) => ({
+									create: pick.userIds.map((userId) => ({
 										sessionId: input.sessionId,
-										userId: c.userId,
+										userId,
 										side: null,
 									})),
 								},
