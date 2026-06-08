@@ -1,8 +1,8 @@
 "use client";
 
 import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
-import { Search } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { ArrowLeft, MapPin, Search } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ErrorBanner } from "~/app/_components/shared/ErrorBanner";
 import { api } from "~/trpc/react";
@@ -10,13 +10,65 @@ import { api } from "~/trpc/react";
 // Minimum characters before we fire the typeahead query
 const MIN_QUERY_LEN = 4;
 
+type SelectedClub = { clubShortName: string; clubName?: string };
+
 function JoinPageContent() {
 	const router = useRouter();
+	const searchParams = useSearchParams();
+
+	// Two-step flow: pick a club (search) → pick a facility within it.
+	const [selectedClub, setSelectedClub] = useState<SelectedClub | null>(null);
+
+	// Pre-select a club when arriving from a club landing page (?clubShortName=),
+	// jumping straight to the facility picker.
+	const preselectApplied = useRef(false);
+	useEffect(() => {
+		if (preselectApplied.current) return;
+		const fromUrl = searchParams.get("clubShortName");
+		if (fromUrl) {
+			preselectApplied.current = true;
+			setSelectedClub({ clubShortName: fromUrl.trim().toLowerCase() });
+		}
+	}, [searchParams]);
+
+	const joinClub = api.user.joinClub.useMutation({
+		onSuccess: (data) => {
+			// First-time joiners continue onboarding at /profile; existing users
+			// adding another club go back to the dashboard.
+			router.push(data.switched ? "/profile" : "/dashboard");
+			router.refresh();
+		},
+	});
+
+	if (selectedClub) {
+		return (
+			<FacilityStep
+				club={selectedClub}
+				onBack={() => setSelectedClub(null)}
+				onJoin={(facilityId) =>
+					joinClub.mutate({
+						clubShortName: selectedClub.clubShortName,
+						facilityId,
+					})
+				}
+				isJoining={joinClub.isPending}
+				joiningFacilityId={joinClub.variables?.facilityId}
+				joinError={joinClub.isError ? joinClub.error.message : null}
+			/>
+		);
+	}
+
+	return <ClubSearchStep onSelect={setSelectedClub} />;
+}
+
+function ClubSearchStep({
+	onSelect,
+}: {
+	onSelect: (club: SelectedClub) => void;
+}) {
 	const [query, setQuery] = useState("");
 	const [debouncedQuery, setDebouncedQuery] = useState("");
 	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	// Track clubs joined this session so the badge appears immediately after success
-	const [justJoined, setJustJoined] = useState<Set<string>>(new Set());
 
 	// Debounce the query so we don't fire on every keystroke
 	useEffect(() => {
@@ -40,34 +92,12 @@ function JoinPageContent() {
 		{ enabled: isSearchReady },
 	);
 
-	// getOrCreateProfile gives us User.clubShortName — the active club even for
-	// users who have no UserClub rows yet (e.g. freshly created default-club users).
-	const { data: profile } = api.user.getOrCreateProfile.useQuery();
-
-	// getClubMemberships covers any additional clubs from the UserClub join table.
-	const { data: memberships } = api.user.getClubMemberships.useQuery();
-
-	// Combine all known memberships: active club from profile + UserClub rows + this session
-	const alreadyMemberOf = new Set([
-		...(profile?.clubShortName ? [profile.clubShortName] : []),
-		...(memberships?.map((m) => m.clubShortName) ?? []),
-		...justJoined,
-	]);
-
-	const joinClub = api.user.joinClub.useMutation({
-		onSuccess: (data) => {
-			// Mark as joined locally so the badge flips immediately
-			setJustJoined((prev) => new Set([...prev, data.clubShortName]));
-			// joinClub already switches the active club server-side — just navigate
-			router.push("/dashboard");
-			router.refresh();
-		},
-	});
-
 	return (
 		<div className="mx-auto max-w-xl px-4 py-16">
 			<div className="mb-8 text-center">
-				<h1 className="font-bold text-3xl text-gray-900">Find your club</h1>
+				<h1 className="font-bold text-3xl text-gray-900">
+					Find your organization
+				</h1>
 				<p className="mt-2 text-gray-500 text-sm">
 					Search by club name or short ID. Results appear after {MIN_QUERY_LEN}{" "}
 					characters.
@@ -109,51 +139,132 @@ function JoinPageContent() {
 
 			{isSearchReady && results && results.length > 0 && (
 				<div className="glass-panel divide-y divide-gray-100 overflow-hidden rounded-lg">
-					{results.map((club) => {
-						const isMember = alreadyMemberOf.has(club.clubShortName);
-						const isPending =
-							joinClub.isPending &&
-							joinClub.variables?.clubShortName === club.clubShortName;
+					{results.map((club) => (
+						<button
+							key={club.clubShortName}
+							type="button"
+							onClick={() =>
+								onSelect({
+									clubShortName: club.clubShortName,
+									clubName: club.clubName,
+								})
+							}
+							className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-gray-50"
+						>
+							<div className="min-w-0">
+								<p className="truncate font-medium text-gray-900 text-sm">
+									{club.clubName}
+								</p>
+								<p className="truncate text-gray-500 text-xs">
+									{club.clubShortName}
+								</p>
+							</div>
+							<span className="shrink-0 font-medium text-[var(--primary)] text-xs">
+								Select →
+							</span>
+						</button>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
 
+function FacilityStep({
+	club,
+	onBack,
+	onJoin,
+	isJoining,
+	joiningFacilityId,
+	joinError,
+}: {
+	club: SelectedClub;
+	onBack: () => void;
+	onJoin: (facilityId: string) => void;
+	isJoining: boolean;
+	joiningFacilityId: string | undefined;
+	joinError: string | null;
+}) {
+	const {
+		data: facilities,
+		isLoading,
+		error,
+	} = api.user.listClubFacilities.useQuery({
+		clubShortName: club.clubShortName,
+	});
+
+	return (
+		<div className="mx-auto max-w-xl px-4 py-16">
+			<button
+				type="button"
+				onClick={onBack}
+				className="mb-6 inline-flex items-center gap-1 text-gray-500 text-sm transition-colors hover:text-gray-700"
+			>
+				<ArrowLeft className="h-4 w-4" /> Back to search
+			</button>
+
+			<div className="mb-8 text-center">
+				<h1 className="font-bold text-3xl text-gray-900">
+					Choose your location
+				</h1>
+				<p className="mt-2 text-gray-500 text-sm">
+					{club.clubName ?? club.clubShortName}
+				</p>
+			</div>
+
+			{isLoading && (
+				<p className="text-center text-gray-400 text-sm">Loading locations…</p>
+			)}
+
+			{error && <ErrorBanner message={error.message} />}
+
+			{!isLoading && facilities && facilities.length === 0 && (
+				<p className="text-center text-gray-500 text-sm">
+					This club has no locations yet. Please try another organization.
+				</p>
+			)}
+
+			{facilities && facilities.length > 0 && (
+				<div className="glass-panel divide-y divide-gray-100 overflow-hidden rounded-lg">
+					{facilities.map((facility) => {
+						const isPending =
+							isJoining && joiningFacilityId === facility.facilityId;
+						const location = [facility.city, facility.state]
+							.filter(Boolean)
+							.join(", ");
 						return (
 							<div
-								key={club.clubShortName}
+								key={facility.facilityId}
 								className="flex items-center justify-between gap-4 px-4 py-3"
 							>
-								<div className="min-w-0">
-									<p className="truncate font-medium text-gray-900 text-sm">
-										{club.clubName}
-									</p>
-									<p className="truncate text-gray-500 text-xs">
-										{club.clubShortName}
-									</p>
+								<div className="flex min-w-0 items-center gap-3">
+									<MapPin className="h-4 w-4 shrink-0 text-gray-400" />
+									<div className="min-w-0">
+										<p className="truncate font-medium text-gray-900 text-sm">
+											{facility.name}
+										</p>
+										{location && (
+											<p className="truncate text-gray-500 text-xs">
+												{location}
+											</p>
+										)}
+									</div>
 								</div>
-
-								{isMember ? (
-									<span className="shrink-0 rounded-full bg-green-100 px-3 py-1 font-medium text-green-700 text-xs">
-										Already a member
-									</span>
-								) : (
-									<button
-										type="button"
-										disabled={joinClub.isPending}
-										onClick={() =>
-											joinClub.mutate({ clubShortName: club.clubShortName })
-										}
-										className="shrink-0 rounded-lg bg-[var(--primary)] px-4 py-1.5 font-medium text-white text-xs transition-colors hover:bg-[var(--primary-dark)] disabled:cursor-not-allowed disabled:opacity-50"
-									>
-										{isPending ? "Joining…" : "Join"}
-									</button>
-								)}
+								<button
+									type="button"
+									disabled={isJoining}
+									onClick={() => onJoin(facility.facilityId)}
+									className="shrink-0 rounded-lg bg-[var(--primary)] px-4 py-1.5 font-medium text-white text-xs transition-colors hover:bg-[var(--primary-dark)] disabled:cursor-not-allowed disabled:opacity-50"
+								>
+									{isPending ? "Joining…" : "Join"}
+								</button>
 							</div>
 						);
 					})}
 				</div>
 			)}
 
-			{joinClub.isError && (
-				<ErrorBanner message={joinClub.error.message} className="mt-4" />
-			)}
+			{joinError && <ErrorBanner message={joinError} className="mt-4" />}
 		</div>
 	);
 }

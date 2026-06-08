@@ -3,6 +3,7 @@ import {
 	DropInMode,
 	DropInPlayerStatus,
 	DropInSide,
+	type Prisma,
 } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -69,6 +70,84 @@ function validateMatchScore(
 	if (loserGames >= majority) return "Both sides can't win the match.";
 	return null;
 }
+
+/**
+ * Auto-start (A15, on-confirm): after a MATCH court frees (a score was confirmed /
+ * staff-resolved), atomically form the next matchup on that court from the waiting
+ * pool. Race-safe (claim WHERE status=WAITING, verify count). No-op unless the
+ * session is an ACTIVE MATCH, the court is free, and enough players are waiting.
+ * Must run inside the same transaction that freed the court.
+ */
+async function autoStartMatchOnCourt(
+	tx: Prisma.TransactionClient,
+	session: {
+		sessionId: string;
+		mode: DropInMode;
+		status: DropInSessionStatusLike;
+		format: DropInFormat | null;
+	},
+	courtId: string,
+): Promise<void> {
+	if (session.mode !== DropInMode.MATCH || session.status !== "ACTIVE") return;
+	const occupied = await tx.dropInAssignment.findFirst({
+		where: {
+			sessionId: session.sessionId,
+			courtId,
+			status: { in: ["IN_PROGRESS", "PENDING_CONFIRM", "DISPUTED"] },
+		},
+		select: { assignmentId: true },
+	});
+	if (occupied) return;
+
+	const format = session.format ?? DropInFormat.DOUBLES;
+	const playersPerCourt = format === DropInFormat.SINGLES ? 2 : 4;
+	const waiting = await tx.dropInCheckIn.findMany({
+		where: { sessionId: session.sessionId, status: "WAITING" },
+		orderBy: [
+			{ gamesPlayed: "asc" },
+			{ lastPlayedAt: { sort: "asc", nulls: "first" } },
+			{ queuedAt: "asc" },
+		],
+	});
+	if (waiting.length < playersPerCourt) return;
+
+	const picked = waiting.slice(0, playersPerCourt);
+	const half = playersPerCourt / 2;
+	const claim = await tx.dropInCheckIn.updateMany({
+		where: {
+			sessionId: session.sessionId,
+			userId: { in: picked.map((c) => c.userId) },
+			status: "WAITING",
+		},
+		data: { status: "PLAYING" },
+	});
+	if (claim.count !== playersPerCourt) return; // contended — staff can Start next
+
+	await tx.dropInAssignment.create({
+		data: {
+			sessionId: session.sessionId,
+			courtId,
+			format,
+			status: "IN_PROGRESS",
+			startedAt: new Date(),
+			ratingWeight: 1.0,
+			participants: {
+				create: picked.map((c, i) => ({
+					sessionId: session.sessionId,
+					userId: c.userId,
+					side: i < half ? DropInSide.A : DropInSide.B,
+				})),
+			},
+		},
+	});
+}
+
+type DropInSessionStatusLike =
+	| "SCHEDULED"
+	| "ACTIVE"
+	| "PAUSED"
+	| "ENDED"
+	| "CANCELLED";
 
 export const dropInRouter = createTRPCRouter({
 	/**
@@ -643,11 +722,13 @@ export const dropInRouter = createTRPCRouter({
 					message: "Session is not active.",
 				});
 			}
+			// IDLE only — a player in AWAITING_RESULT still owes a confirm and is gated
+			// from the queue until their match is resolved (A3 dual gate).
 			return ctx.db.dropInCheckIn.updateMany({
 				where: {
 					sessionId: input.sessionId,
 					userId: user.userId,
-					status: { in: ["IDLE", "AWAITING_RESULT", "DONE"] },
+					status: "IDLE",
 				},
 				data: { status: "WAITING", queuedAt: new Date() },
 			});
@@ -1850,7 +1931,15 @@ export const dropInRouter = createTRPCRouter({
 				where: { assignmentId: input.assignmentId },
 				include: {
 					participants: { select: { userId: true, side: true } },
-					session: { select: { clubShortName: true, sessionId: true } },
+					session: {
+						select: {
+							clubShortName: true,
+							sessionId: true,
+							mode: true,
+							format: true,
+							status: true,
+						},
+					},
 				},
 			});
 			if (
@@ -1931,6 +2020,17 @@ export const dropInRouter = createTRPCRouter({
 						lastPlayedAt: now,
 					},
 				});
+				// On-confirm auto-start: the court is now free — refill it from the pool.
+				await autoStartMatchOnCourt(
+					tx,
+					{
+						sessionId: assignment.session.sessionId,
+						mode: assignment.session.mode,
+						status: assignment.session.status,
+						format: assignment.session.format,
+					},
+					assignment.courtId,
+				);
 				return updated;
 			});
 		}),
@@ -2028,6 +2128,9 @@ export const dropInRouter = createTRPCRouter({
 							sessionId: true,
 							bestOf: true,
 							pointsPerGame: true,
+							mode: true,
+							format: true,
+							status: true,
 						},
 					},
 				},
@@ -2109,6 +2212,20 @@ export const dropInRouter = createTRPCRouter({
 							lastPlayedAt: now,
 						},
 					});
+				}
+				// On-confirm auto-start (only when this actually resolved a live game,
+				// i.e. not an override of an already-confirmed one): refill the court.
+				if (!wasConfirmed) {
+					await autoStartMatchOnCourt(
+						tx,
+						{
+							sessionId: assignment.session.sessionId,
+							mode: assignment.session.mode,
+							status: assignment.session.status,
+							format: assignment.session.format,
+						},
+						assignment.courtId,
+					);
 				}
 				return updated;
 			});

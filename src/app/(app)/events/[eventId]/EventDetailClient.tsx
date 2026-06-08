@@ -8,15 +8,12 @@ import {
 	Check,
 	Copy,
 	Eye,
-	Package,
 	Pencil,
-	Users,
 	X,
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import SellPackageModal from "~/app/(app)/admin/checkin/SellPackageModal";
-import AddStudentPopover from "~/app/(app)/events/[eventId]/AddStudentPopover";
+import EventRoster from "~/app/(app)/events/[eventId]/EventRoster";
 import EventStatusLogTimeline from "~/app/(app)/events/[eventId]/EventStatusLogTimeline";
 import GuestRegisterModal from "~/app/(app)/events/[eventId]/GuestRegisterModal";
 import BookableEventDetails from "~/app/(app)/events/_components/BookableEventDetails";
@@ -44,10 +41,6 @@ export default function EventDetailClient({
 	const isStudent = userType === "STUDENT";
 	const [editMode, setEditMode] = useState(false);
 	const [copied, setCopied] = useState(false);
-	const [sellPackageTarget, setSellPackageTarget] = useState<{
-		userId: string;
-		memberName: string;
-	} | null>(null);
 	// Guest-register modal + post-register success banner state (D3, Tier 1)
 	const [showGuestRegister, setShowGuestRegister] = useState(false);
 	const [guestRegisteredEmail, setGuestRegisteredEmail] = useState<
@@ -89,12 +82,6 @@ export default function EventDetailClient({
 		});
 	const myRegistration = myRegistrationsData?.registrations.find(
 		(r) => r.event.eventId === eventId,
-	);
-
-	// Roster: fetch confirmed registrations for staff
-	const { data: rosterData } = api.calendar.getEventRegistrations.useQuery(
-		{ eventId },
-		{ enabled: isFacilityOrAdmin || isCoach },
 	);
 
 	const registerMutation = api.calendar.registerForEvent.useMutation({
@@ -176,7 +163,7 @@ export default function EventDetailClient({
 						Back to calendar
 					</Link>
 				</div>
-				<div className="mx-auto max-w-3xl">
+				<div className="mx-auto max-w-3xl space-y-4">
 					<DropInEventDetails
 						eventId={eventId}
 						eventStart={event.start}
@@ -184,6 +171,16 @@ export default function EventDetailClient({
 						isStaff={isFacilityOrAdmin}
 						userId={userId}
 					/>
+					{/* Registered roster (facility / club-admin / platform-admin). */}
+					{isFacilityOrAdmin && (
+						<EventRoster
+							eventId={eventId}
+							facilityId={event.facilityId ?? null}
+							maxParticipants={event.maxParticipants}
+							canManage={isFacilityOrAdmin}
+							canCheckIn={isFacilityOrAdmin}
+						/>
+					)}
 				</div>
 			</div>
 		);
@@ -476,108 +473,13 @@ export default function EventDetailClient({
 
 						{/* Event roster — FACILITY/ADMIN/COACH only */}
 						{(isFacilityOrAdmin || isCoach) && event.eventType !== "BLOCK" && (
-							<div className="glass-card space-y-3 rounded-lg p-5">
-								<div className="flex items-center justify-between gap-2">
-									<div className="flex items-center gap-2">
-										<Users
-											size={16}
-											className="text-[var(--muted-foreground)]"
-										/>
-										<h3 className="font-medium text-[var(--foreground)] text-sm">
-											Registered ({rosterData?.registrations.length ?? 0}
-											{event.maxParticipants !== null
-												? ` / ${event.maxParticipants}`
-												: ""}
-											)
-										</h3>
-									</div>
-									{isFacilityOrAdmin && (
-										<AddStudentPopover
-											eventId={event.eventId}
-											facilityId={event.facilityId ?? null}
-											onSuccess={() => {
-												void utils.calendar.getEventRegistrations.invalidate({
-													eventId,
-												});
-												void utils.calendar.getPublicEventById.invalidate({
-													eventId,
-												});
-											}}
-										/>
-									)}
-								</div>
-								{!rosterData ? (
-									<p className="text-[var(--muted-foreground)] text-xs">
-										Loading…
-									</p>
-								) : rosterData.registrations.length === 0 ? (
-									<p className="text-[var(--muted-foreground)] text-xs">
-										No confirmed registrations yet.
-									</p>
-								) : (
-									<ul className="space-y-1.5">
-										{rosterData.registrations.map((r) => {
-											const displayName = `${r.firstName ?? ""} ${
-												r.lastName ?? r.lastInitial ?? ""
-											}`.trim();
-											const nameContent = (
-												<>
-													{/* Avatar placeholder — replace inner div with <ProfileAvatar> when avatar support is added */}
-													<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-medium text-[var(--primary)] text-xs">
-														{r.firstName?.[0] ?? "?"}
-													</div>
-													<span>
-														{r.firstName} {r.lastName ?? r.lastInitial}
-													</span>
-												</>
-											);
-											return (
-												<li
-													key={r.registrationId}
-													className="flex items-center justify-between gap-2 text-[var(--foreground)] text-sm"
-												>
-													{isFacilityOrAdmin ? (
-														<Link
-															href={`/clients/${r.userId}`}
-															className="flex min-w-0 flex-1 items-center gap-2.5 transition-colors hover:text-[var(--primary)] hover:underline"
-														>
-															{nameContent}
-														</Link>
-													) : (
-														<div className="flex min-w-0 flex-1 items-center gap-2.5">
-															{nameContent}
-														</div>
-													)}
-													{isFacilityOrAdmin && (
-														<Button
-															variant="ghost"
-															size="icon"
-															title="Sell package"
-															aria-label={`Sell package to ${displayName}`}
-															className="h-8 w-8 shrink-0 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-															onClick={() =>
-																setSellPackageTarget({
-																	userId: r.userId,
-																	memberName: displayName,
-																})
-															}
-														>
-															<Package size={14} />
-														</Button>
-													)}
-												</li>
-											);
-										})}
-									</ul>
-								)}
-								{sellPackageTarget && (
-									<SellPackageModal
-										userId={sellPackageTarget.userId}
-										memberName={sellPackageTarget.memberName}
-										onClose={() => setSellPackageTarget(null)}
-									/>
-								)}
-							</div>
+							<EventRoster
+								eventId={event.eventId}
+								facilityId={event.facilityId ?? null}
+								maxParticipants={event.maxParticipants}
+								canManage={isFacilityOrAdmin}
+								canCheckIn={canEdit}
+							/>
 						)}
 					</>
 				)}

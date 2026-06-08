@@ -86,8 +86,8 @@ export default function AuthedLayout({
 
 	// Extract clubShortName from pathname for club landing pages.
 	// This is passed to NavBar so its SignIn/SignUp buttons can include
-	// forceRedirectUrl="/profile?joinClub={clubShortName}" for automatic
-	// club assignment after Clerk authentication.
+	// forceRedirectUrl="/join?clubShortName={clubShortName}" so signups land in
+	// the club-onboarding funnel (pick facility → profile) after Clerk auth.
 	//
 	// Note: This extraction duplicates logic in /club/[clubShortName]/page.tsx
 	// because Next.js layouts cannot pass props to page children directly.

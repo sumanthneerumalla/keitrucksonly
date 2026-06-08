@@ -2,8 +2,8 @@
 
 import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
 import { Gender } from "@prisma/client";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 import CoachProfile from "~/app/_components/client/CoachProfile";
 import StudentProfile from "~/app/_components/client/StudentProfile";
 import AdminClubIdSelector from "~/app/_components/client/authed/AdminClubIdSelector";
@@ -26,9 +26,7 @@ export default function ProfilePage() {
 
 function ProfilePageContent() {
 	const router = useRouter();
-	const searchParams = useSearchParams();
 	const [isEditing, setIsEditing] = useState(false);
-	const clubAssignmentAttempted = useRef(false);
 
 	// Fetch or create user profile
 	const {
@@ -52,14 +50,6 @@ function ProfilePageContent() {
 			if (parsedErrors.general) {
 				setServerError(parsedErrors.general);
 			}
-		},
-	});
-
-	// joinClub mutation — used when a new user arrives from a club landing
-	// page with ?joinClub=... URL param. Keeps activeFacilityId in sync.
-	const joinClubMutation = api.user.joinClub.useMutation({
-		onSuccess: () => {
-			void refetch();
 		},
 	});
 
@@ -88,7 +78,7 @@ function ProfilePageContent() {
 		isEmailMissing ||
 		isGenderMissing;
 
-	// Initialize form when user data loads and handle joinClub URL parameter
+	// Initialize form when user data loads
 	useEffect(() => {
 		if (!user) return;
 
@@ -102,33 +92,7 @@ function ProfilePageContent() {
 		});
 		setServerError("");
 		setGenderInput("");
-
-		// Handle automatic club assignment from URL parameter.
-		// This param is set by Clerk's forceRedirectUrl when users sign up/in
-		// from a club landing page (/club/{clubShortName}).
-		// See: /club/[clubShortName]/page.tsx for the flow documentation.
-		// Uses joinClub mutation (not updateProfile) so activeFacilityId stays
-		// in sync with the new club's first facility.
-		const joinClub = searchParams.get("joinClub");
-		if (
-			joinClub &&
-			!clubAssignmentAttempted.current &&
-			user.clubShortName === "shuttlementor"
-		) {
-			clubAssignmentAttempted.current = true;
-			joinClubMutation.mutate(
-				{ clubShortName: joinClub },
-				{
-					onSuccess: () => {
-						// Remove joinClub param from URL after successful assignment (if present)
-						if (searchParams.get("joinClub")) {
-							router.replace("/profile");
-						}
-					},
-				},
-			);
-		}
-	}, [user, searchParams]);
+	}, [user]);
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
