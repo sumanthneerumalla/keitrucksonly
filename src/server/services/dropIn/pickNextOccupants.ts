@@ -43,6 +43,12 @@ export interface PartySummary {
 	memberStatuses: Record<string, DropInPlayerStatus>;
 	/** True if any member has `isGuest = true` (suppresses GBR sync). */
 	hasGuest: boolean;
+	/**
+	 * Hard court lock (court-preference feature). null/undefined = any court.
+	 * When set, the party is only eligible for that court — see the `courtId`
+	 * filter in `pickNextOccupants`.
+	 */
+	preferredCourtId?: string | null;
 }
 
 export interface Pick {
@@ -99,9 +105,24 @@ function waitingMembersOf(party: PartySummary): string[] {
 export function pickNextOccupants(
 	parties: PartySummary[],
 	capacity: number,
+	/**
+	 * The court being filled. When provided, only parties whose
+	 * `preferredCourtId` is null/undefined (any court) OR equals this court are
+	 * eligible — that's the hard court lock (court-preference feature). Omit to
+	 * consider all parties (legacy / court-agnostic behavior).
+	 */
+	courtId?: string,
 ): Pick | null {
-	for (let i = 0; i < parties.length; i++) {
-		const head = parties[i];
+	// Court-eligibility pre-filter (preserves FIFO order). A party locked to a
+	// different court is simply never a candidate for this court.
+	const eligible = courtId
+		? parties.filter(
+				(p) => !p.preferredCourtId || p.preferredCourtId === courtId,
+			)
+		: parties;
+
+	for (let i = 0; i < eligible.length; i++) {
+		const head = eligible[i];
 		if (!head) continue;
 
 		const headStatus = isReady(head);
@@ -140,8 +161,8 @@ export function pickNextOccupants(
 		const chosen: PartySummary[] = [head];
 		let chosenSize = headStatus.waitingCount;
 
-		for (let j = i + 1; j < parties.length && chosenSize < capacity; j++) {
-			const candidate = parties[j];
+		for (let j = i + 1; j < eligible.length && chosenSize < capacity; j++) {
+			const candidate = eligible[j];
 			if (!candidate) continue;
 			if (!candidate.openToFill) continue;
 			const candStatus = isReady(candidate);

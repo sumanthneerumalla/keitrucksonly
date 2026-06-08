@@ -107,6 +107,11 @@ export default function DropInEventDetails({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
+	// Court-preference feature: pin/clear the viewer's party to a court.
+	const setPartyPreferredCourt = api.dropIn.setPartyPreferredCourt.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
 	const leaveQueue = api.dropIn.leaveQueue.useMutation({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
@@ -462,6 +467,58 @@ export default function DropInEventDetails({
 		));
 	};
 
+	// Court-preference button (CP9): tap a court to queue locked to it.
+	//  - not in queue  → "Queue for Court N" (joinQueue pinned to the court)
+	//  - in queue, other/any pref → "Prefer Court N" (set the party's court)
+	//  - in queue, this court → "Queued for Court N ✓" (tap again to clear)
+	// Hidden while the viewer is on a court (PLAYING).
+	const myPartyId = viewerCheckIn?.partyId ?? null;
+	const myPref = viewerParty?.preferredCourtId ?? null;
+	const renderCourtQueueButton = (courtId: string) => {
+		if (viewerStatus === "PLAYING") return null;
+		if (viewerStatus !== "WAITING") {
+			return (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={blockNewGames || joinQueue.isPending}
+					onClick={() =>
+						joinQueue.mutate({
+							sessionId: session.sessionId,
+							preferredCourtId: courtId,
+						})
+					}
+				>
+					Queue for {courtName(courtId)}
+				</Button>
+			);
+		}
+		const active = myPref === courtId;
+		return (
+			<Button
+				variant="outline"
+				size="sm"
+				className={
+					active ? "border-[var(--primary)] text-[var(--primary)]" : ""
+				}
+				disabled={
+					blockNewGames || !myPartyId || setPartyPreferredCourt.isPending
+				}
+				onClick={() =>
+					myPartyId &&
+					setPartyPreferredCourt.mutate({
+						partyId: myPartyId,
+						courtId: active ? null : courtId,
+					})
+				}
+			>
+				{active
+					? `Queued for ${courtName(courtId)} ✓`
+					: `Prefer ${courtName(courtId)}`}
+			</Button>
+		);
+	};
+
 	return (
 		<div className="space-y-5">
 			{/* Header */}
@@ -564,6 +621,12 @@ export default function DropInEventDetails({
 									<Countdown expiresAt={a.expiresAt} now={now} />
 								)}
 							</div>
+
+							{/* Court-preference (CP9): player taps to queue for THIS court. */}
+							{(() => {
+								const btn = renderCourtQueueButton(courtId);
+								return btn ? <div className="mb-2">{btn}</div> : null;
+							})()}
 
 							{!a && (
 								<div className="flex items-center justify-between">
@@ -831,6 +894,7 @@ export default function DropInEventDetails({
 					sessionId={session.sessionId}
 					viewerUserId={userId}
 					onChange={refresh}
+					courtName={courtName}
 				/>
 			)}
 
@@ -897,6 +961,7 @@ export default function DropInEventDetails({
 					viewerPartyId={viewerCheckIn?.partyId ?? null}
 					isStaff={isStaff}
 					onChange={refresh}
+					courtName={courtName}
 				/>
 			</div>
 

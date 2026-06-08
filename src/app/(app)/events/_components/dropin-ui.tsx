@@ -567,9 +567,7 @@ export function JoinPartyPopover({
 										</span>
 									)}
 								</span>
-								{isSel && (
-									<Check size={14} className="text-[var(--primary)]" />
-								)}
+								{isSel && <Check size={14} className="text-[var(--primary)]" />}
 							</button>
 						);
 					})}
@@ -581,7 +579,7 @@ export function JoinPartyPopover({
 							</p>
 						)}
 				</div>
-				<label className="mt-2 flex items-center gap-2 text-xs text-[var(--foreground)]">
+				<label className="mt-2 flex items-center gap-2 text-[var(--foreground)] text-xs">
 					<input
 						type="checkbox"
 						checked={openToFill}
@@ -624,12 +622,16 @@ export function YourPartyCard({
 	sessionId,
 	viewerUserId,
 	onChange,
+	courtName,
 }: {
 	sessionId: string;
+	/** Resolve a courtId → display title, for the court-lock label. */
+	courtName?: (id: string) => string;
 	party: {
 		capacity: number;
 		partyId: string;
 		openToFill: boolean;
+		preferredCourtId: string | null;
 		memberCount: number;
 		hasGuest: boolean;
 		isReady: boolean;
@@ -685,6 +687,8 @@ export function YourPartyCard({
 				</span>
 				<span className="text-[11px] text-[var(--muted-foreground)]">
 					{stateLabel}
+					{party.preferredCourtId &&
+						` · ${courtName?.(party.preferredCourtId) ?? "Court"} only`}
 				</span>
 			</div>
 			<ul className="mb-2 flex flex-wrap gap-1.5">
@@ -730,8 +734,7 @@ export function YourPartyCard({
 					}
 				>
 					<Button variant="outline" size="sm" disabled={atCapacity}>
-						<UserPlus size={14} />{" "}
-						{atCapacity ? "Party full" : "Add member"}
+						<UserPlus size={14} /> {atCapacity ? "Party full" : "Add member"}
 					</Button>
 				</MemberSearchPopover>
 				<Button
@@ -782,6 +785,8 @@ export type QueueByPartyEntry = {
 	partyId: string;
 	openToFill: boolean;
 	queuedAt: string | Date;
+	/** Hard court lock (court-preference feature); null = any court. */
+	preferredCourtId: string | null;
 	memberCount: number;
 	capacity: number;
 	needsCount: number;
@@ -830,6 +835,7 @@ export function QueueByParty({
 	viewerPartyId,
 	isStaff,
 	onChange,
+	courtName,
 }: {
 	parties: QueueByPartyEntry[];
 	/** Flat WAITING check-ins — used only to map userId → checkInId for the
@@ -839,6 +845,8 @@ export function QueueByParty({
 	viewerPartyId: string | null;
 	isStaff: boolean;
 	onChange: () => void;
+	/** Resolve a courtId → display title, for the "Court N only" chip. */
+	courtName?: (id: string) => string;
 }) {
 	const { toast } = useToast();
 	const setCheckInStatus = api.dropIn.setCheckInStatus.useMutation({
@@ -860,7 +868,10 @@ export function QueueByParty({
 			party: p,
 			waitingMembers: p.members.filter((m) => m.status === "WAITING"),
 			nonWaitingLiveMembers: p.members.filter(
-				(m) => m.status !== "WAITING" && m.status !== "LEFT" && m.status !== "CANCELLED",
+				(m) =>
+					m.status !== "WAITING" &&
+					m.status !== "LEFT" &&
+					m.status !== "CANCELLED",
 			),
 		}))
 		.filter((r) => r.waitingMembers.length > 0);
@@ -889,8 +900,11 @@ export function QueueByParty({
 
 				// A trivial solo (openToFill=true, party of 1) is rendered as a
 				// flat row — no border, no group framing. Anything else gets the
-				// party card treatment so the user sees the structure.
-				const isTrivialSolo = isSolo && party.openToFill;
+				// party card treatment so the user sees the structure. A
+				// court-locked solo is NOT trivial: we want the bordered row so the
+				// "Court N only" chip is visible.
+				const isTrivialSolo =
+					isSolo && party.openToFill && !party.preferredCourtId;
 
 				return (
 					<li
@@ -914,9 +928,7 @@ export function QueueByParty({
 								<div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
 									<span className="inline-flex items-center gap-1 font-medium text-[var(--foreground)]">
 										<Users size={12} />
-										{isSolo
-											? "Solo"
-											: `Group of ${party.memberCount}`}
+										{isSolo ? "Solo" : `Group of ${party.memberCount}`}
 									</span>
 									{isClosedIncomplete && (
 										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
@@ -944,6 +956,11 @@ export function QueueByParty({
 											Has guest
 										</span>
 									)}
+									{party.preferredCourtId && (
+										<span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-900 dark:bg-indigo-900/40 dark:text-indigo-200">
+											{courtName?.(party.preferredCourtId) ?? "Court"} only
+										</span>
+									)}
 									{showJoinButton && (
 										<button
 											type="button"
@@ -953,7 +970,7 @@ export function QueueByParty({
 												})
 											}
 											disabled={joinExistingParty.isPending}
-											className="ml-auto rounded-full bg-[var(--primary)] px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+											className="ml-auto rounded-full bg-[var(--primary)] px-2 py-0.5 font-medium text-[10px] text-white hover:opacity-90 disabled:opacity-50"
 										>
 											Join this group
 										</button>
@@ -1012,7 +1029,7 @@ export function QueueByParty({
 										>
 											{memberDisplayName(m)}
 											{m.isGuest && (
-												<span className="text-[var(--muted-foreground)] text-[10px]">
+												<span className="text-[10px] text-[var(--muted-foreground)]">
 													guest
 												</span>
 											)}
@@ -1040,7 +1057,7 @@ export function QueueByParty({
 									{row.nonWaitingLiveMembers.map((m) => (
 										<span
 											key={m.userId}
-											className="inline-flex items-center gap-1 rounded-full border border-dashed border-[var(--border)] bg-[var(--muted)]/40 px-2 py-0.5 text-[var(--muted-foreground)] text-xs"
+											className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] border-dashed bg-[var(--muted)]/40 px-2 py-0.5 text-[var(--muted-foreground)] text-xs"
 											title={`Status: ${m.status}`}
 										>
 											{memberDisplayName(m)}

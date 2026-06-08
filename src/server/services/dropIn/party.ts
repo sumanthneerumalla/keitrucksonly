@@ -4,13 +4,9 @@
  * See designFiles/drop-in/group-join-feature-plan.md for the full design.
  */
 
-import {
-	type DropInFormat,
-	type DropInPlayerStatus,
-	type Prisma,
-} from "@prisma/client";
-import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
+import type { DropInFormat, DropInPlayerStatus, Prisma } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
 import type { PartySummary } from "./pickNextOccupants";
 
 /**
@@ -79,7 +75,9 @@ export async function loadSessionForPartyOp(
  * Sessions accept party ops only when ACTIVE. PAUSED rejects (existing games
  * finish, no new joins). SCHEDULED, ENDED, CANCELLED all reject.
  */
-export function assertSessionAcceptsPartyOps(session: { status: string }): void {
+export function assertSessionAcceptsPartyOps(session: {
+	status: string;
+}): void {
 	if (session.status !== "ACTIVE") {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
@@ -194,6 +192,7 @@ export async function loadPartySummaries(
 			partyId: true,
 			openToFill: true,
 			queuedAt: true,
+			preferredCourtId: true,
 			members: {
 				where: { status: { in: [...LIVE_STATUSES] } },
 				select: {
@@ -220,6 +219,7 @@ export async function loadPartySummaries(
 			partyId: p.partyId,
 			openToFill: p.openToFill,
 			queuedAt: p.queuedAt,
+			preferredCourtId: p.preferredCourtId,
 			memberUserIds,
 			memberStatuses,
 			hasGuest,

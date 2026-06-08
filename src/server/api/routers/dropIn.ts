@@ -285,6 +285,7 @@ function deriveBoardView(session: BoardSession) {
 				partyId: p.partyId,
 				openToFill: p.openToFill,
 				queuedAt: p.queuedAt,
+				preferredCourtId: p.preferredCourtId,
 				memberCount,
 				capacity,
 				needsCount: Math.max(0, capacity - memberCount),
@@ -746,7 +747,15 @@ export const dropInRouter = createTRPCRouter({
 	 * On re-entry (already had a check-in), preserves the existing party.
 	 */
 	joinQueue: protectedProcedure
-		.input(z.object({ sessionId: z.string() }))
+		.input(
+			z.object({
+				sessionId: z.string(),
+				// Court-preference feature: optionally pin the (solo) party to one
+				// court. null/omitted = any court. Used by the "Queue for Court N"
+				// button when the viewer isn't in the queue yet.
+				preferredCourtId: z.string().nullable().optional(),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
 			const user = await ctx.db.user.findUnique({
 				where: { clerkUserId: ctx.auth.userId },
@@ -755,7 +764,7 @@ export const dropInRouter = createTRPCRouter({
 			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
 			const session = await ctx.db.dropInSession.findUnique({
 				where: { sessionId: input.sessionId },
-				select: { clubShortName: true, status: true },
+				select: { clubShortName: true, status: true, courtIds: true },
 			});
 			if (!session || session.clubShortName !== user.clubShortName) {
 				throw new TRPCError({ code: "NOT_FOUND" });
@@ -764,6 +773,15 @@ export const dropInRouter = createTRPCRouter({
 				throw new TRPCError({
 					code: "BAD_REQUEST",
 					message: "Session is not active.",
+				});
+			}
+			if (
+				input.preferredCourtId != null &&
+				!session.courtIds.includes(input.preferredCourtId)
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "That court isn't part of this session.",
 				});
 			}
 
@@ -779,7 +797,14 @@ export const dropInRouter = createTRPCRouter({
 				});
 				if (existing) {
 					// Existing check-in (any status) — preserve the party,
-					// refresh queue position.
+					// refresh queue position. If a court preference was passed,
+					// apply it to the existing party too.
+					if (input.preferredCourtId !== undefined) {
+						await tx.dropInParty.update({
+							where: { partyId: existing.partyId },
+							data: { preferredCourtId: input.preferredCourtId },
+						});
+					}
 					return tx.dropInCheckIn.update({
 						where: {
 							sessionId_userId: {
@@ -795,7 +820,7 @@ export const dropInRouter = createTRPCRouter({
 					});
 				}
 				// Fresh — create a solo party with openToFill=true (default
-				// solo-mix behavior).
+				// solo-mix behavior), pinned to the chosen court if any.
 				const now = new Date();
 				const party = await tx.dropInParty.create({
 					data: {
@@ -803,6 +828,7 @@ export const dropInRouter = createTRPCRouter({
 						openToFill: true,
 						queuedAt: now,
 						createdByUserId: user.userId,
+						preferredCourtId: input.preferredCourtId ?? null,
 					},
 				});
 				return tx.dropInCheckIn.create({
@@ -1345,6 +1371,57 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Court-preference feature (CP3): pin the party to a single court (hard lock)
+	 * or clear it (`courtId: null` → any court). Any party member may set it.
+	 * Validates the court belongs to the session. See
+	 * designFiles/drop-in/court-preference-feature-plan.md.
+	 */
+	setPartyPreferredCourt: protectedProcedure
+		.input(
+			z.object({
+				partyId: z.string(),
+				courtId: z.string().nullable(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const caller = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { userId: true, clubShortName: true },
+			});
+			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+
+			return ctx.db.$transaction(async (tx) => {
+				await assertCallerInParty(tx, input.partyId, caller.userId);
+				const party = await loadPartyForOp(tx, input.partyId);
+				const session = await loadSessionForPartyOp(
+					tx,
+					party.sessionId,
+					caller.clubShortName,
+				);
+				assertSessionAcceptsPartyOps(session);
+
+				if (input.courtId !== null) {
+					const s = await tx.dropInSession.findUnique({
+						where: { sessionId: party.sessionId },
+						select: { courtIds: true },
+					});
+					if (!s || !s.courtIds.includes(input.courtId)) {
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "That court isn't part of this session.",
+						});
+					}
+				}
+
+				return tx.dropInParty.update({
+					where: { partyId: input.partyId },
+					data: { preferredCourtId: input.courtId },
+					select: { partyId: true, preferredCourtId: true },
+				});
+			});
+		}),
+
+	/**
 	 * An OUTSIDER joins an existing open party. Used by the "Join this group"
 	 * button on `openToFill=true` parties in the queue display — the spec says
 	 * those should be one-click joinable so other players can decisively fill a
@@ -1871,7 +1948,11 @@ export const dropInRouter = createTRPCRouter({
 				// rows — see plan §3 for the algorithm + A1-vs-combinatorial
 				// divergence.
 				const parties = await loadPartySummaries(tx, session.sessionId);
-				const pick = pickNextOccupants(parties, playersPerCourt);
+				const pick = pickNextOccupants(
+					parties,
+					playersPerCourt,
+					input.courtId,
+				);
 				if (!pick) {
 					throw new TRPCError({
 						code: "BAD_REQUEST",
@@ -2147,13 +2228,24 @@ export const dropInRouter = createTRPCRouter({
 					message: "End the game on this court before removing it.",
 				});
 			}
-			return ctx.db.dropInSession.update({
-				where: { sessionId: input.sessionId },
-				data: {
-					courtIds: {
-						set: session.courtIds.filter((c) => c !== input.courtId),
+			return ctx.db.$transaction(async (tx) => {
+				// CP8: any party hard-locked to the court being removed falls back
+				// to "any court" so they aren't stranded.
+				await tx.dropInParty.updateMany({
+					where: {
+						sessionId: input.sessionId,
+						preferredCourtId: input.courtId,
 					},
-				},
+					data: { preferredCourtId: null },
+				});
+				return tx.dropInSession.update({
+					where: { sessionId: input.sessionId },
+					data: {
+						courtIds: {
+							set: session.courtIds.filter((c) => c !== input.courtId),
+						},
+					},
+				});
 			});
 		}),
 
@@ -2680,7 +2772,11 @@ export const dropInRouter = createTRPCRouter({
 						// head + no clean fill, or all closed parties incomplete) —
 						// next tick retries once the queue shape changes.
 						const parties = await loadPartySummaries(tx, input.sessionId);
-						const pick = pickNextOccupants(parties, playersPerCourt);
+						const pick = pickNextOccupants(
+							parties,
+							playersPerCourt,
+							slot.courtId,
+						);
 						if (!pick) return false;
 
 						const claim = await tx.dropInCheckIn.updateMany({

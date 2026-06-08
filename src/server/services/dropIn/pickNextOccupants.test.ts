@@ -26,6 +26,7 @@ interface PartyOpts {
 	hasGuest?: boolean;
 	id?: string;
 	memberPrefix?: string;
+	court?: string | null; // preferredCourtId; default null = any court
 }
 
 function party(opts: PartyOpts = {}): PartySummary {
@@ -47,6 +48,7 @@ function party(opts: PartyOpts = {}): PartySummary {
 		partyId: id,
 		openToFill: opts.open ?? false,
 		queuedAt: nextDate(),
+		preferredCourtId: opts.court ?? null,
 		memberUserIds,
 		memberStatuses,
 		hasGuest: opts.hasGuest ?? false,
@@ -68,7 +70,9 @@ describe("isReady", () => {
 		expect(r).toEqual({ ready: true, waitingCount: 2 });
 	});
 	it("counts only WAITING toward the in-queue size (IDLE members excluded)", () => {
-		const r = isReady(party({ size: 3, statuses: ["WAITING", "IDLE", "WAITING"] }));
+		const r = isReady(
+			party({ size: 3, statuses: ["WAITING", "IDLE", "WAITING"] }),
+		);
 		expect(r).toEqual({ ready: true, waitingCount: 2 });
 	});
 	it("returns ready=false when any member is PLAYING (A1 temporal blocker)", () => {
@@ -76,7 +80,9 @@ describe("isReady", () => {
 		expect(r.ready).toBe(false);
 	});
 	it("returns ready=false when any member is AWAITING_RESULT (A3 gate)", () => {
-		const r = isReady(party({ size: 2, statuses: ["WAITING", "AWAITING_RESULT"] }));
+		const r = isReady(
+			party({ size: 2, statuses: ["WAITING", "AWAITING_RESULT"] }),
+		);
 		expect(r.ready).toBe(false);
 	});
 	it("returns ready=false when no member is WAITING (party not in queue)", () => {
@@ -268,5 +274,85 @@ describe("pickNextOccupants", () => {
 
 	it("empty pool → null", () => {
 		expect(pickNextOccupants([], 4)).toBeNull();
+	});
+});
+
+// -----------------------------------------------------------------------------
+// Court preference (hard lock) — the `courtId` filter.
+// -----------------------------------------------------------------------------
+
+describe("pickNextOccupants — court preference", () => {
+	it("a party locked to another court is NOT picked for this court", () => {
+		const lockedToOther = party({
+			open: true,
+			size: 4,
+			id: "pty_court2",
+			court: "court-2",
+		});
+		// Filling court-1: the court-2 party is ineligible → nothing fits.
+		expect(pickNextOccupants([lockedToOther], 4, "court-1")).toBeNull();
+	});
+
+	it("a party locked to this court IS picked for this court", () => {
+		const lockedHere = party({
+			open: true,
+			size: 4,
+			id: "pty_court1",
+			court: "court-1",
+		});
+		expectPicked(pickNextOccupants([lockedHere], 4, "court-1"), ["pty_court1"]);
+	});
+
+	it("an any-court party is eligible for any court", () => {
+		const anyCourt = party({ open: true, size: 4, id: "pty_any" }); // court=null
+		expectPicked(pickNextOccupants([anyCourt], 4, "court-9"), ["pty_any"]);
+	});
+
+	it("an any-court open party tops up a court-locked head (CP6)", () => {
+		const lockedHead = party({
+			open: true,
+			size: 2,
+			id: "pty_locked_head",
+			court: "court-1",
+		});
+		const anyFiller = party({ open: true, size: 2, id: "pty_any_filler" }); // null
+		expectPicked(pickNextOccupants([lockedHead, anyFiller], 4, "court-1"), [
+			"pty_locked_head",
+			"pty_any_filler",
+		]);
+	});
+
+	it("a head can't be filled when the only filler is locked to another court", () => {
+		const lockedHead = party({
+			open: true,
+			size: 2,
+			id: "pty_locked_head",
+			court: "court-1",
+		});
+		const otherFiller = party({
+			open: true,
+			size: 2,
+			id: "pty_other_filler",
+			court: "court-2",
+		});
+		// court-2 filler is filtered out for court-1 → can't reach capacity.
+		expect(
+			pickNextOccupants([lockedHead, otherFiller], 4, "court-1"),
+		).toBeNull();
+	});
+
+	it("preserves FIFO among eligible parties (court-locked head skipped for other court)", () => {
+		// Earlier party is locked to court-2; when filling court-1 it's skipped
+		// and the later any-court full party is chosen.
+		const earlyOther = party({
+			open: false,
+			size: 4,
+			id: "pty_early_court2",
+			court: "court-2",
+		});
+		const laterAny = party({ open: false, size: 4, id: "pty_later_any" });
+		expectPicked(pickNextOccupants([earlyOther, laterAny], 4, "court-1"), [
+			"pty_later_any",
+		]);
 	});
 });

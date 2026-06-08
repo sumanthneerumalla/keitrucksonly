@@ -304,6 +304,7 @@ export default function KioskBoard({
 					onChange={() => {
 						/* read-only kiosk: nothing to refresh on interaction */
 					}}
+					courtName={courtName}
 				/>
 			</div>
 

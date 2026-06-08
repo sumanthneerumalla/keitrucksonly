@@ -810,6 +810,12 @@ model DropInParty {
   // Party-level FIFO sort key. Snaps to MIN(party.queuedAt, member.queuedAt)
   // on every member-add (rule B2 in the plan).
   queuedAt        DateTime      @default(now())
+  // Hard court lock (court-preference feature, designFiles/drop-in/
+  // court-preference-feature-plan.md). null = any court (default). When set,
+  // this party is ONLY eligible for the named court in pickNextOccupants. Must
+  // be one of session.courtIds; reset to null by removeCourt (CP8). Plain
+  // string, not a relation — mirrors DropInSession.courtIds / Assignment.courtId.
+  preferredCourtId String?
   // Audit: who clicked "Create party" (nullable for backfill).
   createdByUserId String?
   createdAt       DateTime      @default(now())
