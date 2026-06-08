@@ -78,6 +78,8 @@ export default function DropInEventDetails({
 
 	const refresh = useCallback(() => {
 		void utils.dropIn.getBoard.invalidate({ eventId, occurrenceDate });
+		void utils.dropIn.getStandings.invalidate();
+		void utils.dropIn.getRecentResults.invalidate();
 	}, [utils, eventId, occurrenceDate]);
 
 	// ---- mutations -----------------------------------------------------------
@@ -256,6 +258,11 @@ export default function DropInEventDetails({
 	const standingsQuery = api.dropIn.getStandings.useQuery(
 		{ sessionId: session?.sessionId ?? "" },
 		{ enabled: isLoggedIn && !!session && session.mode === "MATCH" },
+	);
+	// Recent confirmed results — staff use these to override a finished game's score.
+	const recentQuery = api.dropIn.getRecentResults.useQuery(
+		{ sessionId: session?.sessionId ?? "" },
+		{ enabled: isLoggedIn && isStaff && !!session && session.mode === "MATCH" },
 	);
 
 	// -------------------------------------------------------------------------
@@ -883,6 +890,69 @@ export default function DropInEventDetails({
 			{/* Leaderboard (MATCH) */}
 			{isMatch && <Leaderboard rows={standingsQuery.data ?? []} />}
 
+			{/* Recent results (staff) — override a finished game's score. */}
+			{isMatch && isStaff && (recentQuery.data?.length ?? 0) > 0 && (
+				<div className="rounded-lg border border-[var(--border)] p-3">
+					<div className="mb-2 font-medium text-[var(--foreground)] text-sm">
+						Recent results
+					</div>
+					<ul className="space-y-2">
+						{recentQuery.data?.map((r) => {
+							const sideNames = (side: "A" | "B") =>
+								r.participants
+									.filter((p) => p.side === side)
+									.map(
+										(p) =>
+											`${p.user.firstName ?? ""} ${p.user.lastName ?? ""}`.trim() ||
+											"Player",
+									)
+									.join(" & ") || `Side ${side}`;
+							return (
+								<li key={r.assignmentId} className="text-sm">
+									<div className="flex items-center justify-between gap-2">
+										<span className="flex-1 text-[var(--foreground)]">
+											{sideNames("A")} vs {sideNames("B")}
+										</span>
+										<span className="font-mono text-[var(--muted-foreground)] text-xs">
+											{r.reportedScoreA}–{r.reportedScoreB}
+										</span>
+										<Button
+											variant="outline"
+											size="sm"
+											onClick={() =>
+												setReporting({ id: r.assignmentId, staff: true })
+											}
+										>
+											Edit
+										</Button>
+									</div>
+									<div className="text-[var(--muted-foreground)] text-xs">
+										{formatGames(r.gameScores)}
+									</div>
+									{reporting?.id === r.assignmentId && (
+										<ScoreEntry
+											bestOf={session.bestOf ?? 3}
+											initial={
+												(r.gameScores as { a: number; b: number }[] | null) ??
+												undefined
+											}
+											pending={staffSetScore.isPending}
+											onCancel={() => setReporting(null)}
+											onSubmit={(gameScores) =>
+												staffSetScore.mutate({
+													assignmentId: r.assignmentId,
+													gameScores,
+												})
+											}
+										/>
+									)}
+								</li>
+							);
+						})}
+					</ul>
+				</div>
+			)}
+
 			{/* Add-court conflict confirmation. */}
 			<AlertDialog
 				open={courtConflict !== null}
@@ -1074,15 +1144,22 @@ function ScoreEntry({
 	pending,
 	onSubmit,
 	onCancel,
+	initial,
 }: {
 	bestOf: number;
 	pending: boolean;
 	onSubmit: (games: { a: number; b: number }[]) => void;
 	onCancel: () => void;
+	initial?: { a: number; b: number }[];
 }) {
-	const [rows, setRows] = useState<{ a: string; b: string }[]>(
-		Array.from({ length: bestOf }, () => ({ a: "", b: "" })),
-	);
+	const [rows, setRows] = useState<{ a: string; b: string }[]>(() => {
+		const count = Math.max(bestOf, initial?.length ?? 0);
+		return Array.from({ length: count }, (_, i) =>
+			initial?.[i]
+				? { a: String(initial[i].a), b: String(initial[i].b) }
+				: { a: "", b: "" },
+		);
+	});
 	const submit = () => {
 		const games = rows
 			.filter((r) => r.a !== "" && r.b !== "")

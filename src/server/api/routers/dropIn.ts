@@ -1213,16 +1213,18 @@ export const dropInRouter = createTRPCRouter({
 			) {
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
+			// Allow correcting an already-CONFIRMED result (staff override); only a
+			// COMPLETED (TIMED) or CANCELLED game can no longer be scored.
 			if (
-				assignment.status !== "IN_PROGRESS" &&
-				assignment.status !== "PENDING_CONFIRM" &&
-				assignment.status !== "DISPUTED"
+				assignment.status === "COMPLETED" ||
+				assignment.status === "CANCELLED"
 			) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "This game is already finished.",
+					message: "This game can no longer be scored.",
 				});
 			}
+			const wasConfirmed = assignment.status === "CONFIRMED";
 			const scoreError = validateMatchScore(
 				input.gameScores,
 				assignment.session.pointsPerGame ?? 21,
@@ -1261,18 +1263,64 @@ export const dropInRouter = createTRPCRouter({
 					},
 					data: { isWinner: false },
 				});
-				await tx.dropInCheckIn.updateMany({
-					where: {
-						sessionId: assignment.session.sessionId,
-						userId: { in: assignment.participants.map((p) => p.userId) },
-					},
-					data: {
-						status: "IDLE",
-						gamesPlayed: { increment: 1 },
-						lastPlayedAt: now,
-					},
-				});
+				// A correction to an already-confirmed game must NOT re-count it
+				// (players already moved on and gamesPlayed was bumped once). For a
+				// fresh resolution, return the players to the pool and bump counters.
+				if (!wasConfirmed) {
+					await tx.dropInCheckIn.updateMany({
+						where: {
+							sessionId: assignment.session.sessionId,
+							userId: { in: assignment.participants.map((p) => p.userId) },
+						},
+						data: {
+							status: "IDLE",
+							gamesPlayed: { increment: 1 },
+							lastPlayedAt: now,
+						},
+					});
+				}
 				return updated;
+			});
+		}),
+
+	/**
+	 * Recent confirmed results for a session (most recent first) — lets staff find
+	 * a finished game (which has left the board) to override its score.
+	 */
+	getRecentResults: protectedProcedure
+		.input(z.object({ sessionId: z.string(), limit: z.number().optional() }))
+		.query(async ({ ctx, input }) => {
+			const user = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { clubShortName: true },
+			});
+			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: { clubShortName: true },
+			});
+			if (!session || session.clubShortName !== user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			return ctx.db.dropInAssignment.findMany({
+				where: { sessionId: input.sessionId, status: "CONFIRMED" },
+				orderBy: { confirmedAt: "desc" },
+				take: input.limit ?? 10,
+				select: {
+					assignmentId: true,
+					reportedScoreA: true,
+					reportedScoreB: true,
+					gameScores: true,
+					winnerSide: true,
+					confirmedAt: true,
+					participants: {
+						select: {
+							userId: true,
+							side: true,
+							user: { select: { firstName: true, lastName: true } },
+						},
+					},
+				},
 			});
 		}),
 
