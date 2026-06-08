@@ -26,8 +26,8 @@ services:
       - ./postcss.config.js:/app/postcss.config.js
       - ./tsconfig.json:/app/tsconfig.json
       - ./docker-entrypoint.sh:/app/docker-entrypoint.sh
-      # Exclude node_modules and .next to avoid overwriting container's versions
-      - /app/node_modules
+      # NOTE: node_modules is intentionally NOT mounted as a volume — see the
+      # explanation in docker-compose.yml. It lives in the image layer instead.
       # NOTE: We do not mount /app/.next as a volume to avoid permission issues
     entrypoint: ["sh", "/app/docker-entrypoint.sh"]
     command: ["npm", "run", "dev"]
