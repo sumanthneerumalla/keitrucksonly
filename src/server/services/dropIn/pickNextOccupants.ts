@@ -54,15 +54,42 @@ export interface Pick {
 }
 
 /**
- * "Ready" = no member is currently on a court or owes a score.
- * IDLE = checked in or just finished a game; DONE = endSession only (defensive).
+ * A party is selectable when:
+ *   - No member is mid-game elsewhere (PLAYING / AWAITING_RESULT) — that's the
+ *     A1 temporal blocker; skip the party but keep its queue position.
+ *   - At least one member is currently `WAITING` — i.e. the party is *in*
+ *     the queue this round. Members at IDLE/DONE/LEFT/CANCELLED don't count
+ *     toward the party's effective size; they must explicitly re-queue
+ *     (rejoin / requeueParty) to be considered.
+ *
+ * Returns `ready: false` for either failure mode so callers don't need to
+ * distinguish them at the algorithm level. The waiting count is the party's
+ * "in the queue right now" size and is what the algorithm matches against
+ * court capacity.
  */
-export function isReady(party: PartySummary): boolean {
+export function isReady(party: PartySummary): {
+	ready: boolean;
+	waitingCount: number;
+} {
+	let waitingCount = 0;
 	for (const userId of party.memberUserIds) {
 		const status = party.memberStatuses[userId];
-		if (status !== "IDLE" && status !== "DONE") return false;
+		if (status === "PLAYING" || status === "AWAITING_RESULT") {
+			return { ready: false, waitingCount: 0 };
+		}
+		if (status === "WAITING") waitingCount++;
 	}
-	return true;
+	if (waitingCount === 0) return { ready: false, waitingCount: 0 };
+	return { ready: true, waitingCount };
+}
+
+/** Subset of a party's members currently `WAITING` — used to materialize the
+ * exact userIds the caller's `updateMany WHERE status=WAITING` claim will
+ * touch. IDLE / DONE / LEFT / CANCELLED are excluded. */
+function waitingMembersOf(party: PartySummary): string[] {
+	return party.memberUserIds.filter(
+		(uid) => party.memberStatuses[uid] === "WAITING",
+	);
 }
 
 /**
@@ -77,16 +104,20 @@ export function pickNextOccupants(
 		const head = parties[i];
 		if (!head) continue;
 
-		// A1: temporal blocker — try the next head.
-		if (!isReady(head)) continue;
+		const headStatus = isReady(head);
+		// A1 (member mid-game elsewhere) OR not-in-queue (no WAITING members
+		// yet — party hasn't re-queued). Both just skip the head; queue order
+		// is preserved.
+		if (!headStatus.ready) continue;
 
-		// Closed party: must equal capacity to play; otherwise held in place
-		// (incomplete closed party = waiting for its missing members).
+		// Closed party: WAITING-count must equal capacity. If members exist but
+		// some are at IDLE (haven't rejoined yet), the party isn't ready THIS
+		// round — held in place, try next head.
 		if (!head.openToFill) {
-			if (head.memberUserIds.length === capacity) {
+			if (headStatus.waitingCount === capacity) {
 				return {
 					partyIds: [head.partyId],
-					userIds: [...head.memberUserIds],
+					userIds: waitingMembersOf(head),
 					ratingEligible: !head.hasGuest,
 				};
 			}
@@ -96,10 +127,10 @@ export function pickNextOccupants(
 		// Defensive: C1 (party > capacity rejected at create/add time) should
 		// make this unreachable. If we see corrupt data, don't stall — log
 		// and try the next head so one bad row doesn't freeze rotation.
-		if (head.memberUserIds.length > capacity) {
+		if (headStatus.waitingCount > capacity) {
 			reportInvariantViolation("party larger than court capacity", {
 				partyId: head.partyId,
-				size: head.memberUserIds.length,
+				waitingCount: headStatus.waitingCount,
 				capacity,
 			});
 			continue;
@@ -107,15 +138,16 @@ export function pickNextOccupants(
 
 		// Open party: try to fill from later open parties (FIFO).
 		const chosen: PartySummary[] = [head];
-		let chosenSize = head.memberUserIds.length;
+		let chosenSize = headStatus.waitingCount;
 
 		for (let j = i + 1; j < parties.length && chosenSize < capacity; j++) {
 			const candidate = parties[j];
 			if (!candidate) continue;
 			if (!candidate.openToFill) continue;
-			if (!isReady(candidate)) continue;
+			const candStatus = isReady(candidate);
+			if (!candStatus.ready) continue;
 
-			const newSize = chosenSize + candidate.memberUserIds.length;
+			const newSize = chosenSize + candStatus.waitingCount;
 			if (newSize > capacity) continue; // overshoot — skip & scan further
 
 			chosen.push(candidate);
@@ -125,7 +157,7 @@ export function pickNextOccupants(
 		if (chosenSize === capacity) {
 			return {
 				partyIds: chosen.map((p) => p.partyId),
-				userIds: chosen.flatMap((p) => [...p.memberUserIds]),
+				userIds: chosen.flatMap((p) => waitingMembersOf(p)),
 				ratingEligible: chosen.every((p) => !p.hasGuest),
 			};
 		}

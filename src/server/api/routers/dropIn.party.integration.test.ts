@@ -59,7 +59,7 @@ function caller(clerkUserId: string) {
 interface TestUser {
 	userId: string;
 	clerkUserId: string;
-	firstName: string;
+	firstName: string | null;
 }
 
 async function createTestUser(

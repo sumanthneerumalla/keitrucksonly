@@ -73,10 +73,17 @@ function validateMatchScore(
 
 /**
  * Auto-start (A15, on-confirm): after a MATCH court frees (a score was confirmed /
- * staff-resolved), atomically form the next matchup on that court from the waiting
- * pool. Race-safe (claim WHERE status=WAITING, verify count). No-op unless the
- * session is an ACTIVE MATCH, the court is free, and enough players are waiting.
- * Must run inside the same transaction that freed the court.
+ * staff-resolved), atomically form the next matchup on that court from the queue.
+ *
+ * Party-aware: uses the same `pickNextOccupants` helper as `formNext` / `tickTimed`
+ * so atomicity, openToFill semantics, A1 skip, and guest GBR suppression all
+ * behave consistently across the three call sites. Race-safe (claim WHERE
+ * status=WAITING, verify count, then re-read party member counts).
+ *
+ * No-op unless the session is an ACTIVE MATCH, the court is free, and the queue
+ * can produce a clean fill (e.g. a closed party of the right size, or open
+ * parties summing to capacity). Must run inside the same transaction that freed
+ * the court.
  */
 async function autoStartMatchOnCourt(
 	tx: Prisma.TransactionClient,
@@ -101,27 +108,47 @@ async function autoStartMatchOnCourt(
 
 	const format = session.format ?? DropInFormat.DOUBLES;
 	const playersPerCourt = format === DropInFormat.SINGLES ? 2 : 4;
-	const waiting = await tx.dropInCheckIn.findMany({
-		where: { sessionId: session.sessionId, status: "WAITING" },
-		orderBy: [
-			{ gamesPlayed: "asc" },
-			{ lastPlayedAt: { sort: "asc", nulls: "first" } },
-			{ queuedAt: "asc" },
-		],
-	});
-	if (waiting.length < playersPerCourt) return;
 
-	const picked = waiting.slice(0, playersPerCourt);
-	const half = playersPerCourt / 2;
+	const parties = await loadPartySummaries(tx, session.sessionId);
+	const pick = pickNextOccupants(parties, playersPerCourt);
+	if (!pick) return; // queue can't produce a clean fill — staff can Start next manually
+
 	const claim = await tx.dropInCheckIn.updateMany({
 		where: {
 			sessionId: session.sessionId,
-			userId: { in: picked.map((c) => c.userId) },
+			userId: { in: pick.userIds },
 			status: "WAITING",
 		},
 		data: { status: "PLAYING" },
 	});
-	if (claim.count !== playersPerCourt) return; // contended — staff can Start next
+	if (claim.count !== pick.userIds.length) return; // contended
+
+	// Race guard — see formNext for the rationale.
+	const counts = await tx.dropInCheckIn.groupBy({
+		by: ["partyId"],
+		where: {
+			sessionId: session.sessionId,
+			partyId: { in: pick.partyIds },
+			status: { in: ["PLAYING", "WAITING"] },
+		},
+		_count: { userId: true },
+	});
+	for (const p of parties) {
+		if (!pick.partyIds.includes(p.partyId)) continue;
+		// `p.memberUserIds` is the full live-member set from the snapshot;
+		// match against WAITING+PLAYING since the just-claimed members are
+		// now PLAYING.
+		const waitingInSnapshot = p.memberUserIds.filter(
+			(uid) => p.memberStatuses[uid] === "WAITING",
+		).length;
+		const actual =
+			counts.find((c) => c.partyId === p.partyId)?._count.userId ?? 0;
+		if (actual !== waitingInSnapshot) return; // party changed; bail
+	}
+
+	// ratingWeight: 1.0 (MATCH mode) UNLESS the assembled set contains a guest.
+	const ratingWeight = pick.ratingEligible ? 1.0 : null;
+	const half = playersPerCourt / 2;
 
 	await tx.dropInAssignment.create({
 		data: {
@@ -130,11 +157,11 @@ async function autoStartMatchOnCourt(
 			format,
 			status: "IN_PROGRESS",
 			startedAt: new Date(),
-			ratingWeight: 1.0,
+			ratingWeight,
 			participants: {
-				create: picked.map((c, i) => ({
+				create: pick.userIds.map((userId, i) => ({
 					sessionId: session.sessionId,
-					userId: c.userId,
+					userId,
 					side: i < half ? DropInSide.A : DropInSide.B,
 				})),
 			},

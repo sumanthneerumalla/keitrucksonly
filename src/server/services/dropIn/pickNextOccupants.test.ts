@@ -39,7 +39,9 @@ function party(opts: PartyOpts = {}): PartySummary {
 	for (let i = 0; i < size; i++) {
 		const userId = memberUserIds[i];
 		if (!userId) continue;
-		memberStatuses[userId] = opts.statuses?.[i] ?? "IDLE";
+		// Default to WAITING — that's the "in queue" status. IDLE means
+		// checked in but not in queue (needs explicit rejoin/requeueParty).
+		memberStatuses[userId] = opts.statuses?.[i] ?? "WAITING";
 	}
 	return {
 		partyId: id,
@@ -61,26 +63,25 @@ function expectPicked(result: Pick | null, partyIds: string[]): void {
 // -----------------------------------------------------------------------------
 
 describe("isReady", () => {
-	it("treats IDLE and DONE as ready", () => {
-		expect(
-			isReady(party({ size: 2, statuses: ["IDLE", "DONE"] })),
-		).toBe(true);
+	it("returns ready=true with the WAITING count when all members are WAITING", () => {
+		const r = isReady(party({ size: 2, statuses: ["WAITING", "WAITING"] }));
+		expect(r).toEqual({ ready: true, waitingCount: 2 });
 	});
-	it("treats PLAYING as not ready", () => {
-		expect(
-			isReady(party({ size: 2, statuses: ["IDLE", "PLAYING"] })),
-		).toBe(false);
+	it("counts only WAITING toward the in-queue size (IDLE members excluded)", () => {
+		const r = isReady(party({ size: 3, statuses: ["WAITING", "IDLE", "WAITING"] }));
+		expect(r).toEqual({ ready: true, waitingCount: 2 });
 	});
-	it("treats AWAITING_RESULT as not ready", () => {
-		expect(
-			isReady(party({ size: 2, statuses: ["IDLE", "AWAITING_RESULT"] })),
-		).toBe(false);
+	it("returns ready=false when any member is PLAYING (A1 temporal blocker)", () => {
+		const r = isReady(party({ size: 2, statuses: ["WAITING", "PLAYING"] }));
+		expect(r.ready).toBe(false);
 	});
-	it("treats WAITING as not ready (member is queued separately)", () => {
-		// A member with status=WAITING means they're a solo queue entry,
-		// not yet on a court. For party-selection purposes we treat them
-		// as "ready" only if they're IDLE or DONE.
-		expect(isReady(party({ size: 1, statuses: ["WAITING"] }))).toBe(false);
+	it("returns ready=false when any member is AWAITING_RESULT (A3 gate)", () => {
+		const r = isReady(party({ size: 2, statuses: ["WAITING", "AWAITING_RESULT"] }));
+		expect(r.ready).toBe(false);
+	});
+	it("returns ready=false when no member is WAITING (party not in queue)", () => {
+		const r = isReady(party({ size: 2, statuses: ["IDLE", "IDLE"] }));
+		expect(r).toEqual({ ready: false, waitingCount: 0 });
 	});
 });
 
