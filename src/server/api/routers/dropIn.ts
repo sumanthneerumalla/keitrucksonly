@@ -214,6 +214,55 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Staff (facility+): pause a live session — in-progress games finish/report, but
+	 * no new games form, no new queue joins, and TIMED stops auto-rotating.
+	 */
+	pauseSession: facilityProcedure
+		.input(z.object({ sessionId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: { clubShortName: true, status: true },
+			});
+			if (!session || session.clubShortName !== ctx.user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (session.status !== "ACTIVE") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Only an active session can be paused.",
+				});
+			}
+			return ctx.db.dropInSession.update({
+				where: { sessionId: input.sessionId },
+				data: { status: "PAUSED" },
+			});
+		}),
+
+	/** Staff (facility+): resume a paused session. */
+	resumeSession: facilityProcedure
+		.input(z.object({ sessionId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const session = await ctx.db.dropInSession.findUnique({
+				where: { sessionId: input.sessionId },
+				select: { clubShortName: true, status: true },
+			});
+			if (!session || session.clubShortName !== ctx.user.clubShortName) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+			if (session.status !== "PAUSED") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Session is not paused.",
+				});
+			}
+			return ctx.db.dropInSession.update({
+				where: { sessionId: input.sessionId },
+				data: { status: "ACTIVE" },
+			});
+		}),
+
+	/**
 	 * Staff checks a member into the session (front-desk, G2). Idempotent on
 	 * (sessionId, userId); defaults to IDLE (present). Re-checking clears leftAt.
 	 */
@@ -879,7 +928,9 @@ export const dropInRouter = createTRPCRouter({
 			return ctx.db.dropInSession.update({
 				where: { sessionId: input.sessionId },
 				data: {
-					courtIds: { set: session.courtIds.filter((c) => c !== input.courtId) },
+					courtIds: {
+						set: session.courtIds.filter((c) => c !== input.courtId),
+					},
 				},
 			});
 		}),

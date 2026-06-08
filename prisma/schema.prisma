@@ -695,6 +695,7 @@ enum DropInMode {
 enum DropInSessionStatus {
   SCHEDULED
   ACTIVE
+  PAUSED // staff paused: existing games finish, no new games/joins, no auto-rotate
   ENDED
   CANCELLED
 }

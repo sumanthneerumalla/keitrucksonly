@@ -89,6 +89,14 @@ export default function DropInEventDetails({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
+	const pauseSession = api.dropIn.pauseSession.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
+	const resumeSession = api.dropIn.resumeSession.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
 	const formNext = api.dropIn.formNext.useMutation({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
@@ -392,6 +400,7 @@ export default function DropInEventDetails({
 	const viewerCheckIn = session.checkIns.find((c) => c.userId === userId);
 	const viewerStatus = viewerCheckIn?.status ?? null;
 	const isMatch = session.mode === "MATCH";
+	const isPaused = session.status === "PAUSED";
 	const playersPerCourt = session.format === "SINGLES" ? 2 : 4;
 
 	const pool = board?.pool ?? [];
@@ -442,13 +451,40 @@ export default function DropInEventDetails({
 					<p className="text-[var(--muted-foreground)] text-xs">
 						{session.mode === "TIMED" ? "Timed rotation" : "Match play"} ·{" "}
 						{session.format ?? "—"} ·{" "}
-						<span className="text-green-600">live</span>
+						{isPaused ? (
+							<span className="text-amber-600">paused</span>
+						) : (
+							<span className="text-green-600">live</span>
+						)}
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
 					<Button variant="outline" size="sm" onClick={enableKiosk}>
 						<Maximize2 size={14} /> Kiosk
 					</Button>
+					{isStaff &&
+						(isPaused ? (
+							<Button
+								size="sm"
+								disabled={resumeSession.isPending}
+								onClick={() =>
+									resumeSession.mutate({ sessionId: session.sessionId })
+								}
+							>
+								Resume
+							</Button>
+						) : (
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={pauseSession.isPending}
+								onClick={() =>
+									pauseSession.mutate({ sessionId: session.sessionId })
+								}
+							>
+								Pause
+							</Button>
+						))}
 					{isStaff && (
 						<Button
 							variant="outline"
@@ -462,6 +498,13 @@ export default function DropInEventDetails({
 					)}
 				</div>
 			</div>
+
+			{isPaused && (
+				<p className="rounded-md bg-amber-100 px-3 py-2 text-amber-800 text-sm">
+					Session paused — current games can finish, but no new games or queue
+					joins until a staff member resumes.
+				</p>
+			)}
 
 			{/* Courts */}
 			<div className="grid gap-3 sm:grid-cols-2">
@@ -501,7 +544,9 @@ export default function DropInEventDetails({
 											<Button
 												size="sm"
 												disabled={
-													formNext.isPending || pool.length < playersPerCourt
+													formNext.isPending ||
+													isPaused ||
+													pool.length < playersPerCourt
 												}
 												onClick={() =>
 													formNext.mutate({
@@ -785,6 +830,7 @@ export default function DropInEventDetails({
 						) : (
 							<Button
 								size="sm"
+								disabled={isPaused}
 								onClick={() =>
 									joinQueue.mutate({ sessionId: session.sessionId })
 								}
