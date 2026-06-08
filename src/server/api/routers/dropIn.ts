@@ -402,7 +402,12 @@ export const dropInRouter = createTRPCRouter({
 					checkIns: {
 						include: {
 							user: {
-								select: { userId: true, firstName: true, lastName: true },
+								select: {
+									userId: true,
+									firstName: true,
+									lastName: true,
+									isGuest: true,
+								},
 							},
 						},
 					},
@@ -421,6 +426,37 @@ export const dropInRouter = createTRPCRouter({
 						},
 						orderBy: { startedAt: "asc" },
 					},
+					parties: {
+						orderBy: { queuedAt: "asc" },
+						include: {
+							members: {
+								where: {
+									status: {
+										in: [
+											"WAITING",
+											"IDLE",
+											"PLAYING",
+											"AWAITING_RESULT",
+											"DONE",
+										],
+									},
+								},
+								orderBy: { createdAt: "asc" },
+								select: {
+									userId: true,
+									status: true,
+									user: {
+										select: {
+											userId: true,
+											firstName: true,
+											lastName: true,
+											isGuest: true,
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			});
 			if (!session) return null;
@@ -428,6 +464,19 @@ export const dropInRouter = createTRPCRouter({
 				throw new TRPCError({ code: "FORBIDDEN" });
 			}
 
+			// Map checkInId → { partyId, isPartyHead } for pool enrichment. A
+			// member is the "head" of their party iff they're first by
+			// member.createdAt within their party — purely a display concept.
+			const partyHeadByUserId = new Map<string, boolean>();
+			for (const p of session.parties) {
+				const head = p.members[0];
+				if (head) partyHeadByUserId.set(head.userId, true);
+			}
+
+			// Pool: only WAITING members (unchanged semantics), now enriched
+			// with partyId + isPartyHead. Sort key still includes the fairness
+			// counters so legacy renderings stay consistent; new clients can
+			// also group by partyId.
 			const pool = session.checkIns
 				.filter((c) => c.status === "WAITING")
 				.sort(
@@ -436,9 +485,47 @@ export const dropInRouter = createTRPCRouter({
 						(a.lastPlayedAt?.getTime() ?? 0) -
 							(b.lastPlayedAt?.getTime() ?? 0) ||
 						a.queuedAt.getTime() - b.queuedAt.getTime(),
-				);
+				)
+				.map((c) => ({
+					...c,
+					isPartyHead: partyHeadByUserId.get(c.userId) ?? false,
+				}));
 
-			return { session, pool, viewerUserId: user.userId };
+			// Top-level parties[]: derived state per plan §4. Defunct parties
+			// (no live members) are filtered out. Each entry includes member
+			// list so the client can render "Party of 4: Alice + Bob queued,
+			// Charlie on Court 2" while the party is held.
+			const parties = session.parties
+				.filter((p) => p.members.length > 0)
+				.map((p) => {
+					const anyPlaying = p.members.some((m) => m.status === "PLAYING");
+					const anyAwaiting = p.members.some(
+						(m) => m.status === "AWAITING_RESULT",
+					);
+					const derivedState = anyPlaying
+						? "PLAYING"
+						: anyAwaiting
+							? "AWAITING_RESULT"
+							: "WAITING";
+					return {
+						partyId: p.partyId,
+						openToFill: p.openToFill,
+						queuedAt: p.queuedAt,
+						memberCount: p.members.length,
+						members: p.members.map((m) => ({
+							userId: m.userId,
+							firstName: m.user.firstName,
+							lastName: m.user.lastName,
+							isGuest: m.user.isGuest,
+							status: m.status,
+						})),
+						hasGuest: p.members.some((m) => m.user.isGuest),
+						isReady: !anyPlaying && !anyAwaiting,
+						derivedState,
+					};
+				});
+
+			return { session, pool, parties, viewerUserId: user.userId };
 		}),
 
 	/**
