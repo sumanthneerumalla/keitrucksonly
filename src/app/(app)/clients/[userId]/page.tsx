@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getOnboardedUserOrRedirect } from "~/app/_components/server/OnboardedGuard";
-import { isFacilityOrAbove } from "~/lib/utils";
+import { isAnyAdmin, isFacilityOrAbove } from "~/lib/utils";
 import StudentDetailClient from "./StudentDetailClient";
 
 export default async function StudentDetailPage({
@@ -16,5 +16,7 @@ export default async function StudentDetailPage({
 
 	const { userId } = await params;
 
-	return <StudentDetailClient userId={userId} />;
+	return (
+		<StudentDetailClient userId={userId} viewerIsAdmin={isAnyAdmin(user)} />
+	);
 }

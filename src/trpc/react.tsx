@@ -52,7 +52,10 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
 					// doesn't treat expected business errors (e.g. validation failures)
 					// as unhandled exceptions.
 					logger: (props) => {
-						const isError = props.direction === "down" && "result" in props && props.result instanceof Error;
+						const isError =
+							props.direction === "down" &&
+							"result" in props &&
+							props.result instanceof Error;
 						if (isError) {
 							if (process.env.NODE_ENV === "development") {
 								console.warn(

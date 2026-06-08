@@ -1,35 +1,35 @@
 "use client";
 
-import { api } from "~/trpc/react";
-import { isAnyAdmin } from "~/lib/utils";
-import Link from "next/link";
 import {
 	ArrowLeft,
 	Check,
 	Filter,
+	History,
+	LogOut,
 	Mail,
 	Pencil,
 	RefreshCw,
-	LogOut,
 	Search,
 	Tag,
 	Trash2,
 	UserPlus,
 	Users,
-	History,
 	X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
+	DialogDescription,
+	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	DialogDescription,
-	DialogBody,
-	DialogFooter,
 } from "~/app/_components/shared/dialog";
+import { isAnyAdmin } from "~/lib/utils";
+import { api } from "~/trpc/react";
 
 interface Props {
 	emailGroupId: string;
@@ -55,7 +55,9 @@ export default function GroupDetailClient({
 	const utils = api.useUtils();
 
 	const groupQuery = api.emailGroups.getById.useQuery({ emailGroupId });
-	const historyQuery = api.emailGroups.getSendHistory.useQuery({ emailGroupId });
+	const historyQuery = api.emailGroups.getSendHistory.useQuery({
+		emailGroupId,
+	});
 	const tagsQuery = api.user.listClubTags.useQuery();
 
 	const group = groupQuery.data;
@@ -147,7 +149,9 @@ export default function GroupDetailClient({
 
 	const toggleEditTag = (tagId: string) => {
 		setEditTagIds((prev) =>
-			prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId],
+			prev.includes(tagId)
+				? prev.filter((id) => id !== tagId)
+				: [...prev, tagId],
 		);
 	};
 
@@ -161,7 +165,12 @@ export default function GroupDetailClient({
 		};
 	}, [editingFilters, editTagIds, editAgeMin, editAgeMax]);
 
-	const hasAnyFilter = editingFilters && editFilterConfig && (editFilterConfig.tagIds.length > 0 || editFilterConfig.ageMin !== undefined || editFilterConfig.ageMax !== undefined);
+	const hasAnyFilter =
+		editingFilters &&
+		editFilterConfig &&
+		(editFilterConfig.tagIds.length > 0 ||
+			editFilterConfig.ageMin !== undefined ||
+			editFilterConfig.ageMax !== undefined);
 
 	const previewQuery = api.emailGroups.getFilterPreview.useQuery(
 		{
@@ -204,7 +213,7 @@ export default function GroupDetailClient({
 			<div className="mb-6">
 				<Link
 					href="/email-groups"
-					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+					className="inline-flex items-center gap-1 text-muted-foreground text-sm hover:text-foreground"
 				>
 					<ArrowLeft className="h-4 w-4" />
 					Back to groups
@@ -213,8 +222,8 @@ export default function GroupDetailClient({
 
 			<div className="mb-6 flex items-start justify-between">
 				<div>
-					<h1 className="text-2xl font-bold">{group.name}</h1>
-					<p className="mt-1 text-sm text-muted-foreground">
+					<h1 className="font-bold text-2xl">{group.name}</h1>
+					<p className="mt-1 text-muted-foreground text-sm">
 						{group.facility.name} · Created by {group.createdByUser.firstName}{" "}
 						{group.createdByUser.lastName}
 					</p>
@@ -222,7 +231,7 @@ export default function GroupDetailClient({
 				<div className="flex items-center gap-2">
 					<Link
 						href={`/email-groups/${emailGroupId}/compose`}
-						className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+						className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						<Mail className="h-4 w-4" />
 						Compose Email
@@ -240,7 +249,9 @@ export default function GroupDetailClient({
 							disabled={syncing}
 							className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
 						>
-							<RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+							<RefreshCw
+								className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`}
+							/>
 							Sync Members
 						</button>
 						<button
@@ -262,7 +273,7 @@ export default function GroupDetailClient({
 									deleteMutation.mutate({ emailGroupId });
 								}
 							}}
-							className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+							className="inline-flex items-center gap-1.5 rounded-md border border-destructive/30 px-3 py-1.5 text-destructive text-sm hover:bg-destructive/10"
 						>
 							<Trash2 className="h-3.5 w-3.5" />
 							Delete Group
@@ -296,7 +307,7 @@ export default function GroupDetailClient({
 						<button
 							type="button"
 							onClick={startEditingFilters}
-							className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+							className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-muted-foreground text-xs hover:bg-accent hover:text-foreground"
 						>
 							<Pencil className="h-3 w-3" />
 							Edit
@@ -308,7 +319,7 @@ export default function GroupDetailClient({
 								type="button"
 								onClick={saveFilters}
 								disabled={updateMutation.isPending}
-								className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+								className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 font-medium text-primary-foreground text-xs hover:bg-primary/90 disabled:opacity-50"
 							>
 								<Check className="h-3 w-3" />
 								{updateMutation.isPending ? "Saving..." : "Save"}
@@ -326,10 +337,10 @@ export default function GroupDetailClient({
 				</div>
 
 				{editingFilters ? (
-					<div className="px-4 py-3 space-y-4">
+					<div className="space-y-4 px-4 py-3">
 						{/* Tag selection */}
 						<div>
-							<label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+							<label className="mb-1.5 flex items-center gap-1.5 font-medium text-muted-foreground text-xs">
 								<Tag className="h-3 w-3" />
 								Tags
 							</label>
@@ -341,7 +352,7 @@ export default function GroupDetailClient({
 											key={tag.tagId}
 											type="button"
 											onClick={() => toggleEditTag(tag.tagId)}
-											className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+											className={`rounded-full px-2.5 py-1 font-medium text-xs transition-colors ${
 												isSelected
 													? "bg-primary text-primary-foreground"
 													: "bg-accent text-muted-foreground hover:bg-accent/80"
@@ -352,14 +363,16 @@ export default function GroupDetailClient({
 									);
 								})}
 								{(!tagsQuery.data || tagsQuery.data.length === 0) && (
-									<span className="text-xs text-muted-foreground">No tags available</span>
+									<span className="text-muted-foreground text-xs">
+										No tags available
+									</span>
 								)}
 							</div>
 						</div>
 
 						{/* Age range */}
 						<div>
-							<label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+							<label className="mb-1.5 flex items-center gap-1.5 font-medium text-muted-foreground text-xs">
 								<Users className="h-3 w-3" />
 								Age Range
 							</label>
@@ -372,7 +385,7 @@ export default function GroupDetailClient({
 									min={0}
 									className="w-20 rounded-md border px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
 								/>
-								<span className="text-sm text-muted-foreground">to</span>
+								<span className="text-muted-foreground text-sm">to</span>
 								<input
 									type="number"
 									value={editAgeMax}
@@ -385,46 +398,62 @@ export default function GroupDetailClient({
 						</div>
 
 						{updateMutation.error && (
-							<p className="text-xs text-destructive">{updateMutation.error.message}</p>
+							<p className="text-destructive text-xs">
+								{updateMutation.error.message}
+							</p>
 						)}
 					</div>
 				) : (
-					<div className="px-4 py-3 space-y-2">
+					<div className="space-y-2 px-4 py-3">
 						{(group.filterConfig as any)?.tagIds?.length > 0 && (
 							<div className="flex items-start gap-2">
 								<Tag className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
 								<div>
-									<span className="text-xs font-medium text-muted-foreground">Tags</span>
+									<span className="font-medium text-muted-foreground text-xs">
+										Tags
+									</span>
 									<div className="mt-1 flex flex-wrap gap-1.5">
-										{((group.filterConfig as any).tagIds as string[]).map((tagId: string) => {
-											const tag = tagsQuery.data?.find((t: any) => t.tagId === tagId);
-											return (
-												<span
-													key={tagId}
-													className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary"
-												>
-													{tag?.name ?? tagId}
-												</span>
-											);
-										})}
+										{((group.filterConfig as any).tagIds as string[]).map(
+											(tagId: string) => {
+												const tag = tagsQuery.data?.find(
+													(t: any) => t.tagId === tagId,
+												);
+												return (
+													<span
+														key={tagId}
+														className="rounded-full bg-primary/10 px-2.5 py-0.5 font-medium text-primary text-xs"
+													>
+														{tag?.name ?? tagId}
+													</span>
+												);
+											},
+										)}
 									</div>
 								</div>
 							</div>
 						)}
-						{((group.filterConfig as any)?.ageMin !== undefined || (group.filterConfig as any)?.ageMax !== undefined) && (
+						{((group.filterConfig as any)?.ageMin !== undefined ||
+							(group.filterConfig as any)?.ageMax !== undefined) && (
 							<div className="flex items-center gap-2">
 								<Users className="h-3.5 w-3.5 text-muted-foreground" />
 								<div>
-									<span className="text-xs font-medium text-muted-foreground">Age Range: </span>
+									<span className="font-medium text-muted-foreground text-xs">
+										Age Range:{" "}
+									</span>
 									<span className="text-sm">
-										{(group.filterConfig as any).ageMin ?? "any"} – {(group.filterConfig as any).ageMax ?? "any"}
+										{(group.filterConfig as any).ageMin ?? "any"} –{" "}
+										{(group.filterConfig as any).ageMax ?? "any"}
 									</span>
 								</div>
 							</div>
 						)}
-						{!(group.filterConfig as any)?.tagIds?.length && (group.filterConfig as any)?.ageMin === undefined && (group.filterConfig as any)?.ageMax === undefined && (
-							<p className="text-sm text-muted-foreground">No filters configured. Click Edit to add filters.</p>
-						)}
+						{!(group.filterConfig as any)?.tagIds?.length &&
+							(group.filterConfig as any)?.ageMin === undefined &&
+							(group.filterConfig as any)?.ageMax === undefined && (
+								<p className="text-muted-foreground text-sm">
+									No filters configured. Click Edit to add filters.
+								</p>
+							)}
 					</div>
 				)}
 			</div>
@@ -440,7 +469,7 @@ export default function GroupDetailClient({
 								{previewQuery.isFetching ? (
 									<RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />
 								) : (
-									<span className="text-sm font-normal text-muted-foreground">
+									<span className="font-normal text-muted-foreground text-sm">
 										({previewQuery.data?.count ?? 0} users matched)
 									</span>
 								)}
@@ -459,20 +488,20 @@ export default function GroupDetailClient({
 									className="flex items-center justify-between border-b px-4 py-2 last:border-b-0"
 								>
 									<div>
-										<span className="text-sm font-medium">
+										<span className="font-medium text-sm">
 											{user.firstName} {user.lastName}
 										</span>
-										<span className="ml-2 text-xs text-muted-foreground">
+										<span className="ml-2 text-muted-foreground text-xs">
 											{user.email}
 										</span>
 									</div>
-									<span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+									<span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700 text-xs">
 										preview
 									</span>
 								</div>
 							))}
 							{previewQuery.data?.count === 0 && (
-								<p className="px-4 py-6 text-center text-sm text-muted-foreground">
+								<p className="px-4 py-6 text-center text-muted-foreground text-sm">
 									No users match the current filters.
 								</p>
 							)}
@@ -485,20 +514,20 @@ export default function GroupDetailClient({
 									className="flex items-center justify-between border-b px-4 py-2 last:border-b-0"
 								>
 									<div>
-										<span className="text-sm font-medium">
+										<span className="font-medium text-sm">
 											{member.user.firstName} {member.user.lastName}
 										</span>
-										<span className="ml-2 text-xs text-muted-foreground">
+										<span className="ml-2 text-muted-foreground text-xs">
 											{member.user.email}
 										</span>
 									</div>
-									<span className="rounded-full bg-accent px-2 py-0.5 text-xs text-muted-foreground">
+									<span className="rounded-full bg-accent px-2 py-0.5 text-muted-foreground text-xs">
 										{member.source}
 									</span>
 								</div>
 							))}
 							{group.members.length === 0 && (
-								<p className="px-4 py-6 text-center text-sm text-muted-foreground">
+								<p className="px-4 py-6 text-center text-muted-foreground text-sm">
 									No members yet. Sync from filters or add manually.
 								</p>
 							)}
@@ -515,31 +544,108 @@ export default function GroupDetailClient({
 						Send History
 					</h2>
 				</div>
-				<div className="max-h-60 overflow-y-auto">
-					{historyQuery.data && historyQuery.data.length > 0 ? (
-						historyQuery.data.map((log: any) => (
-							<div
-								key={log.sendLogId}
-								className="border-b px-4 py-3 last:border-b-0"
-							>
-								<div className="flex items-center justify-between">
-									<span className="text-sm font-medium">{log.subject}</span>
-									<span className="text-xs text-muted-foreground">
-										{new Date(log.sentAt).toLocaleDateString()}
-									</span>
-								</div>
-								<p className="mt-0.5 text-xs text-muted-foreground">
-									Sent by {log.sender.firstName} {log.sender.lastName} to{" "}
-									{log.recipientCount} recipients
-								</p>
-							</div>
-						))
-					) : (
-						<p className="px-4 py-6 text-center text-sm text-muted-foreground">
-							No emails sent yet.
-						</p>
-					)}
-				</div>
+				{historyQuery.data && historyQuery.data.length > 0 ? (
+					<div className="overflow-x-auto">
+						<table className="w-full text-sm">
+							<thead>
+								<tr className="border-b bg-accent/30 font-medium text-muted-foreground text-xs">
+									<th className="px-4 py-2.5 text-left">Resend ID</th>
+									<th className="px-4 py-2.5 text-left">Subject</th>
+									<th className="px-4 py-2.5 text-left">Recipients</th>
+									<th className="px-4 py-2.5 text-left">Status</th>
+									<th className="px-4 py-2.5 text-left">Sent</th>
+								</tr>
+							</thead>
+							<tbody>
+								{historyQuery.data.map((log: any) => (
+									<tr
+										key={log.sendLogId}
+										className="border-b last:border-b-0 hover:bg-accent/20"
+									>
+										{/* Resend ID */}
+										<td className="px-4 py-3">
+											{log.resendId ? (
+												<span
+													title={log.resendId}
+													className="font-mono text-muted-foreground text-xs"
+												>
+													{log.resendId.slice(0, 16)}…
+												</span>
+											) : (
+												<span className="text-muted-foreground/50 text-xs">
+													—
+												</span>
+											)}
+										</td>
+										{/* Subject */}
+										<td className="px-4 py-3">
+											<span className="font-medium">{log.subject}</span>
+										</td>
+										{/* Group name + recipient count */}
+										<td className="px-4 py-3 text-muted-foreground">
+											{log.emailGroup?.name ?? group.name}
+											<span className="ml-1 text-xs">
+												· {log.recipientCount} sent
+												{log.skippedCount > 0 && (
+													<span className="ml-1 text-amber-600">
+														/ {log.skippedCount} skipped
+													</span>
+												)}
+											</span>
+										</td>
+										{/* Status badge */}
+										<td className="px-4 py-3">
+											<div className="flex flex-wrap gap-1">
+												{log.status === "sent" && (
+													<span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700 text-xs">
+														sent
+													</span>
+												)}
+												{log.status === "partial_failure" && (
+													<span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-700 text-xs">
+														partial
+													</span>
+												)}
+												{log.status === "failed" && (
+													<span className="rounded-full bg-red-100 px-2 py-0.5 font-medium text-red-700 text-xs">
+														API rejected
+													</span>
+												)}
+												{log.status === "sending" && (
+													<span className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-700 text-xs">
+														sending
+													</span>
+												)}
+												{!log.status && (
+													<span className="rounded-full bg-accent px-2 py-0.5 text-muted-foreground text-xs">
+														—
+													</span>
+												)}
+												{(log._count?.recipients ?? 0) > 0 && (
+													<span className="rounded-full bg-orange-100 px-2 py-0.5 font-medium text-orange-700 text-xs">
+														{log._count.recipients} bounced
+													</span>
+												)}
+											</div>
+										</td>
+										{/* Sent date */}
+										<td className="whitespace-nowrap px-4 py-3 text-muted-foreground text-xs">
+											{new Date(log.sentAt).toLocaleDateString(undefined, {
+												day: "numeric",
+												month: "short",
+												year: "numeric",
+											})}
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				) : (
+					<p className="px-4 py-6 text-center text-muted-foreground text-sm">
+						No emails sent yet.
+					</p>
+				)}
 			</div>
 			{/* Add Members Modal */}
 			<Dialog open={showAddModal} onOpenChange={setShowAddModal}>
@@ -552,13 +658,13 @@ export default function GroupDetailClient({
 					</DialogHeader>
 					<DialogBody>
 						<div className="relative">
-							<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+							<Search className="absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
 							<input
 								type="text"
 								placeholder="Search by name or email…"
 								value={addSearch}
 								onChange={(e) => setAddSearch(e.target.value)}
-								className="w-full rounded-md border py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+								className="w-full rounded-md border py-2 pr-3 pl-9 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
 							/>
 						</div>
 						<div className="max-h-60 overflow-y-auto rounded-md border">
@@ -567,8 +673,10 @@ export default function GroupDetailClient({
 									<RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
 								</div>
 							) : filteredSearchUsers.length === 0 ? (
-								<p className="px-3 py-6 text-center text-sm text-muted-foreground">
-									{addSearch ? "No matching users found." : "No users available to add."}
+								<p className="px-3 py-6 text-center text-muted-foreground text-sm">
+									{addSearch
+										? "No matching users found."
+										: "No users available to add."}
 								</p>
 							) : (
 								filteredSearchUsers.map((user: any) => {
@@ -586,25 +694,26 @@ export default function GroupDetailClient({
 												<span className="font-medium">
 													{user.firstName} {user.lastName}
 												</span>
-												<span className="ml-2 text-xs text-muted-foreground">
+												<span className="ml-2 text-muted-foreground text-xs">
 													{user.email}
 												</span>
 											</div>
-											{isSelected && (
-												<Check className="h-4 w-4 text-primary" />
-											)}
+											{isSelected && <Check className="h-4 w-4 text-primary" />}
 										</button>
 									);
 								})
 							)}
 						</div>
 						{selectedUserIds.length > 0 && (
-							<p className="text-xs text-muted-foreground">
-								{selectedUserIds.length} user{selectedUserIds.length > 1 ? "s" : ""} selected
+							<p className="text-muted-foreground text-xs">
+								{selectedUserIds.length} user
+								{selectedUserIds.length > 1 ? "s" : ""} selected
 							</p>
 						)}
 						{addMembersMutation.error && (
-							<p className="text-xs text-destructive">{addMembersMutation.error.message}</p>
+							<p className="text-destructive text-xs">
+								{addMembersMutation.error.message}
+							</p>
 						)}
 					</DialogBody>
 					<DialogFooter>
@@ -618,8 +727,10 @@ export default function GroupDetailClient({
 						<button
 							type="button"
 							onClick={handleAddMembers}
-							disabled={selectedUserIds.length === 0 || addMembersMutation.isPending}
-							className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+							disabled={
+								selectedUserIds.length === 0 || addMembersMutation.isPending
+							}
+							className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50"
 						>
 							<UserPlus className="h-3.5 w-3.5" />
 							{addMembersMutation.isPending ? "Adding…" : "Add Members"}

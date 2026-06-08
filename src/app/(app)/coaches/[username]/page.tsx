@@ -100,8 +100,7 @@ export async function generateMetadata(props: any): Promise<Metadata> {
 
 	return {
 		title: `${fullName} | Coach | Facility Presence`,
-		description:
-			coach.bio || `${fullName}, a coach on Facility Presence`,
+		description: coach.bio || `${fullName}, a coach on Facility Presence`,
 	};
 }
 

@@ -3,6 +3,7 @@
 import { Check, ChevronsUpDown, Plus, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Button } from "~/app/_components/shared/Button";
+import { useToast } from "~/app/_components/shared/Toast";
 import {
 	Command,
 	CommandEmpty,
@@ -16,7 +17,6 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "~/app/_components/shared/ui/popover";
-import { useToast } from "~/app/_components/shared/Toast";
 import { COLOR_OPTIONS } from "~/lib/constants";
 import { api } from "~/trpc/react";
 
@@ -43,10 +43,7 @@ function randomColorIndex(): number {
 // TagEditor
 // ---------------------------------------------------------------------------
 
-export function TagEditor({
-	selectedTagIds,
-	onChange,
-}: TagEditorProps) {
+export function TagEditor({ selectedTagIds, onChange }: TagEditorProps) {
 	const utils = api.useUtils();
 	const { toast } = useToast();
 	const [open, setOpen] = useState(false);
@@ -108,13 +105,10 @@ export function TagEditor({
 		[selectedTagIds, onChange],
 	);
 
-	const startCreate = useCallback(
-		(name: string) => {
-			setCreatingName(name);
-			setColorIdx(randomColorIndex());
-		},
-		[],
-	);
+	const startCreate = useCallback((name: string) => {
+		setCreatingName(name);
+		setColorIdx(randomColorIndex());
+	}, []);
 
 	const confirmCreate = useCallback(() => {
 		if (!creatingName) return;
@@ -160,7 +154,13 @@ export function TagEditor({
 			</p>
 
 			{/* Combobox */}
-			<Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setCreatingName(null); }}>
+			<Popover
+				open={open}
+				onOpenChange={(v) => {
+					setOpen(v);
+					if (!v) setCreatingName(null);
+				}}
+			>
 				<PopoverTrigger asChild>
 					<Button
 						variant="outline"
@@ -173,7 +173,10 @@ export function TagEditor({
 						<ChevronsUpDown size={14} className="ml-2 opacity-50" />
 					</Button>
 				</PopoverTrigger>
-				<PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+				<PopoverContent
+					className="w-[--radix-popover-trigger-width] p-0"
+					align="start"
+				>
 					{creatingName ? (
 						/* Inline color picker for new tag */
 						<div className="space-y-3 p-3">
@@ -204,10 +207,7 @@ export function TagEditor({
 											aria-label={c.label}
 										>
 											{i === colorIdx && (
-												<Check
-													size={12}
-													style={{ color: c.text }}
-												/>
+												<Check size={12} style={{ color: c.text }} />
 											)}
 										</button>
 									))}
@@ -229,9 +229,7 @@ export function TagEditor({
 									onClick={confirmCreate}
 									disabled={createTagMutation.isPending}
 								>
-									{createTagMutation.isPending
-										? "Creating..."
-										: "Create Tag"}
+									{createTagMutation.isPending ? "Creating..." : "Create Tag"}
 								</Button>
 							</div>
 						</div>
@@ -246,36 +244,23 @@ export function TagEditor({
 								<CommandEmpty>No tags found.</CommandEmpty>
 								<CommandGroup>
 									{sortedTags
-										.filter((t) =>
-											t.name.includes(trimmedSearch),
-										)
+										.filter((t) => t.name.includes(trimmedSearch))
 										.map((tag) => {
-											const isSelected =
-												selectedTagIds.includes(
-													tag.tagId,
-												);
+											const isSelected = selectedTagIds.includes(tag.tagId);
 											return (
 												<CommandItem
 													key={tag.tagId}
 													value={tag.tagId}
-													onSelect={() =>
-														toggleTag(tag.tagId)
-													}
-													disabled={
-														!isSelected &&
-														remaining <= 0
-													}
+													onSelect={() => toggleTag(tag.tagId)}
+													disabled={!isSelected && remaining <= 0}
 												>
 													<span
 														className="h-3 w-3 shrink-0 rounded-full"
 														style={{
-															backgroundColor:
-																tag.bgColor,
+															backgroundColor: tag.bgColor,
 														}}
 													/>
-													<span className="flex-1 capitalize">
-														{tag.name}
-													</span>
+													<span className="flex-1 capitalize">{tag.name}</span>
 													{isSelected && (
 														<Check
 															size={14}
@@ -292,9 +277,7 @@ export function TagEditor({
 									<CommandGroup>
 										<CommandItem
 											value={`create-${trimmedSearch}`}
-											onSelect={() =>
-												startCreate(trimmedSearch)
-											}
+											onSelect={() => startCreate(trimmedSearch)}
 										>
 											<Plus size={14} />
 											<span>

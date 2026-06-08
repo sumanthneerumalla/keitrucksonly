@@ -45,7 +45,12 @@ import { COLOR_OPTIONS } from "~/lib/constants";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
-type EventTypeValue = "BLOCK" | "BOOKABLE" | "COACHING_SLOT" | "RENTAL_WINDOW";
+type EventTypeValue =
+	| "BLOCK"
+	| "BOOKABLE"
+	| "COACHING_SLOT"
+	| "RENTAL_WINDOW"
+	| "DROP_IN";
 
 interface EventFormModalProps {
 	open?: boolean;
@@ -158,7 +163,10 @@ export default function EventFormModal({
 		} else if (selectedEvent) {
 			// New event — pre-fill times from clicked slot
 			setTitle("");
-			setResourceId(selectedEvent.resourceId?.toString() ?? "");
+			const clickedCourt = selectedEvent.resourceId?.toString() ?? "";
+			setResourceId(clickedCourt);
+			// Seed the multi-court picker (BOOKABLE/RENTAL_WINDOW) with the clicked court.
+			setResourceIds(clickedCourt ? [clickedCourt] : []);
 			setStart(toDatetimeLocal(selectedEvent.start));
 			setEnd(toDatetimeLocal(selectedEvent.end));
 			setAllDay(selectedEvent.allDay ?? false);
@@ -181,7 +189,27 @@ export default function EventFormModal({
 
 	// Populate rental-specific fields from fetchedEvent (async — arrives after modal opens)
 	useEffect(() => {
-		if (!fetchedEvent || fetchedEvent.eventType !== "RENTAL_WINDOW") return;
+		if (!fetchedEvent) return;
+		// BOOKABLE and DROP_IN use one flat "Courts" multi-select (like RENTAL_WINDOW).
+		// Hydrate it with the full set of courts — primary resourceId + any additional
+		// resourceIds, deduped — since the calendar lib renders on resourceIds when present.
+		if (
+			fetchedEvent.eventType === "BOOKABLE" ||
+			fetchedEvent.eventType === "DROP_IN"
+		) {
+			setResourceIds(
+				Array.from(
+					new Set(
+						[
+							fetchedEvent.resourceId,
+							...(fetchedEvent.resourceIds ?? []),
+						].filter((id): id is string => !!id),
+					),
+				),
+			);
+			return;
+		}
+		if (fetchedEvent.eventType !== "RENTAL_WINDOW") return;
 		setResourceIds(fetchedEvent.resourceIds ?? []);
 		setMaxBookingHours(fetchedEvent.maxBookingHours ?? 2);
 		setCancelCutoffHours(
@@ -524,6 +552,18 @@ export default function EventFormModal({
 		}
 
 		setSaving(true);
+		// BOOKABLE and DROP_IN (Rotation Play) use the flat "Courts" multi-select
+		// (`resourceIds` state). Store the first selection as the primary `resourceId`
+		// (single-court consumers still read it) and the FULL set as `resourceIds` only
+		// when 2+ courts — the calendar lib renders an event on `resourceIds` when
+		// present, so it must hold every reserved court. A single-court event keeps the
+		// legacy shape (resourceId set, no extras).
+		const usesMultiCourt = eventType === "BOOKABLE" || eventType === "DROP_IN";
+		const primaryResourceId = usesMultiCourt
+			? resourceIds[0] || undefined
+			: resourceId || undefined;
+		const multiCourtIds =
+			usesMultiCourt && resourceIds.length > 1 ? resourceIds : undefined;
 		if (isEdit && selectedEvent) {
 			const dbEventId =
 				((selectedEvent.data as Record<string, unknown> | undefined)
@@ -534,7 +574,11 @@ export default function EventFormModal({
 				title,
 				start: startDate,
 				end: endDate,
-				resourceId: resourceId || undefined,
+				resourceId: primaryResourceId,
+				// Send [] (not undefined) for single-court BOOKABLE so deselecting down to
+				// one court clears any previously-stored extra courts. undefined = "leave
+				// unchanged", which would strand stale resourceIds.
+				resourceIds: usesMultiCourt ? (multiCourtIds ?? []) : undefined,
 				allDay,
 				productId: productId || undefined,
 				// MVP: creditCost is always 1 for product-linked events. No UI input exists for
@@ -555,7 +599,8 @@ export default function EventFormModal({
 				title,
 				start: startDate,
 				end: endDate,
-				resourceId: resourceId || undefined,
+				resourceId: primaryResourceId,
+				resourceIds: multiCourtIds,
 				facilityId: facilityId || undefined,
 				allDay,
 				productId: productId || undefined,
@@ -656,6 +701,9 @@ export default function EventFormModal({
 								<option value="BOOKABLE">
 									Bookable — students can register
 								</option>
+								<option value="DROP_IN">
+									Rotation Play — managed drop-in games
+								</option>
 								<option value="BLOCK">Block — internal scheduling</option>
 								<option value="RENTAL_WINDOW">
 									Rental Window — court availability
@@ -683,26 +731,30 @@ export default function EventFormModal({
 						/>
 					</div>
 
-					{/* Resource (single) — hidden for RENTAL_WINDOW which uses multi-select below */}
-					{resources.length > 0 && eventType !== "RENTAL_WINDOW" && (
-						<div className="space-y-1">
-							<label className="font-medium text-[var(--foreground)] text-sm">
-								Resource
-							</label>
-							<Select
-								value={resourceId}
-								onChange={(e) => setResourceId(e.target.value)}
-								className="h-9"
-							>
-								<option value="">— No resource —</option>
-								{resources.map((r) => (
-									<option key={r.id} value={r.id}>
-										{r.title}
-									</option>
-								))}
-							</Select>
-						</div>
-					)}
+					{/* Resource (single) — for BLOCK / COACHING_SLOT. RENTAL_WINDOW and
+					    BOOKABLE use the flat multi-court "Courts" picker below instead. */}
+					{resources.length > 0 &&
+						eventType !== "RENTAL_WINDOW" &&
+						eventType !== "BOOKABLE" &&
+						eventType !== "DROP_IN" && (
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									Resource
+								</label>
+								<Select
+									value={resourceId}
+									onChange={(e) => setResourceId(e.target.value)}
+									className="h-9"
+								>
+									<option value="">— No resource —</option>
+									{resources.map((r) => (
+										<option key={r.id} value={r.id}>
+											{r.title}
+										</option>
+									))}
+								</Select>
+							</div>
+						)}
 
 					{/* Rental fields skeleton — shown while fetchedEvent is still loading on edit.
 					    Avoids the "empty fields flash" where courts/maxBookingHours/cutoff briefly
@@ -725,92 +777,107 @@ export default function EventFormModal({
 						</div>
 					)}
 
-					{/* Courts (multi-select) — RENTAL_WINDOW only */}
-					{eventType === "RENTAL_WINDOW" && (!isEdit || fetchedEvent) && (
-						<div className="space-y-1">
-							<label className="font-medium text-[var(--foreground)] text-sm">
-								Courts <span className="text-red-500">*</span>
-							</label>
-							<Popover open={courtPickerOpen} onOpenChange={setCourtPickerOpen}>
-								<PopoverTrigger asChild>
-									<button
-										type="button"
-										className="flex h-auto min-h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm transition-colors hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring"
-									>
-										<span
-											className={
-												resourceIds.length
-													? "flex flex-wrap gap-1 text-[var(--foreground)]"
-													: "text-[var(--muted-foreground)]"
-											}
-										>
-											{resourceIds.length ? (
-												resourceIds.map((rid) => {
-													const r = resources.find((res) => res.id === rid);
-													return (
-														<span
-															key={rid}
-															className="inline-flex items-center rounded-full bg-[var(--muted)] px-2 py-0.5 text-xs"
-														>
-															{r?.title ?? rid}
-														</span>
-													);
-												})
-											) : (
-												<>Select courts…</>
-											)}
-										</span>
-										<ChevronsUpDown
-											size={14}
-											className="ml-2 shrink-0 opacity-50"
-										/>
-									</button>
-								</PopoverTrigger>
-								<PopoverContent
-									className="w-[--radix-popover-trigger-width] p-0"
-									align="start"
+					{/* Courts (multi-select) — the single court control for both
+					    RENTAL_WINDOW and BOOKABLE. BOOKABLE uses it so a drop-in / open-play
+					    event can reserve several courts at once (optional for BOOKABLE,
+					    required for RENTAL_WINDOW). */}
+					{(eventType === "RENTAL_WINDOW" ||
+						eventType === "BOOKABLE" ||
+						eventType === "DROP_IN") &&
+						(!isEdit || fetchedEvent) && (
+							<div className="space-y-1">
+								<label className="font-medium text-[var(--foreground)] text-sm">
+									{eventType === "BOOKABLE" || eventType === "DROP_IN" ? (
+										"Courts"
+									) : (
+										<>
+											Courts <span className="text-red-500">*</span>
+										</>
+									)}
+								</label>
+								<Popover
+									open={courtPickerOpen}
+									onOpenChange={setCourtPickerOpen}
 								>
-									<Command>
-										<CommandInput placeholder="Search courts…" />
-										<CommandList>
-											<CommandEmpty>No courts found.</CommandEmpty>
-											<CommandGroup>
-												{resources.map((r) => {
-													const selected = resourceIds.includes(
-														r.id.toString(),
-													);
-													return (
-														<CommandItem
-															key={r.id}
-															value={r.title}
-															onSelect={() => {
-																const rid = r.id.toString();
-																setResourceIds((prev) =>
-																	prev.includes(rid)
-																		? prev.filter((p) => p !== rid)
-																		: [...prev, rid],
-																);
-															}}
-														>
-															<span className="mr-2 flex h-4 w-4 items-center justify-center">
-																{selected && <Check size={14} />}
+									<PopoverTrigger asChild>
+										<button
+											type="button"
+											className="flex h-auto min-h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm transition-colors hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring"
+										>
+											<span
+												className={
+													resourceIds.length
+														? "flex flex-wrap gap-1 text-[var(--foreground)]"
+														: "text-[var(--muted-foreground)]"
+												}
+											>
+												{resourceIds.length ? (
+													resourceIds.map((rid) => {
+														const r = resources.find((res) => res.id === rid);
+														return (
+															<span
+																key={rid}
+																className="inline-flex items-center rounded-full bg-[var(--muted)] px-2 py-0.5 text-xs"
+															>
+																{r?.title ?? rid}
 															</span>
-															{r.title}
-														</CommandItem>
-													);
-												})}
-											</CommandGroup>
-										</CommandList>
-									</Command>
-								</PopoverContent>
-							</Popover>
-							{resources.length === 0 && (
-								<p className="text-[var(--muted-foreground)] text-xs">
-									No courts found for this facility.
-								</p>
-							)}
-						</div>
-					)}
+														);
+													})
+												) : (
+													<>Select courts…</>
+												)}
+											</span>
+											<ChevronsUpDown
+												size={14}
+												className="ml-2 shrink-0 opacity-50"
+											/>
+										</button>
+									</PopoverTrigger>
+									<PopoverContent
+										className="w-[--radix-popover-trigger-width] p-0"
+										align="start"
+									>
+										<Command>
+											<CommandInput placeholder="Search courts…" />
+											<CommandList>
+												<CommandEmpty>No courts found.</CommandEmpty>
+												<CommandGroup>
+													{resources.map((r) => {
+														const selected = resourceIds.includes(
+															r.id.toString(),
+														);
+														return (
+															<CommandItem
+																key={r.id}
+																value={r.title}
+																onSelect={() => {
+																	const rid = r.id.toString();
+																	setResourceIds((prev) =>
+																		prev.includes(rid)
+																			? prev.filter((p) => p !== rid)
+																			: [...prev, rid],
+																	);
+																}}
+															>
+																<span className="mr-2 flex h-4 w-4 items-center justify-center">
+																	{selected && <Check size={14} />}
+																</span>
+																{r.title}
+															</CommandItem>
+														);
+													})}
+												</CommandGroup>
+											</CommandList>
+										</Command>
+									</PopoverContent>
+								</Popover>
+								{resources.length === 0 && (
+									<p className="text-[var(--muted-foreground)] text-xs">
+										No courts found for this facility.
+									</p>
+								)}
+							</div>
+						)}
 
 					{/* All day — hidden for RENTAL_WINDOW (always time-bounded) */}
 					{eventType !== "RENTAL_WINDOW" && (
@@ -1071,13 +1138,17 @@ export default function EventFormModal({
 							dbEventId &&
 							fetchedEvent &&
 							(fetchedEvent.eventType === "BOOKABLE" ||
-								fetchedEvent.eventType === "COACHING_SLOT") && (
+								fetchedEvent.eventType === "COACHING_SLOT" ||
+								fetchedEvent.eventType === "DROP_IN") && (
 								<Link
 									href={`/events/${dbEventId}`}
 									onClick={onClose}
 									className="inline-flex items-center gap-1.5 text-[var(--muted-foreground)] text-sm transition-colors hover:text-[var(--foreground)]"
 								>
-									<ExternalLink size={13} /> Event Page
+									<ExternalLink size={13} />{" "}
+									{fetchedEvent.eventType === "DROP_IN"
+										? "Open board"
+										: "Event Page"}
 								</Link>
 							)}
 					</div>

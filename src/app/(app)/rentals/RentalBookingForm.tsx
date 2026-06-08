@@ -1,12 +1,12 @@
 "use client";
 
-import { useAuth, SignInButton } from "@clerk/nextjs";
-import { useSearchParams, usePathname } from "next/navigation";
-import { useState, useMemo } from "react";
-import { Button } from "~/app/_components/shared/Button";
-import { AlertDialog } from "~/app/_components/shared/AlertDialog";
-import { useToast } from "~/app/_components/shared/Toast";
+import { SignInButton, useAuth } from "@clerk/nextjs";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useMemo, useState } from "react";
 import { formatTime } from "~/app/(app)/rentals/utils";
+import { AlertDialog } from "~/app/_components/shared/AlertDialog";
+import { Button } from "~/app/_components/shared/Button";
+import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -161,7 +161,6 @@ export default function RentalBookingForm({
 
 	return (
 		<div className="space-y-4">
-
 			{/* Court selector */}
 			{courts.length > 1 && (
 				<div className="space-y-1">
@@ -201,11 +200,7 @@ export default function RentalBookingForm({
 				>
 					<option value="">Select start time</option>
 					{startTimeOptions.map((opt) => (
-						<option
-							key={opt.value}
-							value={opt.value}
-							disabled={opt.disabled}
-						>
+						<option key={opt.value} value={opt.value} disabled={opt.disabled}>
 							{opt.label}
 							{opt.disabled ? " (unavailable)" : ""}
 						</option>
@@ -226,11 +221,7 @@ export default function RentalBookingForm({
 					>
 						<option value="">Select end time</option>
 						{endTimeOptions.map((opt) => (
-							<option
-								key={opt.value}
-								value={opt.value}
-								disabled={opt.disabled}
-							>
+							<option key={opt.value} value={opt.value} disabled={opt.disabled}>
 								{opt.label}
 								{opt.disabled ? " (unavailable)" : ""}
 							</option>
@@ -244,11 +235,7 @@ export default function RentalBookingForm({
 				{isSignedIn ? (
 					<Button
 						onClick={handleBookClick}
-						disabled={
-							!selectedStart ||
-							!selectedEnd ||
-							bookMutation.isPending
-						}
+						disabled={!selectedStart || !selectedEnd || bookMutation.isPending}
 					>
 						{bookMutation.isPending ? "Booking..." : "Book"}
 					</Button>

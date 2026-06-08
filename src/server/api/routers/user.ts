@@ -186,33 +186,42 @@ const getStudentDetailSchema = z.object({
 	userId: z.string(),
 });
 
-// Shape of the StudentProfile.profileData JSON blob (TD-1). Validated here at
+// Input shape for the per-club member record (MemberClubProfile). Validated at
 // the mutation boundary; the client-side ProfileFieldsCard owns its own matching
-// shape — small duplication is cheaper than a shared file for 5 fields.
+// shape — small duplication is cheaper than a shared file.
+// NOTE: dateOfBirth is NOT here — it is global on User.dateOfBirth (see
+// designFiles/per-club-profiles.md §4b). It rides as a sibling field on
+// updateStudentProfileDataSchema below and is written straight to User.
+// Caps match the MemberClubProfile columns (per-club-profiles.md §4).
 const studentProfileDataSchema = z
 	.object({
-		phone: z.string().trim().max(40).optional(),
-		dateOfBirth: z
-			.string()
-			.trim()
-			.regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
-			.optional(),
+		phone: z.string().trim().max(32).optional(),
+		streetAddress: z.string().trim().max(200).optional(),
+		city: z.string().trim().max(100).optional(),
+		state: z.string().trim().max(50).optional(),
+		zipCode: z.string().trim().max(20).optional(),
+		emergencyContactName: z.string().trim().max(120).optional(),
+		emergencyContactPhone: z.string().trim().max(32).optional(),
+		emergencyContactRelationship: z.string().trim().max(50).optional(),
+		referralSource: z.string().trim().max(120).optional(),
+		howHeard: z.string().trim().max(120).optional(),
 		medicalNotes: z.string().max(2000).optional(),
 		allergies: z.string().max(1000).optional(),
 		generalNotes: z.string().max(5000).optional(),
 	})
 	.partial();
 
-type StudentProfileData = z.infer<typeof studentProfileDataSchema>;
-
-function parseStudentProfileData(raw: unknown): StudentProfileData {
-	const result = studentProfileDataSchema.safeParse(raw ?? {});
-	return result.success ? result.data : {};
-}
-
 const updateStudentProfileDataSchema = z.object({
 	userId: z.string(),
 	profileData: studentProfileDataSchema,
+	// Date of birth is global (User.dateOfBirth). A YYYY-MM-DD string sets it;
+	// null clears it; undefined (key absent) leaves it untouched.
+	dateOfBirth: z
+		.string()
+		.trim()
+		.regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
+		.nullable()
+		.optional(),
 });
 
 // ============================================================
@@ -299,7 +308,11 @@ export const userRouter = createTRPCRouter({
 					create: {
 						clerkUserId: ctx.auth.userId,
 						userType: UserType.STUDENT, // Default to student
-						clubShortName: "cba",
+						// FK-valid placeholder club. The real "has the user picked a
+						// club?" signal is whether they have any UserClub rows — a brand
+						// new user has NONE, no activeFacilityId, and the OnboardedGuard
+						// redirects them to /join to find their organization + facility.
+						clubShortName: "shuttlementor",
 					},
 					include: {
 						studentProfile: true,
@@ -311,50 +324,6 @@ export const userRouter = createTRPCRouter({
 				console.log(
 					`Created new user profile for Clerk user: ${ctx.auth.userId}`,
 				);
-
-				// Backfill per-facility UserClub rows for the default club
-				if (user.clubShortName) {
-					const defaultFacilities = await ctx.db.clubFacility.findMany({
-						where: { clubShortName: user.clubShortName, isActive: true },
-						orderBy: { position: "asc" },
-						select: { facilityId: true },
-					});
-
-					for (const f of defaultFacilities) {
-						await ctx.db.userClub.upsert({
-							where: {
-								userId_facilityId: {
-									userId: user.userId,
-									facilityId: f.facilityId,
-								},
-							},
-							create: {
-								userId: user.userId,
-								clubShortName: user.clubShortName,
-								facilityId: f.facilityId,
-								role: user.userType,
-							},
-							update: {},
-						});
-					}
-
-					// Set active facility if not already set
-					if (!user.activeFacilityId && defaultFacilities[0]) {
-						await ctx.db.user.update({
-							where: { userId: user.userId },
-							data: { activeFacilityId: defaultFacilities[0].facilityId },
-						});
-						user = await ctx.db.user.findUnique({
-							where: { clerkUserId: ctx.auth.userId },
-							include: {
-								studentProfile: true,
-								coachProfile: true,
-								club: true,
-							},
-						});
-						if (!user) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-					}
-				}
 			} catch (error) {
 				// If there's a unique constraint violation, fetch the existing user
 				// This handles the extremely rare case of a race condition
@@ -1042,8 +1011,44 @@ export const userRouter = createTRPCRouter({
 			}));
 		}),
 
-	// Create a UserClub membership row for the calling user, then make it the active club.
-	// Idempotent — if already a member, just switches active club.
+	// List a club's active facilities — used by the /join facility picker for
+	// users who aren't members yet. Protected (parity with searchClubs).
+	listClubFacilities: protectedProcedure
+		.input(
+			z.object({
+				clubShortName: z
+					.string()
+					.regex(/^[a-zA-Z0-9-]+$/)
+					.min(1)
+					.max(50),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const sanitized = input.clubShortName.trim().toLowerCase();
+
+			const club = await ctx.db.club.findUnique({
+				where: { clubShortName: sanitized },
+				select: { clubShortName: true },
+			});
+			if (!club) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Club not found." });
+			}
+
+			return ctx.db.clubFacility.findMany({
+				where: { clubShortName: sanitized, isActive: true },
+				orderBy: { position: "asc" },
+				select: {
+					facilityId: true,
+					name: true,
+					city: true,
+					state: true,
+				},
+			});
+		}),
+
+	// Create a UserClub membership for the calling user at a SINGLE facility, then
+	// (for first-time joiners only) make it their active club + facility.
+	// Idempotent — re-joining a facility you already belong to is a no-op on the row.
 	joinClub: protectedProcedure
 		.input(
 			z.object({
@@ -1052,6 +1057,9 @@ export const userRouter = createTRPCRouter({
 					.regex(/^[a-zA-Z0-9-]+$/)
 					.min(1)
 					.max(50),
+				// Which facility to join. Optional only when the club has exactly one
+				// active facility (auto-selected); required when there are several.
+				facilityId: z.string().min(1).max(50).optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -1063,52 +1071,91 @@ export const userRouter = createTRPCRouter({
 				where: { clubShortName: sanitized },
 				select: { clubShortName: true, clubName: true },
 			});
-
 			if (!club) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Club not found.",
-				});
+				throw new TRPCError({ code: "NOT_FOUND", message: "Club not found." });
 			}
 
-			// Get all active facilities for this club
-			const clubFacilities = await ctx.db.clubFacility.findMany({
+			// Active facilities for this club
+			const activeFacilities = await ctx.db.clubFacility.findMany({
 				where: { clubShortName: sanitized, isActive: true },
 				orderBy: { position: "asc" },
 				select: { facilityId: true },
 			});
-
-			// Create one membership row per facility (idempotent — skip if already exists)
-			for (const f of clubFacilities) {
-				await ctx.db.userClub.upsert({
-					where: {
-						userId_facilityId: {
-							userId: user.userId,
-							facilityId: f.facilityId,
-						},
-					},
-					create: {
-						userId: user.userId,
-						clubShortName: sanitized,
-						facilityId: f.facilityId,
-						role: UserType.STUDENT,
-					},
-					update: {},
+			if (activeFacilities.length === 0) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "This club has no facilities yet.",
 				});
 			}
 
-			// Switch active club + set active facility to the first one
-			const firstFacilityId = clubFacilities[0]?.facilityId ?? null;
-			await ctx.db.user.update({
+			// Resolve the target facility: explicit choice, or auto-select the only one.
+			let targetFacilityId: string;
+			if (input.facilityId) {
+				const match = activeFacilities.find(
+					(f) => f.facilityId === input.facilityId,
+				);
+				if (!match) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Selected facility is not part of this club.",
+					});
+				}
+				targetFacilityId = match.facilityId;
+			} else {
+				// No explicit choice — only valid when the club has exactly one.
+				const only =
+					activeFacilities.length === 1 ? activeFacilities[0] : undefined;
+				if (!only) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Please choose a facility.",
+					});
+				}
+				targetFacilityId = only.facilityId;
+			}
+
+			// Only a first-ever join switches the user's active club/role. Joining an
+			// ADDITIONAL club must never demote an existing COACH/FACILITY user — their
+			// new membership is added but their active context is left untouched.
+			const priorMemberships = await ctx.db.userClub.count({
 				where: { userId: user.userId },
-				data: {
-					clubShortName: sanitized,
-					userType: UserType.STUDENT,
-					activeFacilityId: firstFacilityId,
+			});
+			const isFirstJoin = priorMemberships === 0;
+
+			// Create the membership row for the chosen facility (idempotent)
+			await ctx.db.userClub.upsert({
+				where: {
+					userId_facilityId: {
+						userId: user.userId,
+						facilityId: targetFacilityId,
+					},
 				},
+				create: {
+					userId: user.userId,
+					clubShortName: sanitized,
+					facilityId: targetFacilityId,
+					role: UserType.STUDENT,
+				},
+				update: {},
 			});
 
-			return { clubShortName: sanitized, clubName: club.clubName };
+			if (isFirstJoin) {
+				await ctx.db.user.update({
+					where: { userId: user.userId },
+					data: {
+						clubShortName: sanitized,
+						userType: UserType.STUDENT,
+						activeFacilityId: targetFacilityId,
+					},
+				});
+			}
+
+			return {
+				clubShortName: sanitized,
+				clubName: club.clubName,
+				facilityId: targetFacilityId,
+				switched: isFirstJoin,
+			};
 		}),
 
 	// Returns all clubs the current user is a member of (deduplicated from per-facility rows).
@@ -2110,13 +2157,34 @@ export const userRouter = createTRPCRouter({
 					profileImage: true,
 					userType: true,
 					createdAt: true,
+					dateOfBirth: true,
 					studentProfile: {
 						select: {
-							profileData: true,
 							profileImage: true,
 							profileImageType: true,
 							skillLevel: true,
 							bio: true,
+						},
+					},
+					// Per-club contact + sensitive notes for THIS club only — the
+					// legal-isolation boundary (per-club-profiles.md). Filtered by the
+					// caller's club, so other clubs' data is never returned. Zero or one row.
+					memberClubProfiles: {
+						where: { clubShortName: ctx.user.clubShortName },
+						select: {
+							phone: true,
+							streetAddress: true,
+							city: true,
+							state: true,
+							zipCode: true,
+							emergencyContactName: true,
+							emergencyContactPhone: true,
+							emergencyContactRelationship: true,
+							referralSource: true,
+							howHeard: true,
+							medicalNotes: true,
+							allergies: true,
+							generalNotes: true,
 						},
 					},
 					userTags: {
@@ -2132,6 +2200,9 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
+			// Missing-row contract: no MemberClubProfile yet → all fields null/absent.
+			const memberClubProfile = user.memberClubProfiles[0];
+
 			return {
 				user: {
 					userId: user.userId,
@@ -2141,12 +2212,11 @@ export const userRouter = createTRPCRouter({
 					profileImage: user.profileImage,
 					userType: user.userType,
 					createdAt: user.createdAt,
+					// Global single source of truth (see per-club-profiles.md §4b).
+					dateOfBirth: user.dateOfBirth,
 				},
 				studentProfile: user.studentProfile
 					? {
-							profileData: parseStudentProfileData(
-								user.studentProfile.profileData,
-							),
 							profileImage: binaryToBase64DataUrl(
 								user.studentProfile.profileImage,
 								user.studentProfile.profileImageType ?? "image/png",
@@ -2156,6 +2226,27 @@ export const userRouter = createTRPCRouter({
 							bio: user.studentProfile.bio,
 						}
 					: null,
+				// Per-club member data (phone + notes), sourced from MemberClubProfile
+				// for the caller's club. Top-level (not under studentProfile) because it
+				// is independent of whether a StudentProfile exists.
+				profileData: {
+					phone: memberClubProfile?.phone ?? undefined,
+					streetAddress: memberClubProfile?.streetAddress ?? undefined,
+					city: memberClubProfile?.city ?? undefined,
+					state: memberClubProfile?.state ?? undefined,
+					zipCode: memberClubProfile?.zipCode ?? undefined,
+					emergencyContactName:
+						memberClubProfile?.emergencyContactName ?? undefined,
+					emergencyContactPhone:
+						memberClubProfile?.emergencyContactPhone ?? undefined,
+					emergencyContactRelationship:
+						memberClubProfile?.emergencyContactRelationship ?? undefined,
+					referralSource: memberClubProfile?.referralSource ?? undefined,
+					howHeard: memberClubProfile?.howHeard ?? undefined,
+					medicalNotes: memberClubProfile?.medicalNotes ?? undefined,
+					allergies: memberClubProfile?.allergies ?? undefined,
+					generalNotes: memberClubProfile?.generalNotes ?? undefined,
+				},
 				tags: user.userTags.map((ut) => ({
 					tagId: ut.tag.tagId,
 					name: ut.tag.name,
@@ -2165,11 +2256,11 @@ export const userRouter = createTRPCRouter({
 			};
 		}),
 
-	// Upsert the StudentProfile.profileData JSON blob for a student in the
-	// caller's club. Full replace — the UI sends the whole object each save.
-	// Named `updateStudentProfileData` to avoid collision with the existing
-	// self-serve `updateStudentProfile` mutation (bio/skillLevel/avatar).
-	// See designFiles/roadmap/customer-feedback-ui-sprint.md (TD-1).
+	// Upsert the per-club member record (MemberClubProfile) for a student in the
+	// caller's club — the legal-isolation boundary (per-club-profiles.md). Writes
+	// phone + sensitive notes scoped to ctx.user.clubShortName; DOB is global and
+	// written to User.dateOfBirth. Named `updateStudentProfileData` to avoid
+	// collision with the self-serve `updateStudentProfile` (bio/skillLevel/avatar).
 	updateStudentProfileData: facilityProcedure
 		.input(updateStudentProfileDataSchema)
 		.mutation(async ({ ctx, input }) => {
@@ -2188,16 +2279,55 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
-			await ctx.db.studentProfile.upsert({
-				where: { userId: target.userId },
+			// Full replace of the staff-editable per-club fields — the card sends the
+			// whole object each save (an unset field arrives undefined → cleared to null).
+			const memberData = {
+				phone: input.profileData.phone ?? null,
+				streetAddress: input.profileData.streetAddress ?? null,
+				city: input.profileData.city ?? null,
+				state: input.profileData.state ?? null,
+				zipCode: input.profileData.zipCode ?? null,
+				emergencyContactName: input.profileData.emergencyContactName ?? null,
+				emergencyContactPhone: input.profileData.emergencyContactPhone ?? null,
+				emergencyContactRelationship:
+					input.profileData.emergencyContactRelationship ?? null,
+				referralSource: input.profileData.referralSource ?? null,
+				howHeard: input.profileData.howHeard ?? null,
+				medicalNotes: input.profileData.medicalNotes ?? null,
+				allergies: input.profileData.allergies ?? null,
+				generalNotes: input.profileData.generalNotes ?? null,
+			};
+			const upsertProfile = ctx.db.memberClubProfile.upsert({
+				where: {
+					userId_clubShortName: {
+						userId: target.userId,
+						clubShortName: ctx.user.clubShortName,
+					},
+				},
 				create: {
 					userId: target.userId,
-					profileData: input.profileData,
+					clubShortName: ctx.user.clubShortName,
+					...memberData,
 				},
-				update: {
-					profileData: input.profileData,
-				},
+				update: memberData,
 			});
+
+			// Date of birth is global. Parse at UTC-midnight to avoid TZ off-by-one.
+			// undefined → leave untouched; null → clear; "YYYY-MM-DD" → set.
+			const dob = input.dateOfBirth;
+			if (dob !== undefined) {
+				await ctx.db.$transaction([
+					upsertProfile,
+					ctx.db.user.update({
+						where: { userId: target.userId },
+						data: {
+							dateOfBirth: dob ? new Date(`${dob}T00:00:00.000Z`) : null,
+						},
+					}),
+				]);
+			} else {
+				await upsertProfile;
+			}
 
 			return { success: true as const };
 		}),

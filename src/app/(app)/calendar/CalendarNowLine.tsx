@@ -29,7 +29,7 @@ export function CalendarNowLine({
 				data-testid="calendar-now-line"
 			>
 				{/* The dashed brand-indigo rule, vertical */}
-				<div className="border-[var(--brand)] border-l border-dashed h-full" />
+				<div className="h-full border-[var(--brand)] border-l border-dashed" />
 				{/* Head circle pinned at the top edge — mirrors the vertical-axis
 				 * "pin in calendar" look. -1.5px horizontal offset so the 3px dot
 				 * centers on the line. */}

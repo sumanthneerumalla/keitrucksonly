@@ -1,6 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { auth } from "@clerk/nextjs/server";
 import { UserType } from "@prisma/client";
-import { readFile } from "node:fs/promises";
 import { db } from "~/server/db";
 
 // Tail of the container's runtime log. The log file is populated by

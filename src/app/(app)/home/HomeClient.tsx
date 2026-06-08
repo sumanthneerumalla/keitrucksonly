@@ -1,6 +1,8 @@
 "use client";
 
 import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
+import { TodayEventsCard } from "~/app/(app)/home/TodayEventsCard";
+import { UpcomingEventsCard } from "~/app/(app)/home/UpcomingEventsCard";
 import { isAnyAdmin } from "~/lib/utils";
 import { api } from "~/trpc/react";
 
@@ -26,6 +28,14 @@ export default function HomeClient() {
 								<h1 className="mb-6 font-bold text-3xl">
 									Welcome, {user.firstName || "Player"}!
 								</h1>
+
+								{user.userType === "STUDENT" && (
+									<div className="mb-6 space-y-6">
+										<TodayEventsCard />
+										<UpcomingEventsCard />
+									</div>
+								)}
+
 								<div className="glass-card rounded-lg p-6">
 									<h2 className="mb-4 font-semibold text-xl">Your Dashboard</h2>
 									<p className="mb-4 text-gray-600">

@@ -11,9 +11,9 @@ import { HomePage } from "../../page";
  *
  * Flow:
  * 1. User visits /club/{clubShortName} (or short URL /{clubShortName})
- * 2. SignIn/SignUp buttons include forceRedirectUrl="/profile?joinClub={clubShortName}"
- * 3. After Clerk auth, user is redirected to /profile with joinClub param
- * 4. Profile page reads param and calls updateProfile to set user's club
+ * 2. SignIn/SignUp buttons include forceRedirectUrl="/join?clubShortName={clubShortName}"
+ * 3. After Clerk auth, user lands on /join pre-targeted at that club
+ * 4. User picks a facility; joinClub creates the membership and continues to /profile
  *
  */
 interface ClubPageProps {

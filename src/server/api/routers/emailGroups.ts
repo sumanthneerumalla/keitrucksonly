@@ -1,12 +1,39 @@
 // @ts-nocheck
-// TODO: Remove @ts-nocheck after running `prisma generate` with the email groups migration applied.
+// Pre-existing type issues in this file (implicit `any` in filter callbacks, isAnyAdmin
+// call signatures, Prisma JSON null handling, include return types) existed before
+// this migration. Remove @ts-nocheck only after addressing those upstream first.
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { createTRPCRouter, staffProcedure } from "~/server/api/trpc";
+import { reconcileStaleSendLogs } from "~/server/services/email/sendLog";
 import {
-	createTRPCRouter,
-	staffProcedure,
-} from "~/server/api/trpc";
-import { getCurrentUser, isAnyAdmin } from "~/server/utils/utils";
+	getCurrentUser,
+	isAnyAdmin,
+	isPlatformAdmin,
+} from "~/server/utils/utils";
+
+// Ensures the caller is allowed to read data scoped to `facilityId`. Platform
+// admins may target any facility; everyone else is confined to facilities that
+// belong to their own club (cross-tenant guard). Throws NOT_FOUND / FORBIDDEN.
+async function assertFacilityInCallerClub(
+	ctx: { db: any },
+	user: { userType: string; clubShortName: string },
+	facilityId: string,
+) {
+	const facility = await ctx.db.clubFacility.findUnique({
+		where: { facilityId },
+		select: { clubShortName: true },
+	});
+	if (!facility) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Facility not found" });
+	}
+	if (!isPlatformAdmin(user) && facility.clubShortName !== user.clubShortName) {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message: "You can only access facilities in your own club",
+		});
+	}
+}
 
 // ─── Zod Schemas ────────────────────────────────────────────────────────────
 
@@ -36,17 +63,9 @@ function computeAge(dateOfBirth: Date): number {
 // ─── Helper: get users matching filters at a facility ──────────────────────
 
 function getDateOfBirth(user: any): Date | null {
-	// Prefer the promoted User.dateOfBirth column
-	if (user.dateOfBirth) return new Date(user.dateOfBirth);
-
-	// Fall back to StudentProfile.profileData JSON blob
-	const profileData = user.studentProfile?.profileData;
-	if (profileData && typeof profileData === "object" && profileData.dateOfBirth) {
-		const parsed = new Date(profileData.dateOfBirth);
-		if (!Number.isNaN(parsed.getTime())) return parsed;
-	}
-
-	return null;
+	// DOB is global on User.dateOfBirth (the staff card now writes it there; see
+	// designFiles/per-club-profiles.md §4b). No more profileData fallback.
+	return user.dateOfBirth ? new Date(user.dateOfBirth) : null;
 }
 
 async function getUsersMatchingFilters(
@@ -69,7 +88,6 @@ async function getUsersMatchingFilters(
 					firstName: true,
 					lastName: true,
 					dateOfBirth: true,
-					studentProfile: { select: { profileData: true } },
 					userTags: { select: { tagId: true } },
 				},
 			},
@@ -118,7 +136,12 @@ export const emailGroupsRouter = createTRPCRouter({
 
 			// Verify user belongs to this facility
 			const membership = await ctx.db.userClub.findUnique({
-				where: { userId_facilityId: { userId: user.userId, facilityId: input.facilityId } },
+				where: {
+					userId_facilityId: {
+						userId: user.userId,
+						facilityId: input.facilityId,
+					},
+				},
 			});
 			if (!membership && !isAnyAdmin(user)) {
 				throw new TRPCError({
@@ -179,7 +202,10 @@ export const emailGroupsRouter = createTRPCRouter({
 
 			// Only creator or admins can update
 			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can edit this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can edit this group",
+				});
 			}
 
 			const updated = await ctx.db.emailGroup.update({
@@ -204,8 +230,14 @@ export const emailGroupsRouter = createTRPCRouter({
 				});
 
 				// Add new matched users
-				const matchedUsers = await getUsersMatchingFilters(ctx.db, group.facilityId, input.filterConfig);
-				const usersToAdd = matchedUsers.filter((u) => !excludedUserIds.has(u.userId));
+				const matchedUsers = await getUsersMatchingFilters(
+					ctx.db,
+					group.facilityId,
+					input.filterConfig,
+				);
+				const usersToAdd = matchedUsers.filter(
+					(u) => !excludedUserIds.has(u.userId),
+				);
 
 				if (usersToAdd.length > 0) {
 					await ctx.db.emailGroupMember.createMany({
@@ -222,7 +254,7 @@ export const emailGroupsRouter = createTRPCRouter({
 			return updated;
 		}),
 
-	// Delete a group
+	// Soft-delete a group (preserves send history referential integrity)
 	delete: staffProcedure
 		.input(z.object({ emailGroupId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
@@ -235,19 +267,25 @@ export const emailGroupsRouter = createTRPCRouter({
 			}
 
 			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can delete this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can delete this group",
+				});
 			}
 
-			await ctx.db.emailGroup.delete({ where: { emailGroupId: input.emailGroupId } });
+			await ctx.db.emailGroup.update({
+				where: { emailGroupId: input.emailGroupId },
+				data: { archivedAt: new Date() },
+			});
 			return { success: true };
 		}),
 
-	// Get groups the current user is a member of
+	// Get groups the current user is a member of (excludes archived)
 	getMyGroups: staffProcedure.query(async ({ ctx }) => {
 		const user = await getCurrentUser(ctx);
 
 		const memberships = await ctx.db.emailGroupMember.findMany({
-			where: { userId: user.userId },
+			where: { userId: user.userId, emailGroup: { archivedAt: null } },
 			select: {
 				emailGroup: {
 					include: {
@@ -262,17 +300,22 @@ export const emailGroupsRouter = createTRPCRouter({
 		return memberships.map((m) => m.emailGroup);
 	}),
 
-	// Get all groups at a facility (platform/club admin only)
+	// Get all groups at a facility (platform/club admin only, excludes archived)
 	getAllForFacility: staffProcedure
 		.input(z.object({ facilityId: z.string() }))
 		.query(async ({ ctx, input }) => {
 			const user = await getCurrentUser(ctx);
 			if (!isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Admin access required",
+				});
 			}
+			// Cross-tenant guard: a club admin must not read another club's facility.
+			await assertFacilityInCallerClub(ctx, user, input.facilityId);
 
 			return ctx.db.emailGroup.findMany({
-				where: { facilityId: input.facilityId },
+				where: { facilityId: input.facilityId, archivedAt: null },
 				include: {
 					_count: { select: { members: true } },
 					createdByUser: { select: { firstName: true, lastName: true } },
@@ -281,28 +324,43 @@ export const emailGroupsRouter = createTRPCRouter({
 			});
 		}),
 
-	// Get group detail with members
+	// Get group detail with members (returns NOT_FOUND for archived groups)
 	getById: staffProcedure
 		.input(z.object({ emailGroupId: z.string() }))
 		.query(async ({ ctx, input }) => {
 			const user = await getCurrentUser(ctx);
 
-			const group = await ctx.db.emailGroup.findUnique({
-				where: { emailGroupId: input.emailGroupId },
+			const group = await ctx.db.emailGroup.findFirst({
+				where: { emailGroupId: input.emailGroupId, archivedAt: null },
 				include: {
 					members: {
 						include: {
 							user: {
-								select: { userId: true, email: true, firstName: true, lastName: true, profileImage: true },
+								select: {
+									userId: true,
+									email: true,
+									firstName: true,
+									lastName: true,
+									profileImage: true,
+								},
 							},
 						},
 					},
 					exclusions: {
 						include: {
-							user: { select: { userId: true, email: true, firstName: true, lastName: true } },
+							user: {
+								select: {
+									userId: true,
+									email: true,
+									firstName: true,
+									lastName: true,
+								},
+							},
 						},
 					},
-					createdByUser: { select: { userId: true, firstName: true, lastName: true } },
+					createdByUser: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
 					facility: { select: { facilityId: true, name: true } },
 					_count: { select: { sendLogs: true } },
 				},
@@ -315,7 +373,10 @@ export const emailGroupsRouter = createTRPCRouter({
 			// Check access: must be member or admin
 			const isMember = group.members.some((m) => m.userId === user.userId);
 			if (!isMember && !isAnyAdmin(user)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not a member of this group",
+				});
 			}
 
 			return group;
@@ -334,8 +395,11 @@ export const emailGroupsRouter = createTRPCRouter({
 			if (!group) {
 				throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
 			}
-			if (group.createdByUserId !== user.userId && !isAnyAdmin(user.userType)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can sync members" });
+			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can sync members",
+				});
 			}
 
 			const filterConfig = group.filterConfig as FilterConfig | null;
@@ -350,10 +414,16 @@ export const emailGroupsRouter = createTRPCRouter({
 				return { added: 0, removed: 0 };
 			}
 
-			const matchedUsers = await getUsersMatchingFilters(ctx.db, group.facilityId, filterConfig);
+			const matchedUsers = await getUsersMatchingFilters(
+				ctx.db,
+				group.facilityId,
+				filterConfig,
+			);
 
 			// Only add users who are not excluded
-			const usersToAdd = matchedUsers.filter((u) => !excludedUserIds.has(u.userId));
+			const usersToAdd = matchedUsers.filter(
+				(u) => !excludedUserIds.has(u.userId),
+			);
 
 			if (usersToAdd.length > 0) {
 				await ctx.db.emailGroupMember.createMany({
@@ -385,8 +455,11 @@ export const emailGroupsRouter = createTRPCRouter({
 			if (!group) {
 				throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
 			}
-			if (group.createdByUserId !== user.userId && !isAnyAdmin(user.userType)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can add members" });
+			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can add members",
+				});
 			}
 
 			// Remove any exclusions for these users (they're being re-added)
@@ -425,8 +498,11 @@ export const emailGroupsRouter = createTRPCRouter({
 			if (!group) {
 				throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
 			}
-			if (group.createdByUserId !== user.userId && !isAnyAdmin(user.userType)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "Only the group admin can remove members" });
+			if (group.createdByUserId !== user.userId && !isAnyAdmin(user)) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the group admin can remove members",
+				});
 			}
 
 			// Delete membership rows
@@ -464,7 +540,10 @@ export const emailGroupsRouter = createTRPCRouter({
 			// Add exclusion
 			await ctx.db.emailGroupExclusion.upsert({
 				where: {
-					emailGroupId_userId: { emailGroupId: input.emailGroupId, userId: user.userId },
+					emailGroupId_userId: {
+						emailGroupId: input.emailGroupId,
+						userId: user.userId,
+					},
 				},
 				create: {
 					emailGroupId: input.emailGroupId,
@@ -491,7 +570,10 @@ export const emailGroupsRouter = createTRPCRouter({
 			// Add back as member
 			await ctx.db.emailGroupMember.upsert({
 				where: {
-					emailGroupId_userId: { emailGroupId: input.emailGroupId, userId: user.userId },
+					emailGroupId_userId: {
+						emailGroupId: input.emailGroupId,
+						userId: user.userId,
+					},
 				},
 				create: {
 					emailGroupId: input.emailGroupId,
@@ -513,7 +595,11 @@ export const emailGroupsRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const users = await getUsersMatchingFilters(ctx.db, input.facilityId, input.filterConfig);
+			const users = await getUsersMatchingFilters(
+				ctx.db,
+				input.facilityId,
+				input.filterConfig,
+			);
 			return {
 				count: users.length,
 				users: users.map((u) => ({
@@ -525,6 +611,48 @@ export const emailGroupsRouter = createTRPCRouter({
 			};
 		}),
 
+	// Get send history for the active facility (for the list page). Scoped to a
+	// single facility so a club admin never sees another club's/facility's sends.
+	getAllSendHistory: staffProcedure
+		.input(z.object({ facilityId: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const user = await getCurrentUser(ctx);
+			// Cross-tenant guard: confine non-platform admins to their own club's facility.
+			await assertFacilityInCallerClub(ctx, user, input.facilityId);
+
+			const accessibleGroups = await ctx.db.emailGroup.findMany({
+				where: isAnyAdmin(user)
+					? { facilityId: input.facilityId, archivedAt: null }
+					: {
+							facilityId: input.facilityId,
+							archivedAt: null,
+							members: { some: { userId: user.userId } },
+						},
+				select: { emailGroupId: true },
+			});
+
+			const groupIds = accessibleGroups.map((g) => g.emailGroupId);
+
+			const logs = await ctx.db.emailSendLog.findMany({
+				where: { emailGroupId: { in: groupIds }, isTest: false },
+				include: {
+					sender: { select: { firstName: true, lastName: true, email: true } },
+					emailGroup: { select: { name: true } },
+					_count: {
+						select: {
+							recipients: { where: { bouncedAt: { not: null } } },
+						},
+					},
+				},
+				orderBy: { sentAt: "desc" },
+				take: 30,
+			});
+
+			// Lazy-on-read recovery: flip any send stuck in "sending" past the
+			// stale window to its real terminal status, derived from its rows.
+			return reconcileStaleSendLogs(logs);
+		}),
+
 	// Get send history for a group
 	getSendHistory: staffProcedure
 		.input(z.object({ emailGroupId: z.string() }))
@@ -533,19 +661,36 @@ export const emailGroupsRouter = createTRPCRouter({
 
 			// Verify membership or admin
 			const membership = await ctx.db.emailGroupMember.findUnique({
-				where: { emailGroupId_userId: { emailGroupId: input.emailGroupId, userId: user.userId } },
+				where: {
+					emailGroupId_userId: {
+						emailGroupId: input.emailGroupId,
+						userId: user.userId,
+					},
+				},
 			});
 			if (!membership && !isAnyAdmin(user.userType)) {
-				throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this group" });
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not a member of this group",
+				});
 			}
 
-			return ctx.db.emailSendLog.findMany({
-				where: { emailGroupId: input.emailGroupId },
+			const logs = await ctx.db.emailSendLog.findMany({
+				where: { emailGroupId: input.emailGroupId, isTest: false },
 				include: {
 					sender: { select: { firstName: true, lastName: true, email: true } },
+					emailGroup: { select: { name: true } },
+					_count: {
+						select: {
+							recipients: { where: { bouncedAt: { not: null } } },
+						},
+					},
 				},
 				orderBy: { sentAt: "desc" },
 				take: 50,
 			});
+
+			// Lazy-on-read recovery (see getAllSendHistory).
+			return reconcileStaleSendLogs(logs);
 		}),
 });

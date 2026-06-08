@@ -103,9 +103,7 @@ export default function ProductFormModal({
 				isPubliclyListed,
 				publicDescription: publicDescription.trim() || null,
 				// undefined = don't touch existing image; null/string = set/clear
-				...(publicImageDataUrl !== undefined
-					? { publicImageDataUrl }
-					: {}),
+				...(publicImageDataUrl !== undefined ? { publicImageDataUrl } : {}),
 			});
 		} else {
 			createMutation.mutate({
@@ -117,9 +115,7 @@ export default function ProductFormModal({
 				currency: "usd",
 				isPubliclyListed,
 				publicDescription: publicDescription.trim() || null,
-				...(publicImageDataUrl !== undefined
-					? { publicImageDataUrl }
-					: {}),
+				...(publicImageDataUrl !== undefined ? { publicImageDataUrl } : {}),
 			});
 		}
 	};
@@ -188,7 +184,10 @@ export default function ProductFormModal({
 										return (
 											<optgroup key={parent.categoryId} label={parent.name}>
 												{children.map((child) => (
-													<option key={child.categoryId} value={child.categoryId}>
+													<option
+														key={child.categoryId}
+														value={child.categoryId}
+													>
 														{child.name}
 													</option>
 												))}

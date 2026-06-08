@@ -196,11 +196,15 @@ function CreateUserModal({
 
 				<DialogBody>
 					<div className="space-y-2">
-						<label className="font-medium text-[var(--foreground)] text-sm">
+						<label
+							htmlFor="client-first-name"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
 							Name
 						</label>
 						<div className="grid grid-cols-2 gap-2">
 							<Input
+								id="client-first-name"
 								placeholder="First name"
 								value={firstName}
 								onChange={(e) => setFirstName(e.target.value)}
@@ -214,10 +218,14 @@ function CreateUserModal({
 					</div>
 
 					<div className="space-y-2">
-						<label className="font-medium text-[var(--foreground)] text-sm">
+						<label
+							htmlFor="client-email"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
 							Email
 						</label>
 						<Input
+							id="client-email"
 							placeholder="email@example.com"
 							type="email"
 							value={email}
@@ -226,10 +234,14 @@ function CreateUserModal({
 					</div>
 
 					<div className="space-y-2">
-						<label className="font-medium text-[var(--foreground)] text-sm">
+						<label
+							htmlFor="client-gender"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
 							Gender
 						</label>
 						<Select
+							id="client-gender"
 							value={gender}
 							onChange={(e) => setGender(e.target.value as Gender | "")}
 						>
@@ -241,10 +253,14 @@ function CreateUserModal({
 
 					<div className="grid grid-cols-2 gap-4">
 						<div className="space-y-2">
-							<label className="font-medium text-[var(--foreground)] text-sm">
+							<label
+								htmlFor="client-role"
+								className="font-medium text-[var(--foreground)] text-sm"
+							>
 								Role
 							</label>
 							<Select
+								id="client-role"
 								value={role}
 								onChange={(e) => setRole(e.target.value as UserRole)}
 							>
@@ -258,10 +274,14 @@ function CreateUserModal({
 
 						{!createNewClub && (
 							<div className="space-y-2">
-								<label className="font-medium text-[var(--foreground)] text-sm">
+								<label
+									htmlFor="client-facility"
+									className="font-medium text-[var(--foreground)] text-sm"
+								>
 									Facility
 								</label>
 								<Select
+									id="client-facility"
 									value={facilityId}
 									onChange={(e) => setFacilityId(e.target.value)}
 								>
@@ -310,7 +330,10 @@ function CreateUserModal({
 
 					{/* Tags */}
 					<div className="space-y-2">
-						<label className="font-medium text-[var(--foreground)] text-sm">
+						<label
+							htmlFor="client-tags"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
 							Tags
 						</label>
 						<TagEditor

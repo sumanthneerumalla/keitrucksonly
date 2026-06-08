@@ -1,5 +1,5 @@
-import { TRPCError } from "@trpc/server";
 import type { PrismaClient } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
 	clubAdminProcedure,
@@ -42,10 +42,11 @@ async function getCategoryDepth(
 	let currentId: string | null = categoryId;
 
 	while (currentId) {
-		const cat: { parentCategoryId: string | null } | null = await db.productCategory.findUnique({
-			where: { categoryId: currentId },
-			select: { parentCategoryId: true },
-		});
+		const cat: { parentCategoryId: string | null } | null =
+			await db.productCategory.findUnique({
+				where: { categoryId: currentId },
+				select: { parentCategoryId: true },
+			});
 		if (!cat?.parentCategoryId) break;
 		currentId = cat.parentCategoryId;
 		depth++;
@@ -142,8 +143,14 @@ export const categoriesRouter = createTRPCRouter({
 			}
 
 			// If changing parent, enforce 2-level cap
-			if (data.parentCategoryId !== undefined && data.parentCategoryId !== null) {
-				const parentDepth = await getCategoryDepth(ctx.db, data.parentCategoryId);
+			if (
+				data.parentCategoryId !== undefined &&
+				data.parentCategoryId !== null
+			) {
+				const parentDepth = await getCategoryDepth(
+					ctx.db,
+					data.parentCategoryId,
+				);
 				if (parentDepth >= 1) {
 					throw new TRPCError({
 						code: "BAD_REQUEST",

@@ -63,8 +63,8 @@ import {
 	AUDIT_SOURCES,
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
+import { getConfig } from "~/server/utils/config";
 import { recordRefundInternal } from "~/server/utils/invoicePayments";
-import { getPlatformConfig } from "~/server/utils/platformConfig";
 import {
 	getCurrentUser,
 	isFacilityOrAbove,
@@ -885,16 +885,15 @@ export const paymentsRouter = createTRPCRouter({
 
 	/**
 	 * Returns the Stripe publishable key resolved via env-first / DB-fallback
-	 * (see `getPlatformConfig`). `publicProcedure` because guest checkouts on
+	 * (see `getConfig`). `publicProcedure` because guest checkouts on
 	 * `/checkout/[sessionId]` need to load Stripe.js without a logged-in user.
 	 * The CheckoutPage server component is the primary caller (passes the key
 	 * down to CheckoutClient as a prop); this tRPC procedure exists for any
 	 * future client-only surface that needs to load Stripe.js.
 	 */
 	getPublishableKey: publicProcedure.query(async () => {
-		const publishableKey = await getPlatformConfig(
+		const publishableKey = await getConfig(
 			"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
-			"stripe_publishable_key",
 		);
 		if (!publishableKey) {
 			throw new TRPCError({
@@ -1059,15 +1058,12 @@ export const paymentsRouter = createTRPCRouter({
 			// onto Stripe's own domain after onboarding. Resolve via env-first
 			// / DB-fallback so the owner can configure this without SSH (same
 			// no-SSH workaround pattern the Stripe secrets use, §24/§25).
-			const appUrlRaw = await getPlatformConfig(
-				"NEXT_PUBLIC_APP_URL",
-				"app_url",
-			);
+			const appUrlRaw = await getConfig("NEXT_PUBLIC_APP_URL");
 			if (!appUrlRaw) {
 				throw new TRPCError({
 					code: "PRECONDITION_FAILED",
 					message:
-						'App URL not configured. Set NEXT_PUBLIC_APP_URL env var or add platform_config row with key "app_url" (e.g., https://www.dev.facilitypresence.com).',
+						'App URL not configured. Set the NEXT_PUBLIC_APP_URL env var or add a PlatformConfig row with key "NEXT_PUBLIC_APP_URL" (e.g., https://www.dev.facilitypresence.com).',
 				});
 			}
 			// Strip trailing slashes so the resulting URL doesn't end up with

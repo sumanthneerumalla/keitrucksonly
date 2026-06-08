@@ -24,6 +24,7 @@ services:
       - BUILD_TIMESTAMP=${BUILD_TIMESTAMP:-unknown}
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-}
+      - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-}
     volumes:
       # For development: mount source code for hot reloading
       - ./src:/app/src
@@ -33,8 +34,11 @@ services:
       - ./tailwind.config.js:/app/tailwind.config.js
       - ./postcss.config.js:/app/postcss.config.js
       - ./tsconfig.json:/app/tsconfig.json
-      # Exclude node_modules and .next to avoid overwriting container's versions
-      - /app/node_modules
+      # NOTE: node_modules is NOT mounted as a volume. The dev setup bind-mounts
+      # only specific subdirs (not the project root), so the host's node_modules
+      # can never shadow the container's — making the old anonymous-volume guard
+      # unnecessary. node_modules lives in the image layer (built by `deps`),
+      # which avoids the slow per-`up` volume reseed and volume accumulation.
       # NOTE: We do not mount /app/.next as a volume to avoid permission issues
     depends_on:
       db:

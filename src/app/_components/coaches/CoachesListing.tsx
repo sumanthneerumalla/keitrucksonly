@@ -2,10 +2,10 @@
 
 import { Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useUrlPagination } from "~/app/_components/hooks/use-url-pagination";
 import { CoachCard } from "~/app/_components/coaches/CoachCard";
-import { Select } from "~/app/_components/shared/ui/select";
+import { useUrlPagination } from "~/app/_components/hooks/use-url-pagination";
 import { PaginationControls } from "~/app/_components/shared/ui/pagination-controls";
+import { Select } from "~/app/_components/shared/ui/select";
 import { api } from "~/trpc/react";
 
 // Define the type locally since we're not importing from a schema file

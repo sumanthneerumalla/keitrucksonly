@@ -105,11 +105,13 @@ This split is the result of three code investigations (2026-06-02): FP already s
 
 > Ordering delivers value early: MANUAL proves the scaffolding, **TIMED solves the core squatting pain**, then MATCH + GBR add the competitive draw.
 
-### DI-1 — Foundations + MANUAL mode
-1. `DROP_IN` `EventType`; `DropInSession`, `DropInCheckIn` models + enums (migration).
-2. tRPC `dropIn` router: create/start/end session; check-in / waitlist / cancel.
-3. `/events/[id]` drop-in view: session status, roster, check-in button (reuses Phase 6/7 patterns + `creditCost` for the fee).
-4. Ships MANUAL end-to-end — no matches, no GBR.
+### DI-1 — Foundations (casual drop-in needs NO new feature)
+> **FINAL 2026-06-06 (owner):** casual drop-in = **just a multi-court `BOOKABLE` event** (owners title it "Drop-In"). Registration, payment, member self-check-in, and front-desk all come free from a normal Bookable event. So there is **no `DROP_IN` event type for casual, no "Rotation Play" option, and no DI-1c.** The `DROP_IN` type + `DropInSession` + `dropIn` router (DI-1a/DI-1b, shipped) are reserved **strictly** for the live-rotation feature (DI-2/DI-4) — the one thing a Bookable event can't be. See [open-questions.md](./open-questions.md) "Resolved (owner, 2026-06-06)".
+
+1. ✅ `DROP_IN` `EventType`; `DropInSession`, `DropInCheckIn` models + enums (migration) — DI-1a. *(Reserved for TIMED/MATCH; unused by casual.)*
+2. ✅ tRPC `dropIn` router: start/end session; check-in / waitlist / cancel — DI-1b. *(Reserved for TIMED/MATCH.)*
+3. ✅ **Multi-court on Bookable** (2026-06-06, uncommitted, quick version): BOOKABLE events use a flat "Courts" multi-select (same picker as Rental Window) and can reserve several courts; first court → `resourceId`, full set → `resourceIds`; `calendar.ts` conflict check loops every court. Known conflict-detection gap documented in [multi-court-conflict-TODO.md](./multi-court-conflict-TODO.md).
+4. ~~DI-1c casual UI~~ — **CANCELLED**; not needed.
 
 ### DI-2 — TIMED rotation + board + audio
 1. Group formation from the waiting pool; per-court countdown + **audio horn** on expiry.

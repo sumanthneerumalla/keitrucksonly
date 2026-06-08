@@ -1,14 +1,14 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { useState } from "react";
 import { CalendarDays, Clock, MapPin } from "lucide-react";
-import { Button } from "~/app/_components/shared/Button";
-import { AlertDialog } from "~/app/_components/shared/AlertDialog";
-import { useToast } from "~/app/_components/shared/Toast";
-import { toDateInputValue, parseLocalDate } from "~/app/(app)/rentals/utils";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
 import RentalBookingForm from "~/app/(app)/rentals/RentalBookingForm";
+import { parseLocalDate, toDateInputValue } from "~/app/(app)/rentals/utils";
+import { AlertDialog } from "~/app/_components/shared/AlertDialog";
+import { Button } from "~/app/_components/shared/Button";
+import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
 
 // ─── Main Page Component ────────────────────────────────────────────────────
@@ -35,7 +35,9 @@ export default function RentalsClient() {
 	const windowParam = searchParams.get("window");
 
 	// Date state
-	const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(new Date()));
+	const [selectedDate, setSelectedDate] = useState(() =>
+		toDateInputValue(new Date()),
+	);
 
 	// Cancel confirmation
 	const [cancelTarget, setCancelTarget] = useState<{
@@ -143,7 +145,6 @@ export default function RentalsClient() {
 
 	return (
 		<div className="container mx-auto max-w-4xl px-4 py-6">
-
 			<h1 className="mb-6 font-bold text-2xl text-[var(--foreground)]">
 				Court Rentals
 			</h1>
@@ -203,7 +204,17 @@ export default function RentalsClient() {
 							>
 								{windows.map((w) => (
 									<option key={w.eventId} value={w.eventId}>
-										{w.title} ({new Date(w.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} - {new Date(w.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})
+										{w.title} (
+										{new Date(w.start).toLocaleTimeString([], {
+											hour: "2-digit",
+											minute: "2-digit",
+										})}{" "}
+										-{" "}
+										{new Date(w.end).toLocaleTimeString([], {
+											hour: "2-digit",
+											minute: "2-digit",
+										})}
+										)
 									</option>
 								))}
 							</select>
@@ -217,10 +228,18 @@ export default function RentalsClient() {
 								{selectedWindow.title}
 							</h2>
 							<p className="mb-4 text-[var(--muted-foreground)] text-sm">
-								{new Date(selectedWindow.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} -{" "}
-								{new Date(selectedWindow.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+								{new Date(selectedWindow.start).toLocaleTimeString([], {
+									hour: "2-digit",
+									minute: "2-digit",
+								})}{" "}
+								-{" "}
+								{new Date(selectedWindow.end).toLocaleTimeString([], {
+									hour: "2-digit",
+									minute: "2-digit",
+								})}
 								{" | "}
-								{selectedWindow.courts.length} court{selectedWindow.courts.length !== 1 ? "s" : ""}
+								{selectedWindow.courts.length} court
+								{selectedWindow.courts.length !== 1 ? "s" : ""}
 								{" | "}
 								Max {selectedWindow.maxBookingHours ?? 2}h per booking
 							</p>
@@ -265,8 +284,15 @@ export default function RentalsClient() {
 										</p>
 										<p className="text-[var(--muted-foreground)] text-sm">
 											{new Date(booking.startTime).toLocaleDateString()} |{" "}
-											{new Date(booking.startTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} -{" "}
-											{new Date(booking.endTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+											{new Date(booking.startTime).toLocaleTimeString([], {
+												hour: "2-digit",
+												minute: "2-digit",
+											})}{" "}
+											-{" "}
+											{new Date(booking.endTime).toLocaleTimeString([], {
+												hour: "2-digit",
+												minute: "2-digit",
+											})}
 										</p>
 										<p className="text-[var(--muted-foreground)] text-xs">
 											{booking.facility?.name ?? ""} | {booking.status}

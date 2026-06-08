@@ -1,27 +1,26 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { useEditor, EditorContent } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
-import LinkExtension from "@tiptap/extension-link";
 import ImageExtension from "@tiptap/extension-image";
+import LinkExtension from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
-import { api } from "~/trpc/react";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
 import {
 	ArrowLeft,
 	Bold,
-	Italic,
-	List,
-	ListOrdered,
-	Link as LinkIcon,
-	Heading2,
-	Send,
-	TestTube,
 	Eye,
 	EyeOff,
+	Heading2,
+	Italic,
+	Link as LinkIcon,
+	List,
+	ListOrdered,
+	Send,
+	TestTube,
 } from "lucide-react";
+import Link from "next/link";
+import { useState } from "react";
+import { api } from "~/trpc/react";
 
 interface Props {
 	emailGroupId: string;
@@ -34,12 +33,16 @@ export default function ComposeEmailClient({
 	userType,
 	userId,
 }: Props) {
-	const router = useRouter();
 	const [subject, setSubject] = useState("");
 	const [showPreview, setShowPreview] = useState(false);
 	const [sendingTest, setSendingTest] = useState(false);
 	const [sendingGroup, setSendingGroup] = useState(false);
 	const [testResult, setTestResult] = useState<string | null>(null);
+	const [sendResult, setSendResult] = useState<{
+		sentCount: number;
+		failedCount: number;
+		skippedCount: number;
+	} | null>(null);
 
 	const groupQuery = api.emailGroups.getById.useQuery({ emailGroupId });
 
@@ -79,6 +82,7 @@ export default function ComposeEmailClient({
 		setTestResult(null);
 		try {
 			const result = await sendTestMutation.mutateAsync({
+				emailGroupId,
 				subject,
 				bodyHtml: getHtml(),
 			});
@@ -93,25 +97,25 @@ export default function ComposeEmailClient({
 	const handleSendToGroup = async () => {
 		if (!subject.trim() || !editor) return;
 		if (
-			!confirm(
-				`Send this email to all members of "${groupQuery.data?.name}"?`,
-			)
+			!confirm(`Send this email to all members of "${groupQuery.data?.name}"?`)
 		)
 			return;
 
 		setSendingGroup(true);
+		setSendResult(null);
 		try {
 			const result = await sendToGroupMutation.mutateAsync({
 				emailGroupId,
 				subject,
 				bodyHtml: getHtml(),
 			});
-			alert(
-				`Email sent! ${result.sentCount} delivered, ${result.failedCount} failed.`,
-			);
-			router.push(`/email-groups/${emailGroupId}`);
+			setSendResult({
+				sentCount: result.sentCount,
+				failedCount: result.failedCount,
+				skippedCount: result.skippedCount,
+			});
 		} catch (err: any) {
-			alert(`Error: ${err.message}`);
+			setSendResult(null);
 		} finally {
 			setSendingGroup(false);
 		}
@@ -130,18 +134,18 @@ export default function ComposeEmailClient({
 			<div className="mb-6">
 				<Link
 					href={`/email-groups/${emailGroupId}`}
-					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+					className="inline-flex items-center gap-1 text-muted-foreground text-sm hover:text-foreground"
 				>
 					<ArrowLeft className="h-4 w-4" />
 					Back to {groupQuery.data?.name ?? "group"}
 				</Link>
 			</div>
 
-			<h1 className="mb-6 text-2xl font-bold">Compose Email</h1>
+			<h1 className="mb-6 font-bold text-2xl">Compose Email</h1>
 
 			{/* Subject */}
 			<div className="mb-4">
-				<label className="mb-1.5 block text-sm font-medium">Subject</label>
+				<label className="mb-1.5 block font-medium text-sm">Subject</label>
 				<input
 					type="text"
 					value={subject}
@@ -191,7 +195,11 @@ export default function ComposeEmailClient({
 				>
 					<ListOrdered className="h-4 w-4" />
 				</ToolbarButton>
-				<ToolbarButton onClick={addLink} active={editor?.isActive("link")} title="Add Link">
+				<ToolbarButton
+					onClick={addLink}
+					active={editor?.isActive("link")}
+					title="Add Link"
+				>
 					<LinkIcon className="h-4 w-4" />
 				</ToolbarButton>
 			</div>
@@ -199,11 +207,13 @@ export default function ComposeEmailClient({
 			{/* Editor / Preview */}
 			{showPreview ? (
 				<div className="rounded-b-md border p-4">
-					<div className="mb-2 text-xs font-medium uppercase text-muted-foreground">
+					<div className="mb-2 font-medium text-muted-foreground text-xs uppercase">
 						Email Preview
 					</div>
 					<div className="rounded border bg-white p-6">
-						<h2 className="mb-4 text-lg font-bold">{subject || "(No subject)"}</h2>
+						<h2 className="mb-4 font-bold text-lg">
+							{subject || "(No subject)"}
+						</h2>
 						<div
 							className="prose prose-sm max-w-none"
 							dangerouslySetInnerHTML={{ __html: getHtml() }}
@@ -250,7 +260,7 @@ export default function ComposeEmailClient({
 						type="button"
 						onClick={handleSendToGroup}
 						disabled={sendingGroup || !subject.trim()}
-						className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+						className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50"
 					>
 						<Send className="h-4 w-4" />
 						{sendingGroup
@@ -264,7 +274,9 @@ export default function ComposeEmailClient({
 			{testResult && (
 				<p
 					className={`mt-3 text-sm ${
-						testResult.startsWith("Error") ? "text-destructive" : "text-green-600"
+						testResult.startsWith("Error")
+							? "text-destructive"
+							: "text-green-600"
 					}`}
 				>
 					{testResult}
@@ -272,9 +284,36 @@ export default function ComposeEmailClient({
 			)}
 
 			{sendToGroupMutation.error && (
-				<p className="mt-3 text-sm text-destructive">
+				<p className="mt-3 text-destructive text-sm">
 					{sendToGroupMutation.error.message}
 				</p>
+			)}
+
+			{sendResult && (
+				<div className="mt-6 rounded-lg border border-green-200 bg-green-50 p-4">
+					<p className="mb-1 font-medium text-green-800">
+						Email sent successfully
+					</p>
+					<div className="flex gap-4 text-green-700 text-sm">
+						<span>✓ {sendResult.sentCount} delivered</span>
+						{sendResult.failedCount > 0 && (
+							<span className="text-red-600">
+								✗ {sendResult.failedCount} failed
+							</span>
+						)}
+						{sendResult.skippedCount > 0 && (
+							<span className="text-amber-600">
+								⚠ {sendResult.skippedCount} skipped (no email)
+							</span>
+						)}
+					</div>
+					<a
+						href={`/email-groups/${emailGroupId}`}
+						className="mt-3 inline-flex items-center gap-1 font-medium text-green-800 text-sm underline-offset-2 hover:underline"
+					>
+						View Send History →
+					</a>
+				</div>
 			)}
 		</div>
 	);

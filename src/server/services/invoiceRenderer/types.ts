@@ -94,9 +94,9 @@ export type RenderableInvoiceParty = {
 	userId: string;
 	fullName: string;
 	email: string | null;
-	/** From StudentProfile.profileData.phone (JSON blob, TD-1). */
+	/** From MemberClubProfile.phone for the invoice's club (per-club-profiles.md). */
 	phone: string | null;
-	/** Reserved — no address column exists today; always null in v1. */
+	/** Reserved — address rendering not wired yet; always null in v1. */
 	address: string | null;
 };
 

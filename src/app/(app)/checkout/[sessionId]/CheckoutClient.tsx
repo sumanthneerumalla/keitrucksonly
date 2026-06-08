@@ -32,8 +32,8 @@ interface CheckoutClientProps {
 	clientSecret: string;
 	/**
 	 * Stripe publishable key, resolved server-side by the CheckoutPage server
-	 * component via `getPlatformConfig('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY',
-	 * 'stripe_publishable_key')` — env-first, DB-fallback. Passed as a prop
+	 * component via `getConfig('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY')` —
+	 * env-first, DB-fallback. Passed as a prop
 	 * (rather than read from `process.env.NEXT_PUBLIC_*` in this client
 	 * module) so the Phase 12a no-SSH workaround can supply the key via the
 	 * `PlatformConfig` table without a rebuild.

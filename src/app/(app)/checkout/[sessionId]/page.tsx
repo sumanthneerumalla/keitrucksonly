@@ -30,7 +30,7 @@
 
 import { notFound, redirect } from "next/navigation";
 import { db } from "~/server/db";
-import { getPlatformConfig } from "~/server/utils/platformConfig";
+import { getConfig } from "~/server/utils/config";
 import { CheckoutClient } from "./CheckoutClient";
 
 export default async function CheckoutPage({
@@ -63,10 +63,7 @@ export default async function CheckoutPage({
 	// (env-first, DB fallback) and pass it to the client component as a prop
 	// instead of relying on `process.env.NEXT_PUBLIC_*` at module-eval time
 	// in the client bundle. See designFiles/roadmap/phase12-stripe-connect.md §24.
-	const publishableKey = await getPlatformConfig(
-		"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
-		"stripe_publishable_key",
-	);
+	const publishableKey = await getConfig("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY");
 	if (!publishableKey) {
 		return (
 			<div className="container mx-auto px-4 py-8">

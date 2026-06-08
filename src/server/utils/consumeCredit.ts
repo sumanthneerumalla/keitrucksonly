@@ -46,7 +46,12 @@ interface ConsumeCreditArgs {
 }
 
 export type ConsumeCreditResult =
-	| { ok: true; usageId: string; memberPackageId: string; creditsConsumed: number }
+	| {
+			ok: true;
+			usageId: string;
+			memberPackageId: string;
+			creditsConsumed: number;
+	  }
 	| { ok: false; reason: "no_match" | "insufficient_credits" | "skipped" };
 
 export async function consumeCredit({
@@ -107,7 +112,10 @@ export async function consumeCredit({
 	// Fetch candidates sorted FIFO (soonest-to-expire first, null endDate last)
 	const candidates = await tx.memberPackage.findMany({
 		where: whereClause,
-		orderBy: [{ endDate: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }],
+		orderBy: [
+			{ endDate: { sort: "asc", nulls: "last" } },
+			{ createdAt: "asc" },
+		],
 		select: {
 			memberPackageId: true,
 			creditsTotal: true,

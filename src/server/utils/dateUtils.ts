@@ -153,6 +153,46 @@ export function getCurrentWeekRange(timezone?: string): {
 }
 
 /**
+ * Compute the UTC instants bounding a single calendar day ("today" by default) as
+ * observed in a given IANA timezone. Used by the member dashboard's "today's events"
+ * query so "today" means the member's local day, not the server's.
+ *
+ * Returns `startOfDay` (local 00:00:00.000 as a UTC instant) and `endOfDay`
+ * (local 23:59:59.999 as a UTC instant). DST transitions within the day shift the
+ * window by at most an hour — acceptable for a day-granularity event listing.
+ */
+export function getDayRangeInZone(
+	timezone?: string,
+	reference: Date = new Date(),
+): { startOfDay: Date; endOfDay: Date } {
+	const tz = timezone ?? DEFAULT_FACILITY_TIMEZONE;
+	const [year, month, day] = new Intl.DateTimeFormat("en-CA", {
+		timeZone: tz,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+	})
+		.format(reference)
+		.split("-")
+		.map(Number) as [number, number, number];
+
+	// Offset to add to a tz-local wall-clock to obtain the matching UTC instant.
+	const asUTC = new Date(
+		reference.toLocaleString("en-US", { timeZone: "UTC" }),
+	);
+	const asTz = new Date(reference.toLocaleString("en-US", { timeZone: tz }));
+	const offsetMs = asUTC.getTime() - asTz.getTime();
+
+	const startOfDay = new Date(
+		Date.UTC(year, month - 1, day, 0, 0, 0, 0) + offsetMs,
+	);
+	const endOfDay = new Date(
+		Date.UTC(year, month - 1, day, 23, 59, 59, 999) + offsetMs,
+	);
+	return { startOfDay, endOfDay };
+}
+
+/**
  * Check if a date falls within the current week (Monday to Sunday)
  * @param date The date to check
  * @param timezone Optional timezone string (e.g., 'America/New_York'). Defaults to local timezone

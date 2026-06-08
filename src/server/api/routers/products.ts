@@ -93,7 +93,9 @@ export const productsRouter = createTRPCRouter({
 			// Verify category belongs to the same club and is a leaf (no active children)
 			const category = await ctx.db.productCategory.findUnique({
 				where: { categoryId: input.categoryId },
-				include: { _count: { select: { children: { where: { isActive: true } } } } },
+				include: {
+					_count: { select: { children: { where: { isActive: true } } } },
+				},
 			});
 
 			if (!category || category.clubShortName !== ctx.user.clubShortName) {
@@ -241,7 +243,9 @@ export const productsRouter = createTRPCRouter({
 			if (rest.categoryId) {
 				const category = await ctx.db.productCategory.findUnique({
 					where: { categoryId: rest.categoryId },
-					include: { _count: { select: { children: { where: { isActive: true } } } } },
+					include: {
+						_count: { select: { children: { where: { isActive: true } } } },
+					},
 				});
 
 				if (!category || category.clubShortName !== ctx.user.clubShortName) {

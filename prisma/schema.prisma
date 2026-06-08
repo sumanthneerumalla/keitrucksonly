@@ -34,44 +34,46 @@ model Club {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  users             User[]
-  memberships       UserClub[]
-  facilities        ClubFacility[]
-  resourceTypes     ClubResourceType[]
-  resources         ClubResource[]
-  calendarEvents    CalendarEvent[]
-  products          Product[]
-  productCategories ProductCategory[]
-  revenueCategories RevenueCategory[]
-  taxRates          TaxRate[]
-  attendances       Attendance[]
-  statusLogs        RegistrationStatusLog[]
-  packagePlans      PackagePlan[]
-  memberPackages    MemberPackage[]
-  tags              Tag[]
-  rentalBookings    RentalBooking[]
-  familyGroups      FamilyGroup[]
-  dropInSessions    DropInSession[]
-  invoices          Invoice[]
-  emailGroups       EmailGroup[]
-  auditLogs         AuditLog[]
+  users              User[]
+  memberships        UserClub[]
+  // Per-club member records (legal-isolation boundary). See per-club-profiles.md.
+  memberClubProfiles MemberClubProfile[]
+  facilities         ClubFacility[]
+  resourceTypes      ClubResourceType[]
+  resources          ClubResource[]
+  calendarEvents     CalendarEvent[]
+  products           Product[]
+  productCategories  ProductCategory[]
+  revenueCategories  RevenueCategory[]
+  taxRates           TaxRate[]
+  attendances        Attendance[]
+  statusLogs         RegistrationStatusLog[]
+  packagePlans       PackagePlan[]
+  memberPackages     MemberPackage[]
+  tags               Tag[]
+  rentalBookings     RentalBooking[]
+  familyGroups       FamilyGroup[]
+  dropInSessions     DropInSession[]
+  invoices           Invoice[]
+  emailGroups        EmailGroup[]
+  auditLogs          AuditLog[]
   // Phase 10a — Memberships
-  membershipTypes   MembershipType[]
-  membershipPlans   MembershipPlan[]
-  memberMemberships MemberMembership[]
+  membershipTypes    MembershipType[]
+  membershipPlans    MembershipPlan[]
+  memberMemberships  MemberMembership[]
   // Phase 15 Stage 2 — Articles scoped per-club (clubShortName=null is platform)
-  articles          Article[]               @relation("ClubArticles")
-  articleTags       ArticleTag[]            @relation("ClubArticleTags")
+  articles           Article[]               @relation("ClubArticles")
+  articleTags        ArticleTag[]            @relation("ClubArticleTags")
   // Phase 15 Step 6 — Club-scoped short-form announcements feed.
-  announcements     ClubAnnouncement[]      @relation("ClubAnnouncements")
+  announcements      ClubAnnouncement[]      @relation("ClubAnnouncements")
   // Phase 12a — Stripe Connect (per-processor connection state). 1:1; club may
   // hold at most one ClubStripeAccount row. Future processors (Paysafe, Valor)
   // get their own tables — `getProviderForClub` resolves the active one.
-  stripeAccount     ClubStripeAccount?
+  stripeAccount      ClubStripeAccount?
   // Phase 12a — local mirror of provider checkout sessions opened against this club.
-  checkoutSessions  CheckoutSession[]
+  checkoutSessions   CheckoutSession[]
   // Phase 12a — dead-letter queue for webhook failures scoped to this club.
-  orphanedPurchases OrphanedPurchase[]
+  orphanedPurchases  OrphanedPurchase[]
 }
 
 // User model - stores profile data locally while using Clerk for auth
@@ -137,13 +139,18 @@ model User {
   // Multi-club membership registry
   clubMemberships UserClub[]
 
+  // Per-club member records — one row per club this user belongs to (legal-isolation
+  // boundary; replaces the global StudentProfile.profileData blob). See per-club-profiles.md.
+  memberClubProfiles MemberClubProfile[]
+
   // User tags
   userTags UserTag[]
 
   rentalBookings RentalBooking[]
 
   // Drop-in check-ins (designFiles/drop-in) — per-session play state, separate from EventRegistration
-  dropInCheckIns DropInCheckIn[]
+  dropInCheckIns               DropInCheckIn[]
+  dropInAssignmentParticipants DropInAssignmentParticipant[]
 
   // Family group — opt-in grouping for shared package consumption (public-shop.md FAM phase).
   // Two users with the same non-null familyGroupId share package credits via consumeCredit widening.
@@ -250,10 +257,9 @@ model StudentProfile {
   bio              String?  @db.Text
   profileImage     Bytes? // Store the binary image data directly in PostgreSQL
   profileImageType String? // Store the MIME type (e.g., "image/png")
-  // Loose JSON blob — phone, dateOfBirth, medicalNotes, allergies, generalNotes.
-  // TD-1 in designFiles/roadmap/customer-feedback-ui-sprint.md. Shape validated in
-  // src/lib/types/student-profile.ts, not at DB level. Promote to typed columns later.
-  profileData      Json?
+  // profileData JSON blob removed (per-club-profiles.md PR3 cutover) — its fields
+  // moved to per-club MemberClubProfile (phone/medical/allergies/general) and
+  // global User.dateOfBirth. skillLevel stays here (global, member-editable).
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -275,6 +281,49 @@ model CoachProfile {
   isVerified       Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+// Per-club member record — everything a single club specifically collects/knows
+// about a member, scoped to (userId, clubShortName). THE legal-isolation boundary:
+// each club is a separate LLC/data controller, so Club B's staff must never see
+// what Club A wrote here. Replaces the global StudentProfile.profileData JSON blob.
+// See designFiles/per-club-profiles.md. Grain is CLUB (the LLC), not facility.
+// NOTE: skillLevel intentionally NOT here — it stays global + member-editable on
+// StudentProfile. dateOfBirth stays global on User. Membership tier lives in
+// Phase-10a MemberMembership (fetched by query, not duplicated here).
+model MemberClubProfile {
+  memberClubProfileId String @id @default(cuid())
+  userId              String
+  user                User   @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  clubShortName       String
+  club                Club   @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+
+  // Contact (per-club; staff- or member-editable). Caps match the app-level
+  // validation that the old studentProfileDataSchema enforced.
+  phone                        String? @db.VarChar(32)
+  streetAddress                String? @db.VarChar(200)
+  city                         String? @db.VarChar(100)
+  state                        String? @db.VarChar(50)
+  zipCode                      String? @db.VarChar(20)
+  emergencyContactName         String? @db.VarChar(120)
+  emergencyContactPhone        String? @db.VarChar(32)
+  emergencyContactRelationship String? @db.VarChar(50)
+
+  // Marketing attribution (set at join)
+  referralSource String? @db.VarChar(120)
+  howHeard       String? @db.VarChar(120)
+
+  // Operational / sensitive (staff-authored; the isolation-sensitive fields)
+  medicalNotes String? @db.VarChar(2000)
+  allergies    String? @db.VarChar(1000)
+  generalNotes String? @db.VarChar(5000)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, clubShortName])
+  @@index([userId])
+  @@index([clubShortName])
 }
 
 model Post {
@@ -646,6 +695,7 @@ enum DropInMode {
 enum DropInSessionStatus {
   SCHEDULED
   ACTIVE
+  PAUSED // staff paused: existing games finish, no new games/joins, no auto-rotate
   ENDED
   CANCELLED
 }
@@ -689,7 +739,8 @@ model DropInSession {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  checkIns DropInCheckIn[]
+  checkIns    DropInCheckIn[]
+  assignments DropInAssignment[]
 
   @@unique([eventId, occurrenceDate]) // one live session per day per series
   @@index([clubShortName])
@@ -722,6 +773,91 @@ model DropInCheckIn {
 
   @@unique([sessionId, userId])
   @@index([sessionId, status])
+  @@index([userId])
+}
+
+// ===========================================================================
+// DROP-IN ROTATION (TIMED + MATCH) — DI-2 / DI-4. See designFiles/drop-in.
+// ===========================================================================
+
+enum DropInSide {
+  A
+  B
+}
+
+enum DropInAssignmentStatus {
+  ASSIGNED // transient: staff pre-assign or the instant before auto-start (happy path skips to IN_PROGRESS)
+  IN_PROGRESS // the live matchup/group on the court
+  PENDING_CONFIRM // MATCH: one side reported a score; court freed; awaiting opponent confirm
+  CONFIRMED // MATCH: both sides agree; eligible for GBR sync
+  DISPUTED // MATCH: score mismatch; needs staff resolution
+  COMPLETED // TIMED slot ended by timer (no scores)
+  CANCELLED // staff-cancelled
+}
+
+enum GbrSyncStatus {
+  NOT_APPLICABLE // TIMED / MANUAL — never synced
+  PENDING // confirmed, queued for submission
+  SENT // accepted by GBR
+  FAILED // submission errored; retry queue re-attempts
+  SKIPPED // intentionally not scored (walkover / staff override)
+}
+
+// A court occupied by players for a slot (TIMED group) or a matchup (MATCH).
+model DropInAssignment {
+  assignmentId String                 @id @default(cuid())
+  sessionId    String
+  session      DropInSession          @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  courtId      String // ClubResource id (one of session.courtIds); plain string, not a relation
+  format       DropInFormat
+  status       DropInAssignmentStatus @default(ASSIGNED)
+
+  participants DropInAssignmentParticipant[]
+
+  startedAt DateTime?
+  endedAt   DateTime?
+  expiresAt DateTime? // TIMED: startedAt + rotationMinutes; MATCH (DI-6): optional time limit
+
+  // Scores (MATCH only) — best-of-N per DropInSession.bestOf
+  reportedByUserId  String?
+  reportedScoreA    Int? // games won by side A (summary/winner)
+  reportedScoreB    Int? // games won by side B
+  gameScores        Json? // per-game [{a:21,b:18},...] — submitted to GBR match_sets (DI-5)
+  winnerSide        DropInSide?
+  confirmedByUserId String?
+  confirmedAt       DateTime?
+
+  // GBR sync (MATCH only; stubbed until DI-5)
+  externalMatchId String?       @unique // idempotency key sent to GBR; == assignmentId
+  gbrSyncStatus   GbrSyncStatus @default(NOT_APPLICABLE)
+  gbrSyncedAt     DateTime?
+  gbrSyncError    String?
+  ratingWeight    Float? // 1.0 for self-reported drop-in matches
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sessionId, status])
+  @@index([courtId])
+  @@index([gbrSyncStatus])
+}
+
+// Per-player rows for an assignment — the unit we aggregate for standings + fairness.
+model DropInAssignmentParticipant {
+  id                 String           @id @default(cuid())
+  assignmentId       String
+  assignment         DropInAssignment @relation(fields: [assignmentId], references: [assignmentId], onDelete: Cascade)
+  sessionId          String // denormalized from the assignment for fast per-session aggregation
+  userId             String
+  user               User             @relation(fields: [userId], references: [userId])
+  gbrPlayerId        String? // GBR player id used at submission time
+  side               DropInSide? // A/B for MATCH; null for a TIMED group
+  isWinner           Boolean? // stamped when the assignment is CONFIRMED (MATCH); null for TIMED
+  ratingAtAssignment Float? // optional: GBR display rating used for skill-band pairing (audit)
+  createdAt          DateTime         @default(now())
+
+  @@unique([assignmentId, userId])
+  @@index([sessionId, userId])
   @@index([userId])
 }
 
@@ -1529,6 +1665,8 @@ model EmailGroup {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
+  archivedAt DateTime?
+
   members    EmailGroupMember[]
   exclusions EmailGroupExclusion[]
   sendLogs   EmailSendLog[]
@@ -1536,6 +1674,7 @@ model EmailGroup {
   @@index([clubShortName])
   @@index([facilityId])
   @@index([createdByUserId])
+  @@index([archivedAt])
 }
 
 // EmailGroupMember — explicit membership in an email group (from filter sync or manual add)
@@ -1568,18 +1707,39 @@ model EmailGroupExclusion {
   @@index([userId])
 }
 
+// EmailSendStatus — lifecycle of a group email campaign. Lowercase labels match
+// the values written by the send pipeline (emailSend.ts) and the Resend webhook.
+enum EmailSendStatus {
+  queued
+  sending
+  sent
+  partial_failure
+  failed
+}
+
 // EmailSendLog — audit log of every email sent to a group
 model EmailSendLog {
-  sendLogId      String     @id @default(cuid())
-  emailGroupId   String
-  emailGroup     EmailGroup @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
-  senderUserId   String
-  sender         User       @relation("EmailSender", fields: [senderUserId], references: [userId])
-  subject        String     @db.VarChar(500)
-  bodyHtml       String     @db.Text
-  attachmentUrls String[]
-  recipientCount Int
-  sentAt         DateTime   @default(now())
+  sendLogId         String          @id @default(cuid())
+  emailGroupId      String
+  emailGroup        EmailGroup      @relation(fields: [emailGroupId], references: [emailGroupId], onDelete: Cascade)
+  senderUserId      String
+  sender            User            @relation("EmailSender", fields: [senderUserId], references: [userId])
+  subject           String          @db.VarChar(500)
+  bodyHtml          String          @db.Text
+  bodyText          String?         @db.Text
+  attachmentUrls    String[]
+  resendId          String?         @db.VarChar(100)
+  status            EmailSendStatus @default(sent)
+  replyToEmail      String?         @db.VarChar(255)
+  fromDisplayName   String?         @db.VarChar(200)
+  recipientCount    Int
+  skippedCount      Int             @default(0)
+  skippedRecipients Json?
+  errorMessage      String?         @db.Text
+  // Test sends (the "Send Test to Me" button) are logged for audit/delivery
+  // tracking but excluded from the user-facing send history.
+  isTest            Boolean         @default(false)
+  sentAt            DateTime        @default(now())
 
   recipients EmailSendRecipient[]
 
@@ -1590,16 +1750,24 @@ model EmailSendLog {
 
 // EmailSendRecipient — per-recipient delivery record for a sent email
 model EmailSendRecipient {
-  id        String       @id @default(cuid())
-  sendLogId String
-  sendLog   EmailSendLog @relation(fields: [sendLogId], references: [sendLogId], onDelete: Cascade)
-  userId    String
-  user      User         @relation("EmailRecipient", fields: [userId], references: [userId])
-  email     String       @db.VarChar(255) // snapshot at send time
-  status    String       @db.VarChar(20) // "sent" | "failed"
+  id              String       @id @default(cuid())
+  sendLogId       String
+  sendLog         EmailSendLog @relation(fields: [sendLogId], references: [sendLogId], onDelete: Cascade)
+  userId          String
+  user            User         @relation("EmailRecipient", fields: [userId], references: [userId])
+  email           String       @db.VarChar(255) // snapshot at send time
+  status          String       @db.VarChar(20) // "sent" | "failed"
+  resendMessageId String?      @db.VarChar(100)
+  deliveredAt     DateTime?
+  openedAt        DateTime?
+  openCount       Int          @default(0)
+  bouncedAt       DateTime?
+  complainedAt    DateTime?
+  error           String?      @db.Text
 
   @@index([sendLogId])
   @@index([userId])
+  @@index([resendMessageId])
 }
 
 // Phase 9b — cached invoice PDF renders.

@@ -47,7 +47,7 @@ Most of A–D are **resolved** (owner, 2026-06-02) — see the Resolved section.
 | G4 | **GBR rating on the board.** | ✅ **Decided:** show it once the GBR stitch (DI-5) lands; not earlier. | — | 👤 |
 | G5 | **Live updates & notifications.** | ✅ **Decided:** **polling is sufficient** (no sockets in v1). The event page polls for latest assignments + standings; the "your turn / report / confirm" prompts are just the polled board reflecting each user's state. True push deferred. | — | 👤 |
 | G6 | **TIMED rotation length.** | ✅ **Decided:** staff-configurable — **default 15 min, max 30, in 5-min increments** (15/20/25/30). | — | 👤 |
-| G7 | **One active drop-in per player.** | ✅ **Decided:** enforce — a player can be checked into only one drop-in session at a time. | — | 👤 |
+| G7 | **One active drop-in per player.** | ✅ **Decided:** enforce — a player can be active in only one drop-in session at a time. **Mechanism (owner, 2026-06-08): "joining moves you", not "blocked".** On join (member `joinQueue` or staff `addToQueue`): if the player has a **non-terminal** check-in in *another* active session — `IDLE`/`WAITING` → **auto-terminate it** (set `LEFT`/`DONE`) and proceed; `PLAYING`/`AWAITING_RESULT` (mid-game / owes a score) → **block** with "finish your current game first" (don't yank them off a live court). ⏳ **NOT yet implemented** — G7 is unenforced today (a user can be in multiple sessions); build with Track C. | 🟡 | 👤 |
 | B7 | **Gender immutability + admin override** (B1). | ✅ **Decided (option a):** **set-once** for the user — server guard in `updateProfile` (write only when current gender is null) + UI shows it **read-only** once set. **No DB trigger** — admins can correct a mistake by editing the DB directly if ever needed (out-of-band; no special admin mutation in v1). | — | 👤 |
 | G8 | **Public (logged-out) drop-in viewing / leaderboard** for spectators. | ✅ **Decided — REUSE the existing public event page, NOT an iframe embed.** `EventDetailClient` (`/club/[shortName]/shop/events/[eventId]` + `/events/[eventId]`) is already public-capable (renders for logged-out users — `userId=""`, no redirect; `isPublic` gate + `showRegistrantNames` + `publicProcedure` + guest-register all exist). Plan: (1) add `DROP_IN` to the `calendar.getPublicEvents` eventType filter; (2) a `publicProcedure` board read (extend `getPublicEventById` or a `getPublicDropInBoard`) gated by `isPublic`, names per `showRegistrantNames`; (3) `EventDetailClient` DROP_IN branch = read-only board for public + interactive for authed, with a "sign in to join/report" CTA; (4) global rankings via GBR's own public pages. Lands with standings in **DI-4/DI-5** (MANUAL has none). | — | 👤🛠️ |
 
@@ -87,3 +87,22 @@ Most of A–D are **resolved** (owner, 2026-06-02) — see the Resolved section.
 - **D3** Players must **log in (Clerk)** to submit scores.
 - **D4** **Kiosk mode = a button on the event page** → fullscreen + unlock audio (no separate kiosk code). On a connected TV the horn plays from the TV. (The button-gesture is also what browsers require to allow sound later.)
 - **D5** Match time limits **off in v1**.
+
+---
+
+## Resolved (owner, 2026-06-05 — onboarding session)
+
+> **UPDATED 2026-06-06:** the "Rotation Play / casual `DROP_IN` event / DI-1c" framing below was simplified one step further — **casual drop-in is just a multi-court `BOOKABLE` event**, so there is no `DROP_IN` type for casual and no DI-1c (CANCELLED). The `DROP_IN` type stays reserved for the live-rotation feature only. The non-naming decisions (payment, check-in, occurrenceDate, gender/onboarding gate, a11y) all still hold. See HANDOFF.md "2026-06-06 FINAL decision".
+
+These refine A5/B1/B7/G1/G2 and the open-loops audit. See HANDOFF.md "2026-06-05 onboarding-session decisions" for the operational version.
+
+- **NAME** — the `DROP_IN` event type is presented to club owners as **"Rotation Play"** (*"auto-managed peak-hour matches"*); a new option in the create-event dropdown. Enum stays `DROP_IN`.
+- **SCOPE** — ship **casual first**, TIMED/MATCH rotation later (owner OK with the forward-looking label now).
+- **⭐ CASUAL ARCHITECTURE (supersedes "MANUAL = DropInSession")** — casual Rotation Play is a **normal registrable/checkable event**: reuse `EventRegistration` + checkout + member `selfCheckin` (`checkin` router) + front-desk check-in. **`DropInSession` + the `dropIn` router (DI-1a/DI-1b) are PARKED for TIMED/MATCH** (DI-2/DI-4); casual does not touch them. The old MANUAL-mode-on-DropInSession design is dropped.
+- **A5 wiring** — to make a `DROP_IN` event payable/registrable, extend the `BOOKABLE`-gated branches (Register button + checkout + `calendar.getPublicEvents` filter) to accept `DROP_IN`.
+- **Multi-court** — reuse the modal's existing `RENTAL_WINDOW` multi-court picker for `DROP_IN`.
+- **occurrenceDate** — normalize to **club-local calendar day** (facility-tz start-of-day); only relevant once `DropInSession` is used (TIMED/MATCH). Non-recurring = `event.start`.
+- **Check-in (loop #3)** — members **self-check-in to any registration they own** (already true via `checkin.selfCheckin`); front-desk can also check in. No new check-in system for casual.
+- **Admin gender display (loop #4)** — **SKIP**.
+- **B1 → required (loop #5)** — `gender` becomes a **hard requirement**, plus an **onboarding-completeness gate** before a user can participate in Rotation Play. Tracked as a **separate work thread** (see HANDOFF "Onboarding completeness gate"), not part of DI-1c.
+- **a11y (loop #6)** — fix the `noLabelWithoutControl` warnings (was "accepted"; owner wants them fixed since it needs no project context).
