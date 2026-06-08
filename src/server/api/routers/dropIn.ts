@@ -1010,6 +1010,59 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
+	 * Re-queue the party after a game finishes (plan §5). Filters to members
+	 * currently `IDLE` (just-finished); LEFT/CANCELLED stay gone; AWAITING_RESULT
+	 * waits for their previous score to confirm before re-queue applies. Updates
+	 * `party.queuedAt = now` so the party drops to the back of the FIFO queue —
+	 * essential for pure-party-FIFO fairness (rule X). Idempotent: re-queueing
+	 * an already-WAITING party is a no-op for that member.
+	 *
+	 * If no IDLE members are eligible, party is effectively dissolved by
+	 * attrition; procedure returns `{ requeued: 0 }` without touching anything.
+	 */
+	requeueParty: protectedProcedure
+		.input(z.object({ partyId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const caller = await ctx.db.user.findUnique({
+				where: { clerkUserId: ctx.auth.userId },
+				select: { userId: true, clubShortName: true },
+			});
+			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+
+			return ctx.db.$transaction(async (tx) => {
+				await assertCallerInParty(tx, input.partyId, caller.userId);
+				const party = await loadPartyForOp(tx, input.partyId);
+				const session = await loadSessionForPartyOp(
+					tx,
+					party.sessionId,
+					caller.clubShortName,
+				);
+				assertSessionAcceptsPartyOps(session);
+
+				const idleMembers = party.liveMembers.filter(
+					(m) => m.status === "IDLE",
+				);
+				if (idleMembers.length === 0) {
+					return { partyId: input.partyId, requeued: 0 };
+				}
+
+				const now = new Date();
+				await tx.dropInCheckIn.updateMany({
+					where: {
+						sessionId: party.sessionId,
+						userId: { in: idleMembers.map((m) => m.userId) },
+					},
+					data: { status: "WAITING", queuedAt: now },
+				});
+				await tx.dropInParty.update({
+					where: { partyId: input.partyId },
+					data: { queuedAt: now },
+				});
+				return { partyId: input.partyId, requeued: idleMembers.length };
+			});
+		}),
+
+	/**
 	 * Toggle the party's openToFill flag — opts the party into being filled
 	 * with other open parties at court-assignment time. Concurrent toggles from
 	 * two members are last-write-wins (Prisma default isolation); both states
