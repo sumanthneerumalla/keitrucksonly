@@ -383,7 +383,7 @@ export function StaffAddToQueue({
 }
 
 /**
- * Player-facing "Add a group" popover. Lets the caller create a party with
+ * Player-facing "Join queue as a group" popover. Lets the caller create a party with
  * themselves + up to (capacity - 1) other members in one shot, plus an
  * `openToFill` toggle (default OFF — they brought their own people).
  *
@@ -496,7 +496,7 @@ export function JoinPartyPopover({
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
 				<Button variant="outline" size="sm" disabled={disabled}>
-					<UserPlus size={14} /> Add a group
+					<UserPlus size={14} /> Join queue as a group
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent className="w-72 p-2" align="end">
