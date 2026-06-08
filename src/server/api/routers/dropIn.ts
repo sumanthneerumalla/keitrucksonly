@@ -945,13 +945,28 @@ export const dropInRouter = createTRPCRouter({
 						createdByUserId: caller.userId,
 					},
 				});
-				await tx.dropInCheckIn.create({
-					data: {
+				// Upsert (not create) so a double-click / concurrent create can't
+				// throw a unique-constraint error on (sessionId, userId). If the
+				// caller raced in another check-in, point it at this fresh party.
+				await tx.dropInCheckIn.upsert({
+					where: {
+						sessionId_userId: {
+							sessionId: input.sessionId,
+							userId: caller.userId,
+						},
+					},
+					create: {
 						sessionId: input.sessionId,
 						userId: caller.userId,
 						partyId: party.partyId,
 						status: "WAITING",
 						queuedAt: now,
+					},
+					update: {
+						partyId: party.partyId,
+						status: "WAITING",
+						queuedAt: now,
+						leftAt: null,
 					},
 				});
 				return { partyId: party.partyId, isNew: true };
@@ -1072,15 +1087,31 @@ export const dropInRouter = createTRPCRouter({
 						},
 					});
 				} else {
-					// First time joining this session — fresh check-in pointing
-					// to our party.
-					await tx.dropInCheckIn.create({
-						data: {
+					// First time joining this session (the friend may be active in a
+					// DIFFERENT session — that's fine, check-ins are per-session).
+					// Upsert, not create, so a concurrent add / double-click can't
+					// blow up with a unique-constraint error on (sessionId, userId):
+					// if a row appeared since the findUnique above, just move them
+					// into our party instead of failing the whole operation.
+					await tx.dropInCheckIn.upsert({
+						where: {
+							sessionId_userId: {
+								sessionId: party.sessionId,
+								userId: target.userId,
+							},
+						},
+						create: {
 							sessionId: party.sessionId,
 							userId: target.userId,
 							partyId: input.partyId,
 							status: "WAITING",
 							queuedAt: party.queuedAt,
+						},
+						update: {
+							partyId: input.partyId,
+							status: "WAITING",
+							queuedAt: party.queuedAt,
+							leftAt: null,
 						},
 					});
 				}
