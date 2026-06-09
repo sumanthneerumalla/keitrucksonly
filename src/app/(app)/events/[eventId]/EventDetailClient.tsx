@@ -193,6 +193,8 @@ export default function EventDetailClient({
 							eventId={eventId}
 							eventStart={event.start}
 							eventTitle={event.title}
+							clubShortName={event.clubShortName}
+							facilityId={event.facilityId ?? null}
 						/>
 					)}
 				</div>

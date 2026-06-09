@@ -1,6 +1,7 @@
 "use client";
 
-import { Maximize2 } from "lucide-react";
+import { SignInButton } from "@clerk/nextjs";
+import { LogIn, Maximize2 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -28,12 +29,24 @@ export default function KioskBoard({
 	eventId,
 	eventStart,
 	eventTitle,
+	clubShortName,
+	facilityId,
 }: {
 	eventId: string;
 	eventStart: string | Date;
 	eventTitle: string;
+	clubShortName: string;
+	facilityId: string | null;
 }) {
 	const { toast } = useToast();
+
+	// Where a logged-out viewer goes to sign in and actually JOIN the queue.
+	// Route them to /join with this event's club (+ facility when known) prefilled
+	// so onboarding is instant (both present -> /join auto-joins) instead of Clerk
+	// dropping them back on the event page where they can't join as a non-member.
+	const signInJoinUrl = `/join?clubShortName=${encodeURIComponent(
+		clubShortName,
+	)}${facilityId ? `&facilityId=${encodeURIComponent(facilityId)}` : ""}`;
 
 	// One occurrence per day; the occurrence key is the event's start (mirrors
 	// DropInEventDetails — recurring "daily league" normalization is an R3 concern).
@@ -61,6 +74,16 @@ export default function KioskBoard({
 	}, []);
 
 	// ---- audio horn + kiosk fullscreen ---------------------------------------
+	// `kioskMode` tracks whether we're actually in the fullscreen kiosk display
+	// (entered via the Kiosk button). The "Join the queue" QR shows ONLY then.
+	// Synced to the browser's fullscreen state so exiting (e.g. Esc) hides it too.
+	const [kioskMode, setKioskMode] = useState(false);
+	useEffect(() => {
+		const onChange = () => setKioskMode(!!document.fullscreenElement);
+		document.addEventListener("fullscreenchange", onChange);
+		return () => document.removeEventListener("fullscreenchange", onChange);
+	}, []);
+
 	const audioCtxRef = useRef<AudioContext | null>(null);
 	const firedHornsRef = useRef<Set<string>>(new Set());
 	const playHorn = useCallback(() => {
@@ -132,9 +155,14 @@ export default function KioskBoard({
 					This Rotation Play session hasn't started yet. The board will appear
 					here once staff open it.
 				</p>
-				<div className="mt-4">
-					<JoinQueueQR url={joinUrl} />
+				<div className="mt-4 w-full max-w-xs">
+					<SignInToJoin url={signInJoinUrl} />
 				</div>
+				{kioskMode && (
+					<div className="mt-4">
+						<JoinQueueQR url={joinUrl} />
+					</div>
+				)}
 			</div>
 		);
 	}
@@ -208,12 +236,17 @@ export default function KioskBoard({
 					</p>
 				</div>
 				<div className="flex items-center gap-3">
-					<JoinQueueQR url={joinUrl} />
+					{kioskMode && <JoinQueueQR url={joinUrl} />}
 					<Button variant="outline" size="sm" onClick={enableKiosk}>
 						<Maximize2 size={14} /> Kiosk
 					</Button>
 				</div>
 			</div>
+
+			{/* Sign-in CTA — logged-out viewers join via /join (club+facility
+			    prefilled) so they end up onboarded members who can actually queue,
+			    rather than Clerk bouncing them back here as non-members. */}
+			<SignInToJoin url={signInJoinUrl} />
 
 			{isPaused && (
 				<p className="rounded-md bg-amber-100 px-3 py-2 text-amber-800 text-sm">
@@ -326,6 +359,29 @@ export default function KioskBoard({
 			{/* Leaderboard (MATCH) */}
 			{isMatch && <Leaderboard rows={standingsQuery.data ?? []} />}
 		</div>
+	);
+}
+
+/**
+ * "Sign in to join the queue" CTA for logged-out kiosk viewers. Opens Clerk in a
+ * modal and, on success, forces a redirect to `url` (/join with the event's club +
+ * facility prefilled) instead of returning to the event page — so a brand-new
+ * player flows through onboarding and becomes a member who can actually queue.
+ */
+function SignInToJoin({ url }: { url: string }) {
+	return (
+		<SignInButton
+			mode="modal"
+			forceRedirectUrl={url}
+			signUpForceRedirectUrl={url}
+		>
+			<button
+				type="button"
+				className="flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2.5 font-medium text-sm text-white transition-colors hover:bg-[var(--primary-dark)]"
+			>
+				<LogIn size={16} /> Sign in to join the queue
+			</button>
+		</SignInButton>
 	);
 }
 
