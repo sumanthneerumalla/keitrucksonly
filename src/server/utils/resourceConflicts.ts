@@ -96,9 +96,13 @@ export async function checkResourceConflicts({
 	// `rrule: null` matches both genuinely non-recurring events AND modified
 	// instances of recurring events (since modifications are stored as their own
 	// row with parentEventId set and rrule null). Both should block bookings.
+	//
+	// We check BOTH `resourceId` (primary FK-backed court) AND `resourceIds`
+	// (additional courts on multi-court Bookable events) so a court can't be
+	// double-booked via its "extra" slot. See multi-court-conflict-TODO.md.
 	const nonRecurringMatches = await db.calendarEvent.findMany({
 		where: {
-			resourceId,
+			OR: [{ resourceId }, { resourceIds: { has: resourceId } }],
 			isDeleted: false,
 			isBlocking: true,
 			rrule: null,
@@ -119,9 +123,12 @@ export async function checkResourceConflicts({
 	// is the cheapest way to exclude series that haven't even started yet relative
 	// to the query window (CR-c.9). The actual occurrence-overlap check happens in
 	// app code below via RRuleSet.between().
+	//
+	// Same multi-court OR guard as Branch 1: a recurring class that holds a court
+	// via `resourceIds` must also block rentals/bookings on that court.
 	const recurringBases = await db.calendarEvent.findMany({
 		where: {
-			resourceId,
+			OR: [{ resourceId }, { resourceIds: { has: resourceId } }],
 			isDeleted: false,
 			isBlocking: true,
 			rrule: { not: null },

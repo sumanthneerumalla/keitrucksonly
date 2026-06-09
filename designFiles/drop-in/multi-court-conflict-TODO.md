@@ -1,6 +1,6 @@
-# TODO — Multi-court conflict detection is INCOMPLETE (quick version shipped)
+# ✅ DONE — Multi-court conflict detection fix (shipped 2026-06-09)
 
-**Status:** ⚠️ Known limitation, shipped intentionally (owner OK'd the quick version 2026-06-05). Revisit before multi-court Bookable events are used at scale.
+**Status:** Fixed in `triaged-items` branch. Both `resourceId` and `resourceIds` are now checked in `checkResourceConflicts` (Branches 1 + 2), so a court reserved as an "extra" court on a multi-court Bookable event correctly blocks conflicting bookings.
 
 ## Context
 
