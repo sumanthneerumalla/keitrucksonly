@@ -29,12 +29,10 @@ export default function HomeClient() {
 									Welcome, {user.firstName || "Player"}!
 								</h1>
 
-								{user.userType === "STUDENT" && (
-									<div className="mb-6 space-y-6">
-										<TodayEventsCard />
-										<UpcomingEventsCard />
-									</div>
-								)}
+								<div className="mb-6 space-y-6">
+									<UpcomingEventsCard />
+									<TodayEventsCard />
+								</div>
 
 								<div className="glass-card rounded-lg p-6">
 									<h2 className="mb-4 font-semibold text-xl">Your Dashboard</h2>

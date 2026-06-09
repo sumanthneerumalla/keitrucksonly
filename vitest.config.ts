@@ -8,6 +8,13 @@ export default defineConfig({
 		environment: "jsdom",
 		setupFiles: ["./src/test/setup.ts"],
 		globals: true,
+		// *.itest.ts files are DB-coupled integration tests that hit a real
+		// Postgres (the dev DB). They must run inside the dev container where
+		// the backend network is reachable. They use the `.itest.ts` extension
+		// (not `.test.ts`) so vitest's default include glob doesn't pick them
+		// up on the host side. Trigger them via `npm run test:integration`
+		// (which execs into shuttlementor-app-dev and passes the file path
+		// explicitly).
 	},
 	resolve: {
 		alias: {

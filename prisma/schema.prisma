@@ -165,6 +165,15 @@ model User {
   // Feeds GBR's rating category; mapped to GBR's lowercase male/female at provision.
   gender Gender?
 
+  // Guest support — a guest is a User row with no Clerk account (synthetic
+  // clerkUserId = 'guest_<cuid2>'). Used for drop-in walk-ins who don't have
+  // an FP account. Excluded from leaderboard / GBR sync (see
+  // designFiles/drop-in/group-join-feature-plan.md §6).
+  isGuest        Boolean @default(false)
+  guestCreatedBy String?
+  guestCreator   User?   @relation("GuestCreator", fields: [guestCreatedBy], references: [userId], onDelete: SetNull)
+  createdGuests  User[]  @relation("GuestCreator")
+
   // Articles (Facility Presence marketing articles) — author bio shown on article pages, plus authored articles
   authorBio     String?            @db.Text
   articles      Article[]          @relation("ArticleAuthor")
@@ -741,6 +750,7 @@ model DropInSession {
 
   checkIns    DropInCheckIn[]
   assignments DropInAssignment[]
+  parties     DropInParty[]
 
   @@unique([eventId, occurrenceDate]) // one live session per day per series
   @@index([clubShortName])
@@ -755,6 +765,14 @@ model DropInCheckIn {
   userId    String
   user      User               @relation(fields: [userId], references: [userId])
   status    DropInPlayerStatus @default(IDLE)
+
+  // Party membership. Every check-in is in exactly one party — a solo is a
+  // party of 1. See designFiles/drop-in/group-join-feature-plan.md.
+  // Migration adds the column nullable, backfills one party per existing
+  // check-in (openToFill = true, matches today's de-facto solo-mix behavior),
+  // then SETs NOT NULL.
+  partyId   String
+  party     DropInParty        @relation(fields: [partyId], references: [partyId], onDelete: Restrict)
 
   // Fairness ordering inputs (queue derived, not a separate table)
   queuedAt     DateTime  @default(now())
@@ -773,7 +791,39 @@ model DropInCheckIn {
 
   @@unique([sessionId, userId])
   @@index([sessionId, status])
+  @@index([sessionId, partyId])
   @@index([userId])
+}
+
+// Drop-in party — a group of 1+ players holding a single queue slot together.
+// See designFiles/drop-in/group-join-feature-plan.md. Party state (WAITING /
+// PLAYING / AWAITING_RESULT / DEFUNCT) is DERIVED at read time from member
+// DropInCheckIn.status — there is no status column on this model.
+model DropInParty {
+  partyId         String        @id @default(cuid())
+  sessionId       String
+  session         DropInSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  // openToFill = true → the party is willing to be combined with other
+  // openToFill entries at court-assignment time to fill the court. Solo
+  // "Join others" defaults this to true; explicit closed groups default false.
+  openToFill      Boolean       @default(false)
+  // Party-level FIFO sort key. Snaps to MIN(party.queuedAt, member.queuedAt)
+  // on every member-add (rule B2 in the plan).
+  queuedAt        DateTime      @default(now())
+  // Hard court lock (court-preference feature, designFiles/drop-in/
+  // court-preference-feature-plan.md). null = any court (default). When set,
+  // this party is ONLY eligible for the named court in pickNextOccupants. Must
+  // be one of session.courtIds; reset to null by removeCourt (CP8). Plain
+  // string, not a relation — mirrors DropInSession.courtIds / Assignment.courtId.
+  preferredCourtId String?
+  // Audit: who clicked "Create party" (nullable for backfill).
+  createdByUserId String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  members DropInCheckIn[]
+
+  @@index([sessionId, queuedAt])
 }
 
 // ===========================================================================

@@ -4,11 +4,14 @@ import { Check, Maximize2, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	Countdown,
+	JoinPartyPopover,
 	Leaderboard,
 	MemberSearchPopover,
+	QueueByParty,
 	ScoreEntry,
 	StaffAddToQueue,
 	SwapPlayer,
+	YourPartyCard,
 	formatGames,
 } from "~/app/(app)/events/_components/dropin-ui";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
@@ -101,6 +104,11 @@ export default function DropInEventDetails({
 		onError: (e) => toast(e.message, "error"),
 	});
 	const joinQueue = api.dropIn.joinQueue.useMutation({
+		onSuccess: refresh,
+		onError: (e) => toast(e.message, "error"),
+	});
+	// Court-preference feature: pin/clear the viewer's party to a court.
+	const setPartyPreferredCourt = api.dropIn.setPartyPreferredCourt.useMutation({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
@@ -412,6 +420,16 @@ export default function DropInEventDetails({
 	const playersPerCourt = session.format === "SINGLES" ? 2 : 4;
 
 	const pool = board?.pool ?? [];
+	const parties = board?.parties ?? [];
+	// Find the viewer's party (if any). A "non-trivial" party is one worth
+	// showing controls for — either multi-member, or a closed solo (the user
+	// expressed party intent and is waiting for friends).
+	const viewerParty = viewerCheckIn?.partyId
+		? parties.find((p) => p.partyId === viewerCheckIn.partyId)
+		: undefined;
+	const showYourPartyCard =
+		!!viewerParty &&
+		(viewerParty.memberCount > 1 || viewerParty.openToFill === false);
 	const availableCourts = (resourcesQuery.data?.resources ?? []).filter(
 		(r) => !session.courtIds.includes(r.resourceId),
 	);
@@ -436,6 +454,7 @@ export default function DropInEventDetails({
 				<SwapPlayer
 					name={fullName(p.user)}
 					canSwap={canSwapPlayers(a.status)}
+					sessionId={session.sessionId}
 					onPick={(inUserId) =>
 						swapParticipant.mutate({
 							assignmentId: a.assignmentId,
@@ -446,6 +465,58 @@ export default function DropInEventDetails({
 				/>
 			</span>
 		));
+	};
+
+	// Court-preference button (CP9): tap a court to queue locked to it.
+	//  - not in queue  → "Queue for Court N" (joinQueue pinned to the court)
+	//  - in queue, other/any pref → "Prefer Court N" (set the party's court)
+	//  - in queue, this court → "Queued for Court N ✓" (tap again to clear)
+	// Hidden while the viewer is on a court (PLAYING).
+	const myPartyId = viewerCheckIn?.partyId ?? null;
+	const myPref = viewerParty?.preferredCourtId ?? null;
+	const renderCourtQueueButton = (courtId: string) => {
+		if (viewerStatus === "PLAYING") return null;
+		if (viewerStatus !== "WAITING") {
+			return (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={blockNewGames || joinQueue.isPending}
+					onClick={() =>
+						joinQueue.mutate({
+							sessionId: session.sessionId,
+							preferredCourtId: courtId,
+						})
+					}
+				>
+					Queue for {courtName(courtId)}
+				</Button>
+			);
+		}
+		const active = myPref === courtId;
+		return (
+			<Button
+				variant="outline"
+				size="sm"
+				className={
+					active ? "border-[var(--primary)] text-[var(--primary)]" : ""
+				}
+				disabled={
+					blockNewGames || !myPartyId || setPartyPreferredCourt.isPending
+				}
+				onClick={() =>
+					myPartyId &&
+					setPartyPreferredCourt.mutate({
+						partyId: myPartyId,
+						courtId: active ? null : courtId,
+					})
+				}
+			>
+				{active
+					? `Queued for ${courtName(courtId)} ✓`
+					: `Prefer ${courtName(courtId)}`}
+			</Button>
+		);
 	};
 
 	return (
@@ -468,7 +539,7 @@ export default function DropInEventDetails({
 						)}
 					</p>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex flex-wrap items-center justify-end gap-2">
 					<Button variant="outline" size="sm" onClick={enableKiosk}>
 						<Maximize2 size={14} /> Kiosk
 					</Button>
@@ -551,6 +622,12 @@ export default function DropInEventDetails({
 								)}
 							</div>
 
+							{/* Court-preference (CP9): player taps to queue for THIS court. */}
+							{(() => {
+								const btn = renderCourtQueueButton(courtId);
+								return btn ? <div className="mb-2">{btn}</div> : null;
+							})()}
+
 							{!a && (
 								<div className="flex items-center justify-between">
 									<span className="text-[var(--muted-foreground)] text-sm">
@@ -618,6 +695,7 @@ export default function DropInEventDetails({
 													<SwapPlayer
 														name={fullName(p.user)}
 														canSwap={canSwapPlayers(a.status)}
+														sessionId={session.sessionId}
 														onPick={(inUserId) =>
 															swapParticipant.mutate({
 																assignmentId: a.assignmentId,
@@ -810,13 +888,23 @@ export default function DropInEventDetails({
 				</div>
 			)}
 
+			{showYourPartyCard && viewerParty && (
+				<YourPartyCard
+					party={viewerParty}
+					sessionId={session.sessionId}
+					viewerUserId={userId}
+					onChange={refresh}
+					courtName={courtName}
+				/>
+			)}
+
 			{/* Queue + your controls */}
 			<div className="rounded-lg border border-[var(--border)] p-3">
-				<div className="mb-2 flex items-center justify-between">
+				<div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 					<span className="font-medium text-[var(--foreground)] text-sm">
 						Waiting ({pool.length})
 					</span>
-					<div className="flex gap-2">
+					<div className="flex flex-wrap gap-2">
 						{isStaff && (
 							<StaffAddToQueue
 								sessionId={session.sessionId}
@@ -846,56 +934,35 @@ export default function DropInEventDetails({
 								You're on a court
 							</span>
 						) : (
-							<Button
-								size="sm"
-								disabled={blockNewGames}
-								onClick={() =>
-									joinQueue.mutate({ sessionId: session.sessionId })
-								}
-							>
-								Join queue
-							</Button>
+							<>
+								<Button
+									size="sm"
+									disabled={blockNewGames}
+									onClick={() =>
+										joinQueue.mutate({ sessionId: session.sessionId })
+									}
+								>
+									Join queue
+								</Button>
+								<JoinPartyPopover
+									sessionId={session.sessionId}
+									capacity={playersPerCourt}
+									disabled={blockNewGames}
+									onDone={refresh}
+								/>
+							</>
 						)}
 					</div>
 				</div>
-				{pool.length === 0 ? (
-					<p className="text-[var(--muted-foreground)] text-sm">
-						No one waiting.
-					</p>
-				) : (
-					<ol className="space-y-1">
-						{pool.map((c, i) => (
-							<li
-								key={c.checkInId}
-								className={`flex items-center gap-2 text-sm ${
-									c.userId === userId
-										? "font-medium text-[var(--primary)]"
-										: "text-[var(--foreground)]"
-								}`}
-							>
-								<span className="text-[var(--muted-foreground)] text-xs">
-									{i + 1}.
-								</span>
-								<span className="flex-1">{fullName(c.user)}</span>
-								{isStaff && (
-									<button
-										type="button"
-										title="Take out of the queue (stays checked in)"
-										onClick={() =>
-											setCheckInStatus.mutate({
-												checkInId: c.checkInId,
-												status: "IDLE",
-											})
-										}
-										className="text-[var(--muted-foreground)] hover:text-red-600"
-									>
-										<X size={14} />
-									</button>
-								)}
-							</li>
-						))}
-					</ol>
-				)}
+				<QueueByParty
+					parties={parties}
+					pool={pool}
+					viewerUserId={userId}
+					viewerPartyId={viewerCheckIn?.partyId ?? null}
+					isStaff={isStaff}
+					onChange={refresh}
+					courtName={courtName}
+				/>
 			</div>
 
 			{/* Leaderboard (MATCH) */}
