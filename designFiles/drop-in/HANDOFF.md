@@ -1,6 +1,16 @@
 # Drop-In — Implementation HANDOFF / Resume
 
-**Updated:** 2026-06-08. Read this first, then [README.md](./README.md) (decisions + phases) and [open-questions.md](./open-questions.md) (all A–G decisions). The full feature design lives in this folder; this file tracks *build progress + open threads* so any session can resume.
+**Updated:** 2026-06-11. Read this first, then [README.md](./README.md) (decisions + phases) and [open-questions.md](./open-questions.md) (all A–G decisions). The full feature design lives in this folder; this file tracks *build progress + open threads* so any session can resume.
+
+---
+
+## 2026-06-11 — Post-demo cleanup (parties kept, guests cut)
+
+The group-join feature ([group-join-feature-plan.md](./group-join-feature-plan.md), merged + demoed 2026-06-08) was cleaned up on `dev`:
+- **Guest-user model removed entirely** (User.isGuest/guestCreatedBy columns dropped via `20260611000000_drop_guest_columns`; createGuest/searchGuests procedures, hasGuest/ratingEligible plumbing, and "guest" UI labels deleted). Drop-in players are logged-in club members only (G1).
+- **Parties now re-queue as a unit** — "Requeue group (N)" calls `requeueParty`; the individual `rejoin` procedure was deleted. Individuals re-queue solo by leaving the party first.
+- **Staff party controls wired** — club staff can `removePartyMember` / `disbandParty` on any party in their club (✕ on member pills / "Disband" on party rows).
+- `ratingWeight` is now purely mode-based (TIMED → null, MATCH → 1.0).
 
 ---
 
