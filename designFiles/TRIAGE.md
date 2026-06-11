@@ -1,6 +1,6 @@
 # ShuttleMentor — Launch Triage & Vulnerability Report
 
-> Generated: 2026-06-10. Owner context: first customer is a badminton club (Fung) moving off
+> Updated: 2026-06-11 (conflict fix confirmed merged, Option B override investigated). Original: 2026-06-10. Owner context: first customer is a badminton club (Fung) moving off
 > Pike13. Primary revenue = drop-in packages, court rentals, training/classes. Not
 > membership-heavy for v1. Goal of this doc: fastest path to a live, paying club.
 
@@ -45,7 +45,7 @@ first regardless of build status because a broken money pipe = no launch.
 | 10 | **Invoices / billing history** | `InvoiceListClient` + router built | Club needs to look up a member's payment history. Smoke test: sell a package, view the resulting invoice. |
 | 11 | **Basic revenue report (packages sold)** | Not built (Phase 14 deferred) | Even a simple "packages sold this week/month" table helps the club close their books. A small scoped query on `MemberPackage` + `Invoice` would suffice for v1. |
 | 12 | **Email groups / campaigns** | `EmailGroupsClient`, compose flow, Resend webhook built | Useful for announcements to members. Verify group create → add members → send. |
-| 13 | **Multi-court conflict detection fix** | Quick-version gap documented in `multi-court-conflict-TODO.md` | Two multi-court events sharing an extra court won't conflict-detect today. Low-urgency until multi-court bookings are common, but should land before the club's busy season. |
+| 13 | ~~Multi-court conflict detection fix~~ | ✅ **DONE** — fixed in commit `9bf086f` (this branch) | `checkResourceConflicts` now matches courts via `OR [resourceId, resourceIds.has]`; `multi-court-conflict-TODO.md` updated. |
 
 ---
 
@@ -116,21 +116,17 @@ Next.js 16's bundled version.
 
 **Effort:** High (regression testing required). **Risk if deferred:** Low (build-time only).
 
-#### Option B — Force PostCSS version override (lower effort, may break build)
+#### Option B — Force PostCSS version override ⚠️ Does NOT work with current setup
 
-Add to `package.json`:
+> **Investigated 2026-06-11:** Both global (`"overrides": { "postcss": ">=8.5.10" }`) and
+> scoped (`"overrides": { "next": { "postcss": ">=8.5.10" } }`) override forms were tested
+> against npm 10.7.0 + Next.js 15.5.15. **Neither removed the nested
+> `node_modules/next/node_modules/postcss@8.4.31`.** Next.js pins postcss at exactly
+> `8.4.31` in its own `package.json`; npm overrides cannot override exact-version pinned
+> nested deps in npm 10.x. This option is effectively a no-op until Next.js itself
+> releases a version that drops the pin.
 
-```json
-"overrides": {
-  "postcss": ">=8.5.10"
-}
-```
-
-Then run `npm install`. This forces npm to resolve all `postcss` sub-dependencies to a
-patched version. **Risk:** Next.js's internal CSS pipeline may break if it depends on a
-specific PostCSS API that changed between versions. Test with `npm run build` before deploying.
-
-**Effort:** Low (15 minutes + verification). **Risk:** Possible CSS build breakage; test first.
+**Effort:** Low. **Outcome:** No change; skip this option for now.
 
 #### Option C — Accept and document (no-action for now)
 
@@ -153,9 +149,9 @@ if the attack surface changes). Add a comment in `package.json` noting the known
 build-time-only vulnerability with no user-controlled CSS input, and it should not block
 go-live for a club management SaaS. Track it on the backlog.
 
-**Medium term:** After the P0/P1 launch checklist is clear, test **Option B** (override) in
-a branch. If `npm run build` is clean, merge it as a quick win. If it breaks CSS, shelve
-it until the Next.js 16 upgrade is scheduled.
+**Medium term:** Skip Option B (override) — it doesn't work with npm 10.x + Next.js 15.x
+(tested 2026-06-11). The only real fix is upgrading to Next.js 16 (Option A) when the team
+is ready for a full regression pass.
 
 **Never block launch on this.** The 3 moderate vulns are all the same postcss issue; there
 are 0 high and 0 critical vulnerabilities.
@@ -169,7 +165,7 @@ will accumulate interest if left too long:
 
 | Item | File | Notes |
 |------|------|-------|
-| `multi-court-conflict-TODO.md` gap | `src/server/api/routers/calendar.ts` | Multi-court events only check `resourceId`, not `resourceIds` |
+| ~~`multi-court-conflict-TODO.md` gap~~ | ✅ Fixed in `9bf086f` | `OR [resourceId, resourceIds.has]` now in both query branches |
 | Gender required drop-in gate | `src/server/services/dropIn/` | G7 unenforced; `joinQueue` has no onboarding check |
 | `getCoachDashboardMetrics` cleanup | `src/server/api/routers/user.ts` | Still flagged in `nextSteps.md` |
 | Video collection DB queries in page component | `src/app/(app)/video-collections/` | Should use paginated tRPC endpoints |
