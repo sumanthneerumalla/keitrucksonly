@@ -143,7 +143,7 @@ export function pickNextOccupants(
 		// make this unreachable. If we see corrupt data, don't stall — log
 		// and try the next head so one bad row doesn't freeze rotation.
 		if (headStatus.waitingCount > capacity) {
-			reportInvariantViolation("party larger than court capacity", {
+			console.error("[pickNextOccupants] party larger than court capacity", {
 				partyId: head.partyId,
 				waitingCount: headStatus.waitingCount,
 				capacity,
@@ -184,17 +184,4 @@ export function pickNextOccupants(
 	}
 
 	return null;
-}
-
-/**
- * Hook for surfacing data-corruption signals during the selection. Kept as a
- * thin indirection so callers (and tests) can swap in a Sentry breadcrumb
- * later without changing this file. Default behavior: console.error.
- */
-function reportInvariantViolation(
-	message: string,
-	context: Record<string, unknown>,
-): void {
-	// eslint-disable-next-line no-console
-	console.error("[pickNextOccupants] invariant violation:", message, context);
 }

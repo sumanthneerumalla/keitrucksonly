@@ -10,14 +10,16 @@ import { z } from "zod";
 import {
 	createTRPCRouter,
 	facilityProcedure,
-	protectedProcedure,
+	memberProcedure,
 	publicProcedure,
 } from "~/server/api/trpc";
 import {
 	assertCallerInParty,
 	assertPartyHasRoom,
 	assertSessionAcceptsPartyOps,
+	attachUserToParty,
 	capacityForFormat,
+	claimPickedMembers,
 	isClubStaff,
 	loadPartyForOp,
 	loadPartySummaries,
@@ -112,41 +114,13 @@ async function autoStartMatchOnCourt(
 	const playersPerCourt = format === DropInFormat.SINGLES ? 2 : 4;
 
 	const parties = await loadPartySummaries(tx, session.sessionId);
-	const pick = pickNextOccupants(parties, playersPerCourt);
+	// courtId respects hard court locks (court-preference feature) — was
+	// missing here while formNext/tickTimed had it.
+	const pick = pickNextOccupants(parties, playersPerCourt, courtId);
 	if (!pick) return; // queue can't produce a clean fill — staff can Start next manually
 
-	const claim = await tx.dropInCheckIn.updateMany({
-		where: {
-			sessionId: session.sessionId,
-			userId: { in: pick.userIds },
-			status: "WAITING",
-		},
-		data: { status: "PLAYING" },
-	});
-	if (claim.count !== pick.userIds.length) return; // contended
-
-	// Race guard — see formNext for the rationale.
-	const counts = await tx.dropInCheckIn.groupBy({
-		by: ["partyId"],
-		where: {
-			sessionId: session.sessionId,
-			partyId: { in: pick.partyIds },
-			status: { in: ["PLAYING", "WAITING"] },
-		},
-		_count: { userId: true },
-	});
-	for (const p of parties) {
-		if (!pick.partyIds.includes(p.partyId)) continue;
-		// `p.memberUserIds` is the full live-member set from the snapshot;
-		// match against WAITING+PLAYING since the just-claimed members are
-		// now PLAYING.
-		const waitingInSnapshot = p.memberUserIds.filter(
-			(uid) => p.memberStatuses[uid] === "WAITING",
-		).length;
-		const actual =
-			counts.find((c) => c.partyId === p.partyId)?._count.userId ?? 0;
-		if (actual !== waitingInSnapshot) return; // party changed; bail
-	}
+	// Contended or party changed mid-selection — bail; staff can Start next.
+	if (!(await claimPickedMembers(tx, session.sessionId, parties, pick))) return;
 
 	const half = playersPerCourt / 2;
 
@@ -240,19 +214,12 @@ type BoardSession = Prisma.DropInSessionGetPayload<{
 }>;
 
 /**
- * Derive the client-facing `pool` (sorted WAITING check-ins, enriched with
- * party-head flags) and `parties` (filtered + summarized) from a session loaded
- * with `boardSessionInclude`. Pure — no auth/viewer coupling — so both the authed
- * and public board readers share identical semantics.
+ * Derive the client-facing `pool` (sorted WAITING check-ins) and `parties`
+ * (filtered + summarized) from a session loaded with `boardSessionInclude`.
+ * Pure — no auth/viewer coupling — so both the authed and public board
+ * readers share identical semantics.
  */
 function deriveBoardView(session: BoardSession) {
-	// Map userId → isPartyHead (first member by createdAt within their party).
-	const partyHeadByUserId = new Map<string, boolean>();
-	for (const p of session.parties) {
-		const head = p.members[0];
-		if (head) partyHeadByUserId.set(head.userId, true);
-	}
-
 	const pool = session.checkIns
 		.filter((c) => c.status === "WAITING")
 		.sort(
@@ -260,11 +227,7 @@ function deriveBoardView(session: BoardSession) {
 				a.gamesPlayed - b.gamesPlayed ||
 				(a.lastPlayedAt?.getTime() ?? 0) - (b.lastPlayedAt?.getTime() ?? 0) ||
 				a.queuedAt.getTime() - b.queuedAt.getTime(),
-		)
-		.map((c) => ({
-			...c,
-			isPartyHead: partyHeadByUserId.get(c.userId) ?? false,
-		}));
+		);
 
 	const capacity = capacityForFormat(session.format);
 	const parties = session.parties
@@ -357,16 +320,10 @@ export const dropInRouter = createTRPCRouter({
 	 * the session hasn't been started yet. Any authenticated club member can view
 	 * (the event page renders the board from this).
 	 */
-	getSession: protectedProcedure
+	getSession: memberProcedure
 		.input(z.object({ eventId: z.string(), occurrenceDate: z.coerce.date() }))
 		.query(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { clubShortName: true },
-			});
-			if (!user) {
-				throw new TRPCError({ code: "UNAUTHORIZED" });
-			}
+			const user = ctx.user;
 
 			const session = await ctx.db.dropInSession.findUnique({
 				where: {
@@ -663,14 +620,10 @@ export const dropInRouter = createTRPCRouter({
 	 * assignments (with participants), and the fairness-ordered waiting pool.
 	 * Returns null before a session is started. Authed club members only.
 	 */
-	getBoard: protectedProcedure
+	getBoard: memberProcedure
 		.input(z.object({ eventId: z.string(), occurrenceDate: z.coerce.date() }))
 		.query(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 
 			const session = await ctx.db.dropInSession.findUnique({
 				where: {
@@ -741,7 +694,7 @@ export const dropInRouter = createTRPCRouter({
 	 * get mixed with other open queuers by default — matches today's behavior).
 	 * On re-entry (already had a check-in), preserves the existing party.
 	 */
-	joinQueue: protectedProcedure
+	joinQueue: memberProcedure
 		.input(
 			z.object({
 				sessionId: z.string(),
@@ -752,11 +705,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			const session = await ctx.db.dropInSession.findUnique({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true, status: true, courtIds: true },
@@ -839,14 +788,10 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/** Member leaves the queue (back to IDLE). */
-	leaveQueue: protectedProcedure
+	leaveQueue: memberProcedure
 		.input(z.object({ sessionId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			return ctx.db.dropInCheckIn.updateMany({
 				where: { sessionId: input.sessionId, userId: user.userId },
 				data: { status: "IDLE" },
@@ -873,7 +818,7 @@ export const dropInRouter = createTRPCRouter({
 	 * Default openToFill = false — opt-in via setPartyOpenToFill or by clicking
 	 * "Join others" in the UI.
 	 */
-	createParty: protectedProcedure
+	createParty: memberProcedure
 		.input(
 			z.object({
 				sessionId: z.string(),
@@ -881,11 +826,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				const session = await loadSessionForPartyOp(
@@ -967,7 +908,7 @@ export const dropInRouter = createTRPCRouter({
 	 * snaps to MIN(party.queuedAt, target.queuedAt). The target's prior party
 	 * (a solo party of 1) is left behind as defunct (no live members).
 	 */
-	addPartyMember: protectedProcedure
+	addPartyMember: memberProcedure
 		.input(
 			z.object({
 				partyId: z.string(),
@@ -975,11 +916,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				await assertCallerInParty(tx, input.partyId, caller.userId);
@@ -1014,97 +951,8 @@ export const dropInRouter = createTRPCRouter({
 					});
 				}
 
-				// Existing check-in for the target in this session, if any.
-				const existing = await tx.dropInCheckIn.findUnique({
-					where: {
-						sessionId_userId: {
-							sessionId: party.sessionId,
-							userId: target.userId,
-						},
-					},
-					select: { partyId: true, queuedAt: true, status: true },
-				});
-
-				// Reject if target is already in THIS party (idempotency).
-				if (existing && existing.partyId === input.partyId) {
-					return { partyId: input.partyId, added: false };
-				}
-
-				const now = new Date();
-
-				if (existing) {
-					// Target has a check-in (possibly LEFT/CANCELLED, possibly
-					// in another live party). Move them to ours.
-					if (
-						existing.status !== "LEFT" &&
-						existing.status !== "CANCELLED"
-					) {
-						// B2: snap the receiving party's position to the earlier
-						// of the two queuedAts. Solo-WAITING entries effectively
-						// "give" their position to the party.
-						const earlier =
-							existing.queuedAt < party.queuedAt
-								? existing.queuedAt
-								: party.queuedAt;
-						if (earlier.getTime() !== party.queuedAt.getTime()) {
-							await tx.dropInParty.update({
-								where: { partyId: input.partyId },
-								data: { queuedAt: earlier },
-							});
-						}
-					}
-					await tx.dropInCheckIn.update({
-						where: {
-							sessionId_userId: {
-								sessionId: party.sessionId,
-								userId: target.userId,
-							},
-						},
-						data: {
-							partyId: input.partyId,
-							// Preserve PLAYING/AWAITING_RESULT status if they're
-							// mid-game on another court — spec allows adding
-							// someone who's playing. Otherwise flip to WAITING.
-							status:
-								existing.status === "PLAYING" ||
-								existing.status === "AWAITING_RESULT"
-									? existing.status
-									: "WAITING",
-							queuedAt: party.queuedAt, // member rows mirror party time for fairness
-							leftAt: null,
-						},
-					});
-				} else {
-					// First time joining this session (the friend may be active in a
-					// DIFFERENT session — that's fine, check-ins are per-session).
-					// Upsert, not create, so a concurrent add / double-click can't
-					// blow up with a unique-constraint error on (sessionId, userId):
-					// if a row appeared since the findUnique above, just move them
-					// into our party instead of failing the whole operation.
-					await tx.dropInCheckIn.upsert({
-						where: {
-							sessionId_userId: {
-								sessionId: party.sessionId,
-								userId: target.userId,
-							},
-						},
-						create: {
-							sessionId: party.sessionId,
-							userId: target.userId,
-							partyId: input.partyId,
-							status: "WAITING",
-							queuedAt: party.queuedAt,
-						},
-						update: {
-							partyId: input.partyId,
-							status: "WAITING",
-							queuedAt: party.queuedAt,
-							leftAt: null,
-						},
-					});
-				}
-
-				return { partyId: input.partyId, added: true };
+				const added = await attachUserToParty(tx, party, target.userId);
+				return { partyId: input.partyId, added };
 			});
 		}),
 
@@ -1116,7 +964,7 @@ export const dropInRouter = createTRPCRouter({
 	 * Any party member can remove any other. Removing yourself is equivalent to
 	 * leaveParty (kept as a separate endpoint for clarity).
 	 */
-	removePartyMember: protectedProcedure
+	removePartyMember: memberProcedure
 		.input(
 			z.object({
 				partyId: z.string(),
@@ -1124,11 +972,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true, userType: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				// Any party member can remove a member; club staff can remove from
@@ -1169,14 +1013,10 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/** Caller leaves their own party. Sugar over removePartyMember(self). */
-	leaveParty: protectedProcedure
+	leaveParty: memberProcedure
 		.input(z.object({ partyId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				await assertCallerInParty(tx, input.partyId, caller.userId);
@@ -1209,14 +1049,10 @@ export const dropInRouter = createTRPCRouter({
 	 * row stays for audit but becomes defunct (no live members). Rejected if
 	 * any member is currently PLAYING.
 	 */
-	disbandParty: protectedProcedure
+	disbandParty: memberProcedure
 		.input(z.object({ partyId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true, userType: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				// Any party member can disband; club staff can disband any party in
@@ -1260,14 +1096,10 @@ export const dropInRouter = createTRPCRouter({
 	 * If no IDLE members are eligible, party is effectively dissolved by
 	 * attrition; procedure returns `{ requeued: 0 }` without touching anything.
 	 */
-	requeueParty: protectedProcedure
+	requeueParty: memberProcedure
 		.input(z.object({ partyId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				await assertCallerInParty(tx, input.partyId, caller.userId);
@@ -1308,7 +1140,7 @@ export const dropInRouter = createTRPCRouter({
 	 * two members are last-write-wins (Prisma default isolation); both states
 	 * are valid so this is fine.
 	 */
-	setPartyOpenToFill: protectedProcedure
+	setPartyOpenToFill: memberProcedure
 		.input(
 			z.object({
 				partyId: z.string(),
@@ -1316,11 +1148,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				await assertCallerInParty(tx, input.partyId, caller.userId);
@@ -1346,7 +1174,7 @@ export const dropInRouter = createTRPCRouter({
 	 * Validates the court belongs to the session. See
 	 * designFiles/drop-in/court-preference-feature-plan.md.
 	 */
-	setPartyPreferredCourt: protectedProcedure
+	setPartyPreferredCourt: memberProcedure
 		.input(
 			z.object({
 				partyId: z.string(),
@@ -1354,11 +1182,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				await assertCallerInParty(tx, input.partyId, caller.userId);
@@ -1407,14 +1231,10 @@ export const dropInRouter = createTRPCRouter({
 	 * NOT to be confused with `addPartyMember` (which requires the caller to
 	 * ALREADY be in the party). This one is for outsiders adding themselves.
 	 */
-	joinExistingParty: protectedProcedure
+	joinExistingParty: memberProcedure
 		.input(z.object({ partyId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			return ctx.db.$transaction(async (tx) => {
 				const party = await loadPartyForOp(tx, input.partyId);
@@ -1440,61 +1260,8 @@ export const dropInRouter = createTRPCRouter({
 				// C1 capacity check — must leave room for the caller.
 				assertPartyHasRoom(party.liveMembers.length, session.format);
 
-				// Find caller's existing check-in (if any) in this session.
-				const existing = await tx.dropInCheckIn.findUnique({
-					where: {
-						sessionId_userId: {
-							sessionId: party.sessionId,
-							userId: caller.userId,
-						},
-					},
-					select: { partyId: true, queuedAt: true, status: true },
-				});
-
-				const now = new Date();
-
-				// B2-style snap: ONLY when the joiner is currently solo-WAITING
-				// with an earlier queuedAt. IDLE / DONE / first-time joiners
-				// have no "position" to bring — they inherit the party's spot.
-				if (
-					existing &&
-					existing.status === "WAITING" &&
-					existing.queuedAt < party.queuedAt
-				) {
-					await tx.dropInParty.update({
-						where: { partyId: input.partyId },
-						data: { queuedAt: existing.queuedAt },
-					});
-				}
-
-				if (existing) {
-					await tx.dropInCheckIn.update({
-						where: {
-							sessionId_userId: {
-								sessionId: party.sessionId,
-								userId: caller.userId,
-							},
-						},
-						data: {
-							partyId: input.partyId,
-							status: "WAITING",
-							queuedAt: now,
-							leftAt: null,
-						},
-					});
-				} else {
-					await tx.dropInCheckIn.create({
-						data: {
-							sessionId: party.sessionId,
-							userId: caller.userId,
-							partyId: input.partyId,
-							status: "WAITING",
-							queuedAt: now,
-						},
-					});
-				}
-
-				return { partyId: input.partyId, joined: true };
+				const joined = await attachUserToParty(tx, party, caller.userId);
+				return { partyId: input.partyId, joined };
 			});
 		}),
 
@@ -1516,7 +1283,7 @@ export const dropInRouter = createTRPCRouter({
 	 * `user.searchMembers` (facilityProcedure, staff-only, returns email); this
 	 * member-facing surface only exposes names.
 	 */
-	searchPartyMembers: protectedProcedure
+	searchPartyMembers: memberProcedure
 		.input(
 			z.object({
 				sessionId: z.string(),
@@ -1524,11 +1291,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const caller = ctx.user;
 
 			// Validate the sessionId belongs to the caller's club (authz guard);
 			// the member search itself is club-wide, not scoped to this session.
@@ -1814,11 +1577,7 @@ export const dropInRouter = createTRPCRouter({
 				// rows — see plan §3 for the algorithm + A1-vs-combinatorial
 				// divergence.
 				const parties = await loadPartySummaries(tx, session.sessionId);
-				const pick = pickNextOccupants(
-					parties,
-					playersPerCourt,
-					input.courtId,
-				);
+				const pick = pickNextOccupants(parties, playersPerCourt, input.courtId);
 				if (!pick) {
 					throw new TRPCError({
 						code: "BAD_REQUEST",
@@ -1826,45 +1585,11 @@ export const dropInRouter = createTRPCRouter({
 					});
 				}
 
-				const claim = await tx.dropInCheckIn.updateMany({
-					where: {
-						sessionId: session.sessionId,
-						userId: { in: pick.userIds },
-						status: "WAITING",
-					},
-					data: { status: "PLAYING" },
-				});
-				if (claim.count !== pick.userIds.length) {
+				if (!(await claimPickedMembers(tx, session.sessionId, parties, pick))) {
 					throw new TRPCError({
 						code: "CONFLICT",
 						message: "Players were just assigned elsewhere — try again.",
 					});
-				}
-
-				// Race guard: an `addPartyMember` landing between our snapshot
-				// and the claim could leave a just-added member out of pick.
-				// Re-read each chosen party's live-WAITING-or-PLAYING count;
-				// if any party's expected size doesn't match what we just
-				// claimed, abort + retry.
-				const counts = await tx.dropInCheckIn.groupBy({
-					by: ["partyId"],
-					where: {
-						sessionId: session.sessionId,
-						partyId: { in: pick.partyIds },
-						status: { in: ["PLAYING", "WAITING"] },
-					},
-					_count: { userId: true },
-				});
-				for (const p of parties) {
-					if (!pick.partyIds.includes(p.partyId)) continue;
-					const actual = counts.find((c) => c.partyId === p.partyId)
-						?._count.userId ?? 0;
-					if (actual !== p.memberUserIds.length) {
-						throw new TRPCError({
-							code: "CONFLICT",
-							message: "Party changed during selection — retry.",
-						});
-					}
 				}
 
 				// ratingWeight = null when TIMED (no scores, no GBR sync ever).
@@ -2117,7 +1842,7 @@ export const dropInRouter = createTRPCRouter({
 	 * MATCH: a player on the court reports the per-game scores. Moves the match to
 	 * PENDING_CONFIRM and frees the court (all participants → AWAITING_RESULT).
 	 */
-	reportScore: protectedProcedure
+	reportScore: memberProcedure
 		.input(
 			z.object({
 				assignmentId: z.string(),
@@ -2132,11 +1857,7 @@ export const dropInRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			const assignment = await ctx.db.dropInAssignment.findUnique({
 				where: { assignmentId: input.assignmentId },
 				include: {
@@ -2208,14 +1929,10 @@ export const dropInRouter = createTRPCRouter({
 	 * MATCH: the opponent confirms the reported score → CONFIRMED. Stamps winners,
 	 * returns players to IDLE with counters bumped, and queues a (stubbed) GBR sync.
 	 */
-	confirmScore: protectedProcedure
+	confirmScore: memberProcedure
 		.input(z.object({ assignmentId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			const assignment = await ctx.db.dropInAssignment.findUnique({
 				where: { assignmentId: input.assignmentId },
 				include: {
@@ -2328,14 +2045,10 @@ export const dropInRouter = createTRPCRouter({
 	 * MATCH: the opposing side rejects the reported score → DISPUTED. Players stay
 	 * locked (AWAITING_RESULT) until staff resolve via staffSetScore (or cancel).
 	 */
-	disputeScore: protectedProcedure
+	disputeScore: memberProcedure
 		.input(z.object({ assignmentId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			const assignment = await ctx.db.dropInAssignment.findUnique({
 				where: { assignmentId: input.assignmentId },
 				include: {
@@ -2512,14 +2225,10 @@ export const dropInRouter = createTRPCRouter({
 	 * Recent confirmed results for a session (most recent first) — lets staff find
 	 * a finished game (which has left the board) to override its score.
 	 */
-	getRecentResults: protectedProcedure
+	getRecentResults: memberProcedure
 		.input(z.object({ sessionId: z.string(), limit: z.number().optional() }))
 		.query(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			const session = await ctx.db.dropInSession.findUnique({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },
@@ -2557,14 +2266,10 @@ export const dropInRouter = createTRPCRouter({
 	 * status update, so concurrent ticks from multiple open boards can't double-
 	 * rotate. (Headless rotation with no board open would need a scheduler — R3.)
 	 */
-	tickTimed: protectedProcedure
+	tickTimed: memberProcedure
 		.input(z.object({ sessionId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			const session = await ctx.db.dropInSession.findUnique({
 				where: { sessionId: input.sessionId },
 				select: {
@@ -2631,35 +2336,12 @@ export const dropInRouter = createTRPCRouter({
 						);
 						if (!pick) return false;
 
-						const claim = await tx.dropInCheckIn.updateMany({
-							where: {
-								sessionId: input.sessionId,
-								userId: { in: pick.userIds },
-								status: "WAITING",
-							},
-							data: { status: "PLAYING" },
-						});
-						if (claim.count !== pick.userIds.length) {
+						if (
+							!(await claimPickedMembers(tx, input.sessionId, parties, pick))
+						) {
+							// Contended or party changed — the catch below skips
+							// this slot; the next tick retries it.
 							throw new Error("CONTENDED");
-						}
-
-						// Race guard — see formNext for rationale.
-						const counts = await tx.dropInCheckIn.groupBy({
-							by: ["partyId"],
-							where: {
-								sessionId: input.sessionId,
-								partyId: { in: pick.partyIds },
-								status: { in: ["PLAYING", "WAITING"] },
-							},
-							_count: { userId: true },
-						});
-						for (const p of parties) {
-							if (!pick.partyIds.includes(p.partyId)) continue;
-							const actual = counts.find((c) => c.partyId === p.partyId)
-								?._count.userId ?? 0;
-							if (actual !== p.memberUserIds.length) {
-								throw new Error("PARTY_CHANGED");
-							}
 						}
 
 						// TIMED mode → ratingWeight stays null (no GBR sync).
@@ -2697,14 +2379,10 @@ export const dropInRouter = createTRPCRouter({
 	 * Per-session leaderboard (local; the GBR-extracted `calculateStandings` is a
 	 * later refinement). Ranks confirmed-match players by wins then point diff.
 	 */
-	getStandings: protectedProcedure
+	getStandings: memberProcedure
 		.input(z.object({ sessionId: z.string() }))
 		.query(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+			const user = ctx.user;
 			const session = await ctx.db.dropInSession.findUnique({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },

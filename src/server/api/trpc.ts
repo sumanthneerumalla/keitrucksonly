@@ -159,6 +159,23 @@ export const protectedProcedure = t.procedure
 	.use(isAuthed)
 	.use(timingMiddleware);
 
+/**
+ * Authenticated procedure that also resolves the local User row as `ctx.user`
+ * (UNAUTHORIZED if the Clerk user has no User row). Use instead of
+ * protectedProcedure whenever the handler needs the caller's User record —
+ * replaces the per-procedure findUnique({ clerkUserId }) boilerplate.
+ */
+export const memberProcedure = t.procedure
+	.use(isAuthed)
+	.use(async ({ ctx, next }) => {
+		const user = await ctx.db.user.findUnique({
+			where: { clerkUserId: ctx.auth.userId },
+		});
+		if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+		return next({ ctx: { ...ctx, user } });
+	})
+	.use(timingMiddleware);
+
 /** Helper: fetch user and check role, throw if unauthorized */
 async function requireRole(
 	ctx: { db: typeof import("~/server/db").db; auth: { userId: string } },

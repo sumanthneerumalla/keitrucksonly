@@ -172,6 +172,126 @@ export function assertPartyHasRoom(
 	}
 }
 
+/**
+ * Attach a user's check-in to a party — the shared core of `addPartyMember`
+ * and `joinExistingParty` (callers do auth + capacity + club checks first).
+ * Moves an existing check-in (any prior party; the old solo party is left
+ * defunct) or creates a fresh one (first time in this session — this is what
+ * lets members pull in friends who never checked in). Revives LEFT/CANCELLED
+ * check-ins.
+ *
+ * B2 snap: only a currently solo-WAITING target with an earlier queuedAt
+ * gives the party its position (MIN). Non-WAITING check-ins (IDLE/DONE/fresh)
+ * bring no position — a stale early timestamp must not drag the party forward.
+ *
+ * Status: a target mid-game (PLAYING / AWAITING_RESULT) keeps their status —
+ * they're "not ready" for the party until their game resolves. Everyone else
+ * lands WAITING. Member queuedAt mirrors the party's (fairness rule X).
+ *
+ * Returns false (no-op) when the user is already a live member of this party.
+ */
+export async function attachUserToParty(
+	tx: Prisma.TransactionClient,
+	party: { partyId: string; sessionId: string; queuedAt: Date },
+	userId: string,
+): Promise<boolean> {
+	const existing = await tx.dropInCheckIn.findUnique({
+		where: { sessionId_userId: { sessionId: party.sessionId, userId } },
+		select: { partyId: true, queuedAt: true, status: true },
+	});
+	if (
+		existing &&
+		existing.partyId === party.partyId &&
+		existing.status !== "LEFT" &&
+		existing.status !== "CANCELLED"
+	) {
+		return false; // already a live member — idempotent no-op
+	}
+
+	let partyQueuedAt = party.queuedAt;
+	if (
+		existing &&
+		existing.status === "WAITING" &&
+		existing.queuedAt < partyQueuedAt
+	) {
+		partyQueuedAt = existing.queuedAt;
+		await tx.dropInParty.update({
+			where: { partyId: party.partyId },
+			data: { queuedAt: partyQueuedAt },
+		});
+	}
+
+	// Upsert, not update/create, so a concurrent add / double-click can't blow
+	// up with a unique-constraint error on (sessionId, userId): if a row
+	// appeared since the findUnique above, just move them into this party.
+	await tx.dropInCheckIn.upsert({
+		where: { sessionId_userId: { sessionId: party.sessionId, userId } },
+		create: {
+			sessionId: party.sessionId,
+			userId,
+			partyId: party.partyId,
+			status: "WAITING",
+			queuedAt: partyQueuedAt,
+		},
+		update: {
+			partyId: party.partyId,
+			status:
+				existing?.status === "PLAYING" || existing?.status === "AWAITING_RESULT"
+					? existing.status
+					: "WAITING",
+			queuedAt: partyQueuedAt,
+			leftAt: null,
+		},
+	});
+	return true;
+}
+
+/**
+ * Atomically claim a pick's WAITING members (→ PLAYING) and verify no chosen
+ * party changed shape between the snapshot and the claim. Shared by formNext /
+ * tickTimed / MATCH auto-start. Returns false on contention or a party-shape
+ * change — callers throw/skip/retry on their own terms (the next tick or a
+ * manual retry re-runs selection against the new queue shape).
+ *
+ * The race this guards: an `addPartyMember` landing between the
+ * `loadPartySummaries` snapshot and the claim would silently leave the
+ * just-added member off the court. Post-claim, each chosen party's
+ * WAITING+PLAYING count must equal the snapshot's WAITING count (the members
+ * the claim was meant to seat).
+ */
+export async function claimPickedMembers(
+	tx: Prisma.TransactionClient,
+	sessionId: string,
+	parties: PartySummary[],
+	pick: { partyIds: string[]; userIds: string[] },
+): Promise<boolean> {
+	const claim = await tx.dropInCheckIn.updateMany({
+		where: { sessionId, userId: { in: pick.userIds }, status: "WAITING" },
+		data: { status: "PLAYING" },
+	});
+	if (claim.count !== pick.userIds.length) return false;
+
+	const counts = await tx.dropInCheckIn.groupBy({
+		by: ["partyId"],
+		where: {
+			sessionId,
+			partyId: { in: pick.partyIds },
+			status: { in: ["PLAYING", "WAITING"] },
+		},
+		_count: { userId: true },
+	});
+	for (const p of parties) {
+		if (!pick.partyIds.includes(p.partyId)) continue;
+		const waitingInSnapshot = p.memberUserIds.filter(
+			(uid) => p.memberStatuses[uid] === "WAITING",
+		).length;
+		const actual =
+			counts.find((c) => c.partyId === p.partyId)?._count.userId ?? 0;
+		if (actual !== waitingInSnapshot) return false;
+	}
+	return true;
+}
+
 // =============================================================================
 // Pool loader — reads parties for pickNextOccupants. Called by formNext /
 // tickTimed (next task).
