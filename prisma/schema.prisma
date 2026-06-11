@@ -165,15 +165,6 @@ model User {
   // Feeds GBR's rating category; mapped to GBR's lowercase male/female at provision.
   gender Gender?
 
-  // Guest support — a guest is a User row with no Clerk account (synthetic
-  // clerkUserId = 'guest_<cuid2>'). Used for drop-in walk-ins who don't have
-  // an FP account. Excluded from leaderboard / GBR sync (see
-  // designFiles/drop-in/group-join-feature-plan.md §6).
-  isGuest        Boolean @default(false)
-  guestCreatedBy String?
-  guestCreator   User?   @relation("GuestCreator", fields: [guestCreatedBy], references: [userId], onDelete: SetNull)
-  createdGuests  User[]  @relation("GuestCreator")
-
   // Articles (Facility Presence marketing articles) — author bio shown on article pages, plus authored articles
   authorBio     String?            @db.Text
   articles      Article[]          @relation("ArticleAuthor")

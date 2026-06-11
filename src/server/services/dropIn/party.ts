@@ -4,8 +4,8 @@
  * See designFiles/drop-in/group-join-feature-plan.md for the full design.
  */
 
-import { randomUUID } from "node:crypto";
 import type { DropInFormat, DropInPlayerStatus, Prisma } from "@prisma/client";
+import { UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import type { PartySummary } from "./pickNextOccupants";
 
@@ -31,14 +31,17 @@ export function capacityForFormat(format: DropInFormat | null): number {
 	return 4;
 }
 
-/** Synthetic clerkUserId for a guest User row. */
-export function generateGuestClerkUserId(): string {
-	// crypto.randomUUID is Node-builtin and produces a 36-char UUID. We strip
-	// dashes and prefix with `guest_` so the value is recognizable in logs and
-	// can be filtered with NOT clerkUserId LIKE 'guest_%' if isGuest isn't
-	// available (it always is — `isGuest` is the canonical filter).
-	const raw = randomUUID().replace(/-/g, "");
-	return `guest_${raw}`;
+/**
+ * Club staff (facility / club admin / platform admin) may manage any party in
+ * their club — disband a stuck group, remove a no-show member — without being
+ * a member of it. Mirrors the role set behind `facilityProcedure`.
+ */
+export function isClubStaff(userType: UserType): boolean {
+	return (
+		userType === UserType.FACILITY ||
+		userType === UserType.CLUB_ADMIN ||
+		userType === UserType.PLATFORM_ADMIN
+	);
 }
 
 // =============================================================================
@@ -195,11 +198,7 @@ export async function loadPartySummaries(
 			preferredCourtId: true,
 			members: {
 				where: { status: { in: [...LIVE_STATUSES] } },
-				select: {
-					userId: true,
-					status: true,
-					user: { select: { isGuest: true } },
-				},
+				select: { userId: true, status: true },
 			},
 		},
 	});
@@ -208,12 +207,10 @@ export async function loadPartySummaries(
 	for (const p of parties) {
 		if (p.members.length === 0) continue; // defunct
 		const memberStatuses: Record<string, DropInPlayerStatus> = {};
-		let hasGuest = false;
 		const memberUserIds: string[] = [];
 		for (const m of p.members) {
 			memberUserIds.push(m.userId);
 			memberStatuses[m.userId] = m.status;
-			if (m.user.isGuest) hasGuest = true;
 		}
 		out.push({
 			partyId: p.partyId,
@@ -222,7 +219,6 @@ export async function loadPartySummaries(
 			preferredCourtId: p.preferredCourtId,
 			memberUserIds,
 			memberStatuses,
-			hasGuest,
 		});
 	}
 	return out;

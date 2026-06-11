@@ -144,10 +144,9 @@ export function MemberSearchPopover({
 		const t = setTimeout(() => setDebounced(query.trim()), 300);
 		return () => clearTimeout(t);
 	}, [query]);
-	// `searchPartyMembers` is protectedProcedure and scoped to the session's
-	// roster — only people with a live DropInCheckIn for this session are
-	// returned. Works for both player flows (YourPartyCard) and staff flows
-	// (SwapPlayer). Includes guests.
+	// `searchPartyMembers` is protectedProcedure and club-wide — any club
+	// member can be found and added (their check-in is created on add). Works
+	// for both player flows (YourPartyCard) and staff flows (SwapPlayer).
 	const search = api.dropIn.searchPartyMembers.useQuery(
 		{ sessionId, query: debounced },
 		{ enabled: open && debounced.length > 0 },
@@ -183,11 +182,6 @@ export function MemberSearchPopover({
 								className="block w-full rounded px-2 py-1 text-left text-[var(--foreground)] text-sm hover:bg-[var(--muted)]"
 							>
 								{name}
-								{m.isGuest && (
-									<span className="ml-1 text-[var(--muted-foreground)]">
-										· guest
-									</span>
-								)}
 							</button>
 						);
 					})}
@@ -559,14 +553,7 @@ export function JoinPartyPopover({
 										: "text-[var(--foreground)] hover:bg-[var(--muted)]"
 								}`}
 							>
-								<span>
-									{name}
-									{m.isGuest && (
-										<span className="ml-1 text-[var(--muted-foreground)]">
-											· guest
-										</span>
-									)}
-								</span>
+								<span>{name}</span>
 								{isSel && <Check size={14} className="text-[var(--primary)]" />}
 							</button>
 						);
@@ -633,14 +620,12 @@ export function YourPartyCard({
 		openToFill: boolean;
 		preferredCourtId: string | null;
 		memberCount: number;
-		hasGuest: boolean;
 		isReady: boolean;
 		derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT";
 		members: Array<{
 			userId: string;
 			firstName: string | null;
 			lastName: string | null;
-			isGuest: boolean;
 			status:
 				| "WAITING"
 				| "IDLE"
@@ -707,11 +692,6 @@ export function YourPartyCard({
 						>
 							{name}
 							{isSelf && " (you)"}
-							{m.isGuest && (
-								<span className="ml-1 text-[var(--muted-foreground)]">
-									· guest
-								</span>
-							)}
 							{m.status === "PLAYING" && (
 								<span className="ml-1 text-[var(--muted-foreground)]">
 									· on court
@@ -790,14 +770,12 @@ export type QueueByPartyEntry = {
 	memberCount: number;
 	capacity: number;
 	needsCount: number;
-	hasGuest: boolean;
 	isReady: boolean;
 	derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT";
 	members: Array<{
 		userId: string;
 		firstName: string | null;
 		lastName: string | null;
-		isGuest: boolean;
 		status:
 			| "WAITING"
 			| "IDLE"
@@ -854,6 +832,16 @@ export function QueueByParty({
 		onError: (e) => toast(e.message, "error"),
 	});
 	const joinExistingParty = api.dropIn.joinExistingParty.useMutation({
+		onSuccess: onChange,
+		onError: (e) => toast(e.message, "error"),
+	});
+	// Staff party management — remove a no-show from a group, or disband a
+	// group that's blocking rotation. Server allows club staff on any party.
+	const removePartyMember = api.dropIn.removePartyMember.useMutation({
+		onSuccess: onChange,
+		onError: (e) => toast(e.message, "error"),
+	});
+	const disbandParty = api.dropIn.disbandParty.useMutation({
 		onSuccess: onChange,
 		onError: (e) => toast(e.message, "error"),
 	});
@@ -951,30 +939,40 @@ export function QueueByParty({
 												: " finish"}
 										</span>
 									)}
-									{party.hasGuest && (
-										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
-											Has guest
-										</span>
-									)}
 									{party.preferredCourtId && (
 										<span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-900 dark:bg-indigo-900/40 dark:text-indigo-200">
 											{courtName?.(party.preferredCourtId) ?? "Court"} only
 										</span>
 									)}
-									{showJoinButton && (
-										<button
-											type="button"
-											onClick={() =>
-												joinExistingParty.mutate({
-													partyId: party.partyId,
-												})
-											}
-											disabled={joinExistingParty.isPending}
-											className="ml-auto rounded-full bg-[var(--primary)] px-2 py-0.5 font-medium text-[10px] text-white hover:opacity-90 disabled:opacity-50"
-										>
-											Join this group
-										</button>
-									)}
+									<span className="ml-auto flex items-center gap-1">
+										{showJoinButton && (
+											<button
+												type="button"
+												onClick={() =>
+													joinExistingParty.mutate({
+														partyId: party.partyId,
+													})
+												}
+												disabled={joinExistingParty.isPending}
+												className="rounded-full bg-[var(--primary)] px-2 py-0.5 font-medium text-[10px] text-white hover:opacity-90 disabled:opacity-50"
+											>
+												Join this group
+											</button>
+										)}
+										{isStaff && (
+											<button
+												type="button"
+												title="Disband this group (everyone leaves the queue)"
+												onClick={() =>
+													disbandParty.mutate({ partyId: party.partyId })
+												}
+												disabled={disbandParty.isPending}
+												className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+											>
+												Disband
+											</button>
+										)}
+									</span>
 								</div>
 							)}
 
@@ -991,11 +989,6 @@ export function QueueByParty({
 											}
 										>
 											{memberDisplayName(m)}
-											{m.isGuest && (
-												<span className="ml-1 text-[10px] text-[var(--muted-foreground)]">
-													guest
-												</span>
-											)}
 											{isStaff && (
 												<button
 													type="button"
@@ -1028,24 +1021,18 @@ export function QueueByParty({
 											}`}
 										>
 											{memberDisplayName(m)}
-											{m.isGuest && (
-												<span className="text-[10px] text-[var(--muted-foreground)]">
-													guest
-												</span>
-											)}
 											{isStaff && (
 												<button
 													type="button"
-													title="Take out of the queue (stays checked in)"
-													onClick={() => {
-														const checkInId = checkInByUserId.get(m.userId);
-														if (!checkInId) return;
-														setCheckInStatus.mutate({
-															checkInId,
-															status: "IDLE",
-														});
-													}}
-													className="text-[var(--muted-foreground)] hover:text-red-600"
+													title="Remove from this group (leaves the queue)"
+													onClick={() =>
+														removePartyMember.mutate({
+															partyId: party.partyId,
+															targetUserId: m.userId,
+														})
+													}
+													disabled={removePartyMember.isPending}
+													className="text-[var(--muted-foreground)] hover:text-red-600 disabled:opacity-50"
 												>
 													<X size={12} />
 												</button>

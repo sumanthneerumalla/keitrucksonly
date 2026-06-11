@@ -23,7 +23,6 @@ interface PartyOpts {
 	open?: boolean;
 	size?: number;
 	statuses?: DropInPlayerStatus[]; // defaults to all IDLE
-	hasGuest?: boolean;
 	id?: string;
 	memberPrefix?: string;
 	court?: string | null; // preferredCourtId; default null = any court
@@ -51,7 +50,6 @@ function party(opts: PartyOpts = {}): PartySummary {
 		preferredCourtId: opts.court ?? null,
 		memberUserIds,
 		memberStatuses,
-		hasGuest: opts.hasGuest ?? false,
 	};
 }
 
@@ -99,7 +97,6 @@ describe("pickNextOccupants", () => {
 		const result = pickNextOccupants([p], 4);
 		expectPicked(result, ["pty_alice"]);
 		expect(result?.userIds).toHaveLength(4);
-		expect(result?.ratingEligible).toBe(true);
 	});
 
 	it("T2: closed party of 3 at head (incomplete) → null", () => {
@@ -214,33 +211,6 @@ describe("pickNextOccupants", () => {
 		expect(pickNextOccupants([solo, pair], 2)).toBeNull();
 	});
 
-	// ---- Guest handling -------------------------------------------------------
-
-	it("T10 (algorithmic half): party containing a guest → ratingEligible=false", () => {
-		const p = party({
-			size: 4,
-			open: false,
-			hasGuest: true,
-			id: "pty_with_guest",
-		});
-		const result = pickNextOccupants([p], 4);
-		expectPicked(result, ["pty_with_guest"]);
-		expect(result?.ratingEligible).toBe(false);
-	});
-
-	it("open assembly: any guest in the assembled set → ratingEligible=false", () => {
-		const head = party({ open: true, size: 2, id: "pty_clean_pair" });
-		const tail = party({
-			open: true,
-			size: 2,
-			hasGuest: true,
-			id: "pty_guest_pair",
-		});
-		const result = pickNextOccupants([head, tail], 4);
-		expectPicked(result, ["pty_clean_pair", "pty_guest_pair"]);
-		expect(result?.ratingEligible).toBe(false);
-	});
-
 	// ---- Defensive: corrupt oversize party ------------------------------------
 
 	it("defensive: party larger than capacity → skipped (does not stall rotation)", () => {
@@ -250,7 +220,6 @@ describe("pickNextOccupants", () => {
 			queuedAt: nextDate(),
 			memberUserIds: ["a", "b", "c", "d", "e"], // 5 in a 4-cap court
 			memberStatuses: { a: "IDLE", b: "IDLE", c: "IDLE", d: "IDLE", e: "IDLE" },
-			hasGuest: false,
 		};
 		const next = party({ open: false, size: 4, id: "pty_next" });
 		const result = pickNextOccupants([corrupt, next], 4);

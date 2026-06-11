@@ -116,7 +116,10 @@ export default function DropInEventDetails({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
-	const rejoin = api.dropIn.rejoin.useMutation({
+	// Re-queue the viewer's WHOLE party (all IDLE members flip to WAITING under
+	// one fresh queue position). Parties move as a unit — individuals who want
+	// to re-queue alone leave the party first.
+	const requeueParty = api.dropIn.requeueParty.useMutation({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
@@ -925,7 +928,11 @@ export default function DropInEventDetails({
 						) : viewerStatus === "AWAITING_RESULT" ? (
 							<Button
 								size="sm"
-								onClick={() => rejoin.mutate({ sessionId: session.sessionId })}
+								disabled={!viewerCheckIn || requeueParty.isPending}
+								onClick={() =>
+									viewerCheckIn &&
+									requeueParty.mutate({ partyId: viewerCheckIn.partyId })
+								}
 							>
 								Rejoin queue
 							</Button>
@@ -933,6 +940,22 @@ export default function DropInEventDetails({
 							<span className="text-[var(--muted-foreground)] text-xs">
 								You're on a court
 							</span>
+						) : viewerStatus === "IDLE" &&
+							viewerParty &&
+							viewerParty.memberCount > 1 ? (
+							// Came off a court as a group → re-queue as a group. One tap
+							// flips every IDLE member back to WAITING under one fresh
+							// queue position. To re-queue solo, leave the party first
+							// (button on the Your Party card).
+							<Button
+								size="sm"
+								disabled={blockNewGames || requeueParty.isPending}
+								onClick={() =>
+									requeueParty.mutate({ partyId: viewerParty.partyId })
+								}
+							>
+								Requeue group ({viewerParty.memberCount})
+							</Button>
 						) : (
 							<>
 								<Button

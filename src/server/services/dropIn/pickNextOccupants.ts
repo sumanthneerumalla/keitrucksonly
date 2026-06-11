@@ -41,8 +41,6 @@ export interface PartySummary {
 	memberUserIds: string[];
 	/** Status snapshot per member at the moment we read the pool. */
 	memberStatuses: Record<string, DropInPlayerStatus>;
-	/** True if any member has `isGuest = true` (suppresses GBR sync). */
-	hasGuest: boolean;
 	/**
 	 * Hard court lock (court-preference feature). null/undefined = any court.
 	 * When set, the party is only eligible for that court — see the `courtId`
@@ -54,9 +52,6 @@ export interface PartySummary {
 export interface Pick {
 	partyIds: string[];
 	userIds: string[];
-	/** False if any chosen party contained a guest — caller MUST set
-	 * `DropInAssignment.ratingWeight = null` in that case. */
-	ratingEligible: boolean;
 }
 
 /**
@@ -66,7 +61,7 @@ export interface Pick {
  *   - At least one member is currently `WAITING` — i.e. the party is *in*
  *     the queue this round. Members at IDLE/DONE/LEFT/CANCELLED don't count
  *     toward the party's effective size; they must explicitly re-queue
- *     (rejoin / requeueParty) to be considered.
+ *     (requeueParty) to be considered.
  *
  * Returns `ready: false` for either failure mode so callers don't need to
  * distinguish them at the algorithm level. The waiting count is the party's
@@ -139,7 +134,6 @@ export function pickNextOccupants(
 				return {
 					partyIds: [head.partyId],
 					userIds: waitingMembersOf(head),
-					ratingEligible: !head.hasGuest,
 				};
 			}
 			continue;
@@ -179,7 +173,6 @@ export function pickNextOccupants(
 			return {
 				partyIds: chosen.map((p) => p.partyId),
 				userIds: chosen.flatMap((p) => waitingMembersOf(p)),
-				ratingEligible: chosen.every((p) => !p.hasGuest),
 			};
 		}
 

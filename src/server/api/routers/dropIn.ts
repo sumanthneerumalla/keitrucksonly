@@ -18,7 +18,7 @@ import {
 	assertPartyHasRoom,
 	assertSessionAcceptsPartyOps,
 	capacityForFormat,
-	generateGuestClerkUserId,
+	isClubStaff,
 	loadPartyForOp,
 	loadPartySummaries,
 	loadSessionForPartyOp,
@@ -78,9 +78,9 @@ function validateMatchScore(
  * staff-resolved), atomically form the next matchup on that court from the queue.
  *
  * Party-aware: uses the same `pickNextOccupants` helper as `formNext` / `tickTimed`
- * so atomicity, openToFill semantics, A1 skip, and guest GBR suppression all
- * behave consistently across the three call sites. Race-safe (claim WHERE
- * status=WAITING, verify count, then re-read party member counts).
+ * so atomicity, openToFill semantics, and the A1 skip all behave consistently
+ * across the three call sites. Race-safe (claim WHERE status=WAITING, verify
+ * count, then re-read party member counts).
  *
  * No-op unless the session is an ACTIVE MATCH, the court is free, and the queue
  * can produce a clean fill (e.g. a closed party of the right size, or open
@@ -148,8 +148,6 @@ async function autoStartMatchOnCourt(
 		if (actual !== waitingInSnapshot) return; // party changed; bail
 	}
 
-	// ratingWeight: 1.0 (MATCH mode) UNLESS the assembled set contains a guest.
-	const ratingWeight = pick.ratingEligible ? 1.0 : null;
 	const half = playersPerCourt / 2;
 
 	await tx.dropInAssignment.create({
@@ -159,7 +157,8 @@ async function autoStartMatchOnCourt(
 			format,
 			status: "IN_PROGRESS",
 			startedAt: new Date(),
-			ratingWeight,
+			ratingWeight: 1.0, // MATCH mode — rating-eligible
+
 			participants: {
 				create: pick.userIds.map((userId, i) => ({
 					sessionId: session.sessionId,
@@ -191,7 +190,6 @@ const boardSessionInclude = {
 					userId: true,
 					firstName: true,
 					lastName: true,
-					isGuest: true,
 				},
 			},
 		},
@@ -229,7 +227,6 @@ const boardSessionInclude = {
 							userId: true,
 							firstName: true,
 							lastName: true,
-							isGuest: true,
 						},
 					},
 				},
@@ -293,10 +290,8 @@ function deriveBoardView(session: BoardSession) {
 					userId: m.userId,
 					firstName: m.user.firstName,
 					lastName: m.user.lastName,
-					isGuest: m.user.isGuest,
 					status: m.status,
 				})),
-				hasGuest: p.members.some((m) => m.user.isGuest),
 				isReady: !anyPlaying && !anyAwaiting,
 				derivedState,
 			};
@@ -859,39 +854,6 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/** Member re-enters the queue after a match resolves (or a TIMED slot ends). */
-	rejoin: protectedProcedure
-		.input(z.object({ sessionId: z.string() }))
-		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
-			const session = await ctx.db.dropInSession.findUnique({
-				where: { sessionId: input.sessionId },
-				select: { clubShortName: true, status: true },
-			});
-			if (!session || session.clubShortName !== user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
-			if (session.status !== "ACTIVE") {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Session is not active.",
-				});
-			}
-			// IDLE only — a player in AWAITING_RESULT still owes a confirm and is gated
-			// from the queue until their match is resolved (A3 dual gate).
-			return ctx.db.dropInCheckIn.updateMany({
-				where: {
-					sessionId: input.sessionId,
-					userId: user.userId,
-					status: "IDLE",
-				},
-				data: { status: "WAITING", queuedAt: new Date() },
-			});
-		}),
-
 	// ===========================================================================
 	// Drop-in PARTY procedures (designFiles/drop-in/group-join-feature-plan.md).
 	//
@@ -1000,7 +962,7 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
-	 * Add another player (real user or guest) to caller's party. Implements B2:
+	 * Add another club member to caller's party. Implements B2:
 	 * if the target is already solo-WAITING with an earlier queuedAt, the party
 	 * snaps to MIN(party.queuedAt, target.queuedAt). The target's prior party
 	 * (a solo party of 1) is left behind as defunct (no live members).
@@ -1042,7 +1004,7 @@ export const dropInRouter = createTRPCRouter({
 
 				const target = await tx.user.findUnique({
 					where: { userId: input.targetUserId },
-					select: { userId: true, clubShortName: true, isGuest: true },
+					select: { userId: true, clubShortName: true },
 				});
 				if (!target) throw new TRPCError({ code: "NOT_FOUND" });
 				if (target.clubShortName !== caller.clubShortName) {
@@ -1164,12 +1126,16 @@ export const dropInRouter = createTRPCRouter({
 		.mutation(async ({ ctx, input }) => {
 			const caller = await ctx.db.user.findUnique({
 				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
+				select: { userId: true, clubShortName: true, userType: true },
 			});
 			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
 
 			return ctx.db.$transaction(async (tx) => {
-				await assertCallerInParty(tx, input.partyId, caller.userId);
+				// Any party member can remove a member; club staff can remove from
+				// any party in their club (same-club enforced by loadSessionForPartyOp).
+				if (!isClubStaff(caller.userType)) {
+					await assertCallerInParty(tx, input.partyId, caller.userId);
+				}
 				const party = await loadPartyForOp(tx, input.partyId);
 				await loadSessionForPartyOp(tx, party.sessionId, caller.clubShortName);
 
@@ -1248,12 +1214,16 @@ export const dropInRouter = createTRPCRouter({
 		.mutation(async ({ ctx, input }) => {
 			const caller = await ctx.db.user.findUnique({
 				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
+				select: { userId: true, clubShortName: true, userType: true },
 			});
 			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
 
 			return ctx.db.$transaction(async (tx) => {
-				await assertCallerInParty(tx, input.partyId, caller.userId);
+				// Any party member can disband; club staff can disband any party in
+				// their club (same-club enforced by loadSessionForPartyOp).
+				if (!isClubStaff(caller.userType)) {
+					await assertCallerInParty(tx, input.partyId, caller.userId);
+				}
 				const party = await loadPartyForOp(tx, input.partyId);
 				await loadSessionForPartyOp(tx, party.sessionId, caller.clubShortName);
 
@@ -1529,70 +1499,6 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
-	 * Create a persistent guest profile in the caller's club. Guests are User
-	 * rows with isGuest=true and a synthetic clerkUserId. They can be added to
-	 * parties and play, but assignments containing them are GBR-excluded.
-	 *
-	 * Duplicate first+last in the same club is rejected unless allowDuplicate
-	 * is explicitly true.
-	 */
-	createGuest: protectedProcedure
-		.input(
-			z.object({
-				firstName: z.string().trim().min(1).max(60),
-				lastName: z.string().trim().min(1).max(60),
-				email: z.string().email().optional(),
-				phone: z.string().trim().max(40).optional(),
-				allowDuplicate: z.boolean().default(false),
-			}),
-		)
-		.mutation(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { userId: true, clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
-
-			if (!input.allowDuplicate) {
-				const dup = await ctx.db.user.findFirst({
-					where: {
-						isGuest: true,
-						clubShortName: caller.clubShortName,
-						firstName: { equals: input.firstName, mode: "insensitive" },
-						lastName: { equals: input.lastName, mode: "insensitive" },
-					},
-					select: { userId: true },
-				});
-				if (dup) {
-					throw new TRPCError({
-						code: "CONFLICT",
-						message:
-							"A guest with this name already exists in your club. Pass allowDuplicate=true to create another.",
-					});
-				}
-			}
-
-			const guest = await ctx.db.user.create({
-				data: {
-					clerkUserId: generateGuestClerkUserId(),
-					isGuest: true,
-					guestCreatedBy: caller.userId,
-					firstName: input.firstName,
-					lastName: input.lastName,
-					email: input.email,
-					clubShortName: caller.clubShortName,
-				},
-				select: {
-					userId: true,
-					firstName: true,
-					lastName: true,
-					email: true,
-				},
-			});
-			return guest;
-		}),
-
-	/**
 	 * Player-facing typeahead used by the "Join queue as a group" + "Add member"
 	 * popovers (and the staff SwapPlayer control). Searches ALL club members by
 	 * name, NOT just the session's existing roster.
@@ -1608,7 +1514,7 @@ export const dropInRouter = createTRPCRouter({
 	 *
 	 * The caller is excluded (no point adding yourself). NOT to be confused with
 	 * `user.searchMembers` (facilityProcedure, staff-only, returns email); this
-	 * member-facing surface only exposes names + isGuest flag.
+	 * member-facing surface only exposes names.
 	 */
 	searchPartyMembers: protectedProcedure
 		.input(
@@ -1650,46 +1556,6 @@ export const dropInRouter = createTRPCRouter({
 					userId: true,
 					firstName: true,
 					lastName: true,
-					isGuest: true,
-				},
-			});
-		}),
-
-	/**
-	 * Search guests in the caller's club by name prefix (case-insensitive).
-	 * Used by the "Add to party" UI. Returns up to 20 matches sorted by
-	 * createdAt DESC (most recent first).
-	 */
-	searchGuests: protectedProcedure
-		.input(
-			z.object({
-				query: z.string().trim().min(1).max(60),
-			}),
-		)
-		.query(async ({ ctx, input }) => {
-			const caller = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { clubShortName: true },
-			});
-			if (!caller) throw new TRPCError({ code: "UNAUTHORIZED" });
-
-			const q = input.query;
-			return ctx.db.user.findMany({
-				where: {
-					isGuest: true,
-					clubShortName: caller.clubShortName,
-					OR: [
-						{ firstName: { startsWith: q, mode: "insensitive" } },
-						{ lastName: { startsWith: q, mode: "insensitive" } },
-					],
-				},
-				orderBy: { createdAt: "desc" },
-				take: 20,
-				select: {
-					userId: true,
-					firstName: true,
-					lastName: true,
-					email: true,
 				},
 			});
 		}),
@@ -2001,10 +1867,8 @@ export const dropInRouter = createTRPCRouter({
 					}
 				}
 
-				// ratingWeight = null when TIMED (no GBR sync ever) OR when
-				// any party in this assignment contains a guest member.
-				const ratingWeight =
-					isTimed || !pick.ratingEligible ? null : 1.0;
+				// ratingWeight = null when TIMED (no scores, no GBR sync ever).
+				const ratingWeight = isTimed ? null : 1.0;
 
 				return tx.dropInAssignment.create({
 					data: {
@@ -2537,16 +2401,7 @@ export const dropInRouter = createTRPCRouter({
 			const assignment = await ctx.db.dropInAssignment.findUnique({
 				where: { assignmentId: input.assignmentId },
 				include: {
-					participants: {
-						select: {
-							userId: true,
-							// Guest membership in the original assignment must be
-							// honored here too — a staff score correction cannot
-							// retroactively promote a guest-containing match to
-							// GBR-eligible (designFiles/drop-in/group-join-feature-plan.md §6).
-							user: { select: { isGuest: true } },
-						},
-					},
+					participants: { select: { userId: true } },
 					session: {
 						select: {
 							clubShortName: true,
@@ -2589,7 +2444,6 @@ export const dropInRouter = createTRPCRouter({
 			const gamesA = input.gameScores.filter((g) => g.a > g.b).length;
 			const gamesB = input.gameScores.filter((g) => g.b > g.a).length;
 			const winnerSide = gamesA > gamesB ? DropInSide.A : DropInSide.B;
-			const hasGuest = assignment.participants.some((p) => p.user.isGuest);
 			const now = new Date();
 			return ctx.db.$transaction(async (tx) => {
 				const updated = await tx.dropInAssignment.update({
@@ -2603,11 +2457,9 @@ export const dropInRouter = createTRPCRouter({
 						winnerSide,
 						confirmedByUserId: ctx.user.userId,
 						confirmedAt: now,
-						// Guest-containing assignments stay GBR-excluded even on
-						// staff override. Non-guest assignments: 1.0x weight, GBR
-						// sync queued.
-						ratingWeight: hasGuest ? null : 1.0,
-						gbrSyncStatus: hasGuest ? "NOT_APPLICABLE" : "PENDING",
+						// Staff-entered MATCH score: rating-eligible, GBR sync queued.
+						ratingWeight: 1.0,
+						gbrSyncStatus: "PENDING",
 						externalMatchId: assignment.assignmentId, // GBR idempotency key
 					},
 				});
