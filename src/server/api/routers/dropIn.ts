@@ -4,6 +4,7 @@ import {
 	DropInPlayerStatus,
 	DropInSide,
 	type Prisma,
+	type PrismaClient,
 } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -15,6 +16,8 @@ import {
 } from "~/server/api/trpc";
 import {
 	assertCallerInParty,
+	assertClubRow,
+	assertClubSessionRow,
 	assertPartyHasRoom,
 	assertSessionAcceptsPartyOps,
 	attachUserToParty,
@@ -26,6 +29,7 @@ import {
 	loadSessionForPartyOp,
 } from "~/server/services/dropIn/party";
 import { pickNextOccupants } from "~/server/services/dropIn/pickNextOccupants";
+import { rotateExpiredSlots } from "~/server/services/dropIn/rotateExpiredSlots";
 import { checkResourceConflicts } from "~/server/utils/resourceConflicts";
 
 /**
@@ -79,7 +83,7 @@ function validateMatchScore(
  * Auto-start (A15, on-confirm): after a MATCH court frees (a score was confirmed /
  * staff-resolved), atomically form the next matchup on that court from the queue.
  *
- * Party-aware: uses the same `pickNextOccupants` helper as `formNext` / `tickTimed`
+ * Party-aware: uses the same `pickNextOccupants` helper as `formNext` / `rotateExpiredSlots`
  * so atomicity, openToFill semantics, and the A1 skip all behave consistently
  * across the three call sites. Race-safe (claim WHERE status=WAITING, verify
  * count, then re-read party member counts).
@@ -115,7 +119,7 @@ async function autoStartMatchOnCourt(
 
 	const parties = await loadPartySummaries(tx, session.sessionId);
 	// courtId respects hard court locks (court-preference feature) — was
-	// missing here while formNext/tickTimed had it.
+	// missing here while formNext/rotateExpiredSlots had it.
 	const pick = pickNextOccupants(parties, playersPerCourt, courtId);
 	if (!pick) return; // queue can't produce a clean fill — staff can Start next manually
 
@@ -260,6 +264,47 @@ function deriveBoardView(session: BoardSession) {
 		});
 
 	return { pool, parties };
+}
+
+/**
+ * Load a session with the full board include, running TIMED read-repair first:
+ * if any IN_PROGRESS slot is past its stored `expiresAt` (server clock — the
+ * only source of truth), rotate it via `rotateExpiredSlots` and reload so the
+ * response reflects the post-rotation board. Cheap on the common path — the
+ * repair + reload only run when a slot has actually expired.
+ *
+ * Shared by `getBoard` (authed) and `getPublicBoard` (kiosk): ANY polling
+ * viewer, logged-in or not, keeps rotation moving. Zero-viewer rotation needs
+ * a scheduler calling `rotateExpiredSlots` directly (R3 Track C).
+ */
+async function loadBoardSession(
+	db: PrismaClient,
+	eventId: string,
+	occurrenceDate: Date,
+): Promise<BoardSession | null> {
+	const load = () =>
+		db.dropInSession.findUnique({
+			where: { eventId_occurrenceDate: { eventId, occurrenceDate } },
+			include: boardSessionInclude,
+		});
+	let session = await load();
+	if (!session) return null;
+
+	const now = Date.now();
+	const hasExpiredSlot =
+		session.status === "ACTIVE" &&
+		session.mode === "TIMED" &&
+		session.assignments.some(
+			(a) =>
+				a.status === "IN_PROGRESS" &&
+				a.expiresAt &&
+				a.expiresAt.getTime() <= now,
+		);
+	if (hasExpiredSlot) {
+		await rotateExpiredSlots(db, session);
+		session = await load();
+	}
+	return session;
 }
 
 type StandingsAssignment = Prisma.DropInAssignmentGetPayload<{
@@ -435,9 +480,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 			const now = new Date();
 			return ctx.db.$transaction(async (tx) => {
 				// Only cancel transient pre-assignments; leave live/pending games alone.
@@ -472,9 +515,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true, status: true },
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 			if (session.status !== "ACTIVE") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -495,9 +536,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true, status: true },
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 			if (session.status !== "PAUSED") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -527,9 +566,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 
 			const status = input.status ?? DropInPlayerStatus.IDLE;
 			return ctx.db.$transaction(async (tx) => {
@@ -589,12 +626,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { checkInId: input.checkInId },
 				select: { session: { select: { clubShortName: true } } },
 			});
-			if (
-				!checkIn ||
-				checkIn.session.clubShortName !== ctx.user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(checkIn, ctx.user.clubShortName);
 			return ctx.db.dropInCheckIn.update({
 				where: { checkInId: input.checkInId },
 				data: {
@@ -618,21 +650,21 @@ export const dropInRouter = createTRPCRouter({
 	 * Live board read for a session occurrence: the session, its in-flight
 	 * assignments (with participants), and the fairness-ordered waiting pool.
 	 * Returns null before a session is started. Authed club members only.
+	 *
+	 * TIMED read-repair: expired slots are rotated server-side before the board
+	 * is returned (see `loadBoardSession`) — any polling viewer keeps rotation
+	 * moving; no client decides when to rotate.
 	 */
 	getBoard: memberProcedure
 		.input(z.object({ eventId: z.string(), occurrenceDate: z.coerce.date() }))
 		.query(async ({ ctx, input }) => {
 			const user = ctx.user;
 
-			const session = await ctx.db.dropInSession.findUnique({
-				where: {
-					eventId_occurrenceDate: {
-						eventId: input.eventId,
-						occurrenceDate: input.occurrenceDate,
-					},
-				},
-				include: boardSessionInclude,
-			});
+			const session = await loadBoardSession(
+				ctx.db,
+				input.eventId,
+				input.occurrenceDate,
+			);
 			if (!session) return null;
 			if (session.clubShortName !== user.clubShortName) {
 				throw new TRPCError({ code: "FORBIDDEN" });
@@ -651,21 +683,19 @@ export const dropInRouter = createTRPCRouter({
 	 *     everything read-only (no join/leave/score/staff controls).
 	 *
 	 * This is display-only by design: it intentionally exposes NO mutations, so
-	 * players can't manipulate timed matches by tapping the kiosk. Rotation is
-	 * driven by a separate logged-in staff device (see designFiles/drop-in).
+	 * players can't manipulate timed matches by tapping the kiosk. TIMED
+	 * rotation still advances from here via server-side read-repair
+	 * (`loadBoardSession`) — a kiosk alone keeps courts rotating; it just can't
+	 * change anything beyond what the server decides from its own clock.
 	 */
 	getPublicBoard: publicProcedure
 		.input(z.object({ eventId: z.string(), occurrenceDate: z.coerce.date() }))
 		.query(async ({ ctx, input }) => {
-			const session = await ctx.db.dropInSession.findUnique({
-				where: {
-					eventId_occurrenceDate: {
-						eventId: input.eventId,
-						occurrenceDate: input.occurrenceDate,
-					},
-				},
-				include: boardSessionInclude,
-			});
+			const session = await loadBoardSession(
+				ctx.db,
+				input.eventId,
+				input.occurrenceDate,
+			);
 			if (!session) return null;
 
 			// Resolve court titles for the session's courts so the kiosk can label
@@ -709,9 +739,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true, status: true, courtIds: true },
 			});
-			if (!session || session.clubShortName !== user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, user.clubShortName);
 			if (session.status !== "ACTIVE") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -1298,9 +1326,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },
 			});
-			if (!session || session.clubShortName !== caller.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, caller.clubShortName);
 
 			const q = input.query;
 			return ctx.db.user.findMany({
@@ -1345,12 +1371,7 @@ export const dropInRouter = createTRPCRouter({
 					session: { select: { clubShortName: true, sessionId: true } },
 				},
 			});
-			if (
-				!assignment ||
-				assignment.session.clubShortName !== ctx.user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(assignment, ctx.user.clubShortName);
 			// Only while a game is IN_PROGRESS (not after a score is reported). Swapping
 			// during PENDING_CONFIRM could remove the reporter, which would make the
 			// opposing-side confirm guard fail open — so it's disallowed.
@@ -1452,9 +1473,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true, status: true },
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 			if (session.status !== "ACTIVE") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -1525,9 +1544,7 @@ export const dropInRouter = createTRPCRouter({
 					rotationMinutes: true,
 				},
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 			if (session.status !== "ACTIVE") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -1635,12 +1652,7 @@ export const dropInRouter = createTRPCRouter({
 					session: { select: { clubShortName: true, sessionId: true } },
 				},
 			});
-			if (
-				!assignment ||
-				assignment.session.clubShortName !== ctx.user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(assignment, ctx.user.clubShortName);
 			const now = new Date();
 			return ctx.db.$transaction(async (tx) => {
 				const updated = await tx.dropInAssignment.update({
@@ -1676,12 +1688,7 @@ export const dropInRouter = createTRPCRouter({
 					session: { select: { clubShortName: true, sessionId: true } },
 				},
 			});
-			if (
-				!assignment ||
-				assignment.session.clubShortName !== ctx.user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(assignment, ctx.user.clubShortName);
 			if (
 				assignment.status === "COMPLETED" ||
 				assignment.status === "CONFIRMED" ||
@@ -1734,9 +1741,7 @@ export const dropInRouter = createTRPCRouter({
 					eventId: true,
 				},
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 			if (session.status === "ENDED" || session.status === "CANCELLED") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -1799,9 +1804,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true, courtIds: true },
 			});
-			if (!session || session.clubShortName !== ctx.user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, ctx.user.clubShortName);
 			const active = await ctx.db.dropInAssignment.findFirst({
 				where: {
 					sessionId: input.sessionId,
@@ -1871,12 +1874,7 @@ export const dropInRouter = createTRPCRouter({
 					},
 				},
 			});
-			if (
-				!assignment ||
-				assignment.session.clubShortName !== user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(assignment, user.clubShortName);
 			if (assignment.status !== "IN_PROGRESS") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -1947,12 +1945,7 @@ export const dropInRouter = createTRPCRouter({
 					},
 				},
 			});
-			if (
-				!assignment ||
-				assignment.session.clubShortName !== user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(assignment, user.clubShortName);
 			if (assignment.status !== "PENDING_CONFIRM") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -2055,12 +2048,7 @@ export const dropInRouter = createTRPCRouter({
 					session: { select: { clubShortName: true } },
 				},
 			});
-			if (
-				!assignment ||
-				assignment.session.clubShortName !== user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(assignment, user.clubShortName);
 			if (assignment.status !== "PENDING_CONFIRM") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -2127,12 +2115,7 @@ export const dropInRouter = createTRPCRouter({
 					},
 				},
 			});
-			if (
-				!assignment ||
-				assignment.session.clubShortName !== ctx.user.clubShortName
-			) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubSessionRow(assignment, ctx.user.clubShortName);
 			// Allow correcting an already-CONFIRMED result (staff override); only a
 			// COMPLETED (TIMED) or CANCELLED game can no longer be scored.
 			if (
@@ -2232,9 +2215,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },
 			});
-			if (!session || session.clubShortName !== user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, user.clubShortName);
 			return ctx.db.dropInAssignment.findMany({
 				where: { sessionId: input.sessionId, status: "CONFIRMED" },
 				orderBy: { confirmedAt: "desc" },
@@ -2258,123 +2239,6 @@ export const dropInRouter = createTRPCRouter({
 		}),
 
 	/**
-	 * TIMED auto-rotation tick. The live board calls this when a slot's countdown
-	 * hits zero; it completes every expired TIMED slot and forms the next group on
-	 * that court from the remaining WAITING pool — so rotation is hands-free.
-	 * Idempotent + race-safe: each expired slot is "claimed" via a conditional
-	 * status update, so concurrent ticks from multiple open boards can't double-
-	 * rotate. (Headless rotation with no board open would need a scheduler — R3.)
-	 */
-	tickTimed: memberProcedure
-		.input(z.object({ sessionId: z.string() }))
-		.mutation(async ({ ctx, input }) => {
-			const user = ctx.user;
-			const session = await ctx.db.dropInSession.findUnique({
-				where: { sessionId: input.sessionId },
-				select: {
-					clubShortName: true,
-					status: true,
-					mode: true,
-					format: true,
-					rotationMinutes: true,
-				},
-			});
-			if (!session || session.clubShortName !== user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
-			if (session.status !== "ACTIVE" || session.mode !== DropInMode.TIMED) {
-				return { rotated: 0 };
-			}
-
-			const now = new Date();
-			const expired = await ctx.db.dropInAssignment.findMany({
-				where: {
-					sessionId: input.sessionId,
-					status: "IN_PROGRESS",
-					expiresAt: { lte: now },
-				},
-				include: { participants: { select: { userId: true } } },
-			});
-
-			const format = session.format ?? DropInFormat.DOUBLES;
-			const playersPerCourt = format === DropInFormat.SINGLES ? 2 : 4;
-			let rotated = 0;
-
-			for (const slot of expired) {
-				try {
-					const formed = await ctx.db.$transaction(async (tx) => {
-						// Claim: only the tick that flips IN_PROGRESS -> COMPLETED proceeds.
-						const claimed = await tx.dropInAssignment.updateMany({
-							where: { assignmentId: slot.assignmentId, status: "IN_PROGRESS" },
-							data: { status: "COMPLETED", endedAt: now },
-						});
-						if (claimed.count === 0) return false;
-
-						// Free the finishing players back to the pool (manual rejoin, A12).
-						await tx.dropInCheckIn.updateMany({
-							where: {
-								sessionId: input.sessionId,
-								userId: { in: slot.participants.map((p) => p.userId) },
-							},
-							data: {
-								status: "IDLE",
-								gamesPlayed: { increment: 1 },
-								lastPlayedAt: now,
-							},
-						});
-
-						// Party-aware selection (designFiles/drop-in/group-join-feature-plan.md §3).
-						// Court stays empty when no group can play (e.g. open
-						// head + no clean fill, or all closed parties incomplete) —
-						// next tick retries once the queue shape changes.
-						const parties = await loadPartySummaries(tx, input.sessionId);
-						const pick = pickNextOccupants(
-							parties,
-							playersPerCourt,
-							slot.courtId,
-						);
-						if (!pick) return false;
-
-						if (
-							!(await claimPickedMembers(tx, input.sessionId, parties, pick))
-						) {
-							// Contended or party changed — the catch below skips
-							// this slot; the next tick retries it.
-							throw new Error("CONTENDED");
-						}
-
-						// TIMED mode → ratingWeight stays null (no GBR sync).
-						await tx.dropInAssignment.create({
-							data: {
-								sessionId: input.sessionId,
-								courtId: slot.courtId,
-								format,
-								status: "IN_PROGRESS",
-								startedAt: now,
-								expiresAt: new Date(
-									now.getTime() + (session.rotationMinutes ?? 15) * 60_000,
-								),
-								participants: {
-									create: pick.userIds.map((userId) => ({
-										sessionId: input.sessionId,
-										userId,
-										side: null,
-									})),
-								},
-							},
-						});
-						return true;
-					});
-					if (formed) rotated += 1;
-				} catch {
-					// Contended/transient — skip this slot; the next tick retries it.
-				}
-			}
-
-			return { rotated };
-		}),
-
-	/**
 	 * Per-session leaderboard (local; the GBR-extracted `calculateStandings` is a
 	 * later refinement). Ranks confirmed-match players by wins then point diff.
 	 */
@@ -2386,9 +2250,7 @@ export const dropInRouter = createTRPCRouter({
 				where: { sessionId: input.sessionId },
 				select: { clubShortName: true },
 			});
-			if (!session || session.clubShortName !== user.clubShortName) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+			assertClubRow(session, user.clubShortName);
 
 			const assignments = await ctx.db.dropInAssignment.findMany({
 				where: { sessionId: input.sessionId, status: "CONFIRMED" },

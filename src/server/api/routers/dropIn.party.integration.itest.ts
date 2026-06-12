@@ -14,7 +14,7 @@
  * party per userId.
  *
  * Not covered here (deferred — they require parallel transactions): T11
- * concurrent formNext+tickTimed claim race, T18 addPartyMember race during
+ * concurrent formNext+rotateExpiredSlots claim race, T18 addPartyMember race during
  * selection.
  */
 

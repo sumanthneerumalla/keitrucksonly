@@ -173,6 +173,30 @@ export function assertPartyHasRoom(
 }
 
 /**
+ * The standard cross-club isolation guard: NOT_FOUND unless the row exists AND
+ * belongs to the caller's club. Other clubs' rows must be indistinguishable
+ * from nonexistent ones (don't leak existence via FORBIDDEN).
+ */
+export function assertClubRow<T extends { clubShortName: string }>(
+	row: T | null | undefined,
+	clubShortName: string,
+): asserts row is T {
+	if (!row || row.clubShortName !== clubShortName) {
+		throw new TRPCError({ code: "NOT_FOUND" });
+	}
+}
+
+/** `assertClubRow` for rows that carry their club via a `session` relation
+ * (e.g. a DropInAssignment loaded with `include: { session: ... }`). */
+export function assertClubSessionRow<
+	T extends { session: { clubShortName: string } },
+>(row: T | null | undefined, clubShortName: string): asserts row is T {
+	if (!row || row.session.clubShortName !== clubShortName) {
+		throw new TRPCError({ code: "NOT_FOUND" });
+	}
+}
+
+/**
  * Attach a user's check-in to a party — the shared core of `addPartyMember`
  * and `joinExistingParty` (callers do auth + capacity + club checks first).
  * Moves an existing check-in (any prior party; the old solo party is left
@@ -249,7 +273,7 @@ export async function attachUserToParty(
 /**
  * Atomically claim a pick's WAITING members (→ PLAYING) and verify no chosen
  * party changed shape between the snapshot and the claim. Shared by formNext /
- * tickTimed / MATCH auto-start. Returns false on contention or a party-shape
+ * rotateExpiredSlots / MATCH auto-start. Returns false on contention or a party-shape
  * change — callers throw/skip/retry on their own terms (the next tick or a
  * manual retry re-runs selection against the new queue shape).
  *
@@ -294,7 +318,7 @@ export async function claimPickedMembers(
 
 // =============================================================================
 // Pool loader — reads parties for pickNextOccupants. Called by formNext /
-// tickTimed (next task).
+// rotateExpiredSlots.
 // =============================================================================
 
 /**

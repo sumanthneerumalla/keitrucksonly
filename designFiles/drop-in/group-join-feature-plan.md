@@ -95,7 +95,7 @@ that the two procedures existed but had no callers.
 ## Selection: `pickNextOccupants`
 
 Pure function in `src/server/services/dropIn/pickNextOccupants.ts`, shared by
-`formNext`, `tickTimed`, and MATCH auto-start. Walks parties in FIFO order
+`formNext`, `rotateExpiredSlots` (TIMED read-repair on board reads), and MATCH auto-start. Walks parties in FIFO order
 (optionally pre-filtered by `preferredCourtId` for the target court):
 
 - Head not ready (member PLAYING/AWAITING_RESULT, or no WAITING members) →

@@ -27,7 +27,7 @@
  *
  * Atomicity: this function is PURE. The caller takes a snapshot inside a
  * transaction, runs this selector, and re-claims via `updateMany WHERE
- * status=WAITING` (the existing pattern in formNext/tickTimed). A race guard
+ * status=WAITING` (the existing pattern in formNext/rotateExpiredSlots). A race guard
  * after the claim catches `addPartyMember` landings between snapshot and
  * claim — see plan §3.
  */

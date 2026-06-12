@@ -139,13 +139,6 @@ export default function DropInEventDetails({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
 	});
-	// Background auto-rotation tick (TIMED). Fired when a slot expires; silent on
-	// error (it's a background poll, not a user action).
-	const tickTimed = api.dropIn.tickTimed.useMutation({
-		onSuccess: (res) => {
-			if (res.rotated > 0) refresh();
-		},
-	});
 	const swapParticipant = api.dropIn.swapParticipant.useMutation({
 		onSuccess: refresh,
 		onError: (e) => toast(e.message, "error"),
@@ -205,7 +198,6 @@ export default function DropInEventDetails({
 	// ---- audio horn + kiosk --------------------------------------------------
 	const audioCtxRef = useRef<AudioContext | null>(null);
 	const firedHornsRef = useRef<Set<string>>(new Set());
-	const tickedRef = useRef<Set<string>>(new Set());
 	const playHorn = useCallback(() => {
 		const ctx = audioCtxRef.current;
 		if (!ctx) return;
@@ -239,25 +231,19 @@ export default function DropInEventDetails({
 		return () => clearInterval(t);
 	}, []);
 	const assignments = useMemo(() => session?.assignments ?? [], [session]);
+	// Horn on slot expiry (display-only). Rotation itself is server-side
+	// read-repair: the getBoard poll rotates expired TIMED slots before
+	// returning, so no client ever decides when to rotate.
 	useEffect(() => {
-		let shouldTick = false;
 		for (const a of assignments) {
 			if (!a.expiresAt) continue;
 			if (new Date(a.expiresAt).getTime() > now) continue;
-			// Slot expired: fire the horn once, and trigger a server rotation once.
 			if (!firedHornsRef.current.has(a.assignmentId)) {
 				firedHornsRef.current.add(a.assignmentId);
 				playHorn();
 			}
-			if (!tickedRef.current.has(a.assignmentId)) {
-				tickedRef.current.add(a.assignmentId);
-				shouldTick = true;
-			}
 		}
-		if (shouldTick && session && session.mode === "TIMED") {
-			tickTimed.mutate({ sessionId: session.sessionId });
-		}
-	}, [assignments, now, playHorn, session, tickTimed]);
+	}, [assignments, now, playHorn]);
 
 	// ---- standings (MATCH) ---------------------------------------------------
 	const standingsQuery = api.dropIn.getStandings.useQuery(

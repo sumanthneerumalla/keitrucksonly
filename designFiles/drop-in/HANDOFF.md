@@ -11,6 +11,7 @@ The group-join feature ([group-join-feature-plan.md](./group-join-feature-plan.m
 - **Parties now re-queue as a unit** — "Requeue group (N)" calls `requeueParty`; the individual `rejoin` procedure was deleted. Individuals re-queue solo by leaving the party first.
 - **Staff party controls wired** — club staff can `removePartyMember` / `disbandParty` on any party in their club (✕ on member pills / "Disband" on party rows).
 - `ratingWeight` is now purely mode-based (TIMED → null, MATCH → 1.0).
+- **TIMED rotation = server-side read-repair** (2026-06-11, later same day): `rotateExpiredSlots` (service) runs inside `getBoard`/`getPublicBoard` when a slot is past `expiresAt` — ANY polling viewer (incl. the logged-out kiosk) keeps courts rotating; the `tickTimed` procedure and all client-side tick logic were deleted. Zero-viewer rotation still needs the R3 Track C scheduler (it would just call `rotateExpiredSlots`).
 
 ---
 
