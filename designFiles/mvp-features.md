@@ -33,25 +33,26 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 
 **Design doc:** TBD (not in current MVP scope)
 
-### 2. Memberships ← POST-MVP
-- Membership types (different tiers per club)
-- Start date, end date
-- Freeze/postpone memberships (extend end date)
-- Membership renewal settings
-- Link memberships to clients
+### 2. Memberships ← COMPLETE (Phase 10a)
+- ✅ Membership types (different tiers per club)
+- ✅ Start date, end date
+- ✅ Freeze/postpone memberships (extend end date)
+- ✅ Membership renewal settings
+- ✅ Link memberships to clients (sell + bill-to, SellMembershipModal)
+- ✅ Visual status at check-in (display only, no enforcement)
 
 **Design doc:** `roadmap/phase10-memberships.md`
-**Note:** First customer is moving away from required memberships. Visual status indicator at check-in only (no enforcement) when built.
+**⚠️ Action required:** Migration `20260528010832` must be applied to production DB before enabling.
 
-### 3. Billing & Revenue
-- **MVP:** Manual package assignment by staff, pay at desk
+### 3. Billing & Revenue ← COMPLETE
+- ✅ Manual package assignment by staff, pay at desk (Phase 8a)
+- ✅ Invoicing & running tab, refunds, void (Phase 9a)
+- ✅ Invoice PDF generation (Phase 9b)
+- ✅ Stripe Connect payments (Phase 12a — replaces Polar)
 - Revenue categories for products/packages (Phase 5c — deferred)
-- Invoicing & running tab (Phase 9 — post-MVP)
-- Earnings reports with date ranges (Phase 14 — post-MVP)
-- Accounts receivable, revenue reports, package sales reports (Phase 14 — post-MVP)
+- Accounts receivable, revenue reports, package sales reports (Phase 14 — not started)
 
 **Design docs:** `roadmap/phase9-invoicing.md`, `roadmap/phase14-reporting.md`
-**Dependencies:** Polar integration (Phase 3 — in progress, pre-MVP)
 
 ### 4. Client Management ← COMPLETE
 - **Phase 4: User Tags** — tagging, filtering, bulk tagging, CSV export ✅
@@ -101,27 +102,37 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 
 | Phase | Doc | Status |
 |---|---|---|
-| Phase 1: Platform foundations | — | Complete |
-| Phase 2: User Management | `phase2-user-management.md` | Complete |
-| Phase 2.5: Calendar & Public Embed | `progressPhase2_5.md` | In progress |
-| Phase 3: Polar Payments | `progressPhase3.md` | In progress (P1-P4 remaining) |
-| Phase 4: User Tags | `phase4-user-tags.md` | Complete |
-| Phase 5a: Products & Categories | `roadmap/phase5-products.md` | Not Started |
-| Phase 6a: Member Check-in | `roadmap/phase6-member-checkin.md` | Not Started |
-| Phase 7a: Admin Check-in | `roadmap/phase7-admin-checkin.md` | Not Started |
-| Phase 8a: Packages & Credits | `roadmap/phase8-packages.md` | Not Started |
-| Court Rentals CR-a | `roadmap/court-rentals.md` | Not Started |
-| Phase 9+: Post-MVP | `roadmap/MASTER-ROADMAP.md` | Not Started |
+| Phase 1: Platform foundations | — | Complete ✅ |
+| Phase 2: User Management | `phase2-user-management.md` | Complete ✅ |
+| Phase 2.5: Calendar & Public Embed | `progressPhase2_5.md` | Complete ✅ (C1–C5 done; R1/R2 deferred) |
+| Phase 3: Payments (Stripe Connect) | `progressPhase3.md` | Complete ✅ (Phase 12a Stripe replaces Polar) |
+| Phase 4: User Tags | `phase4-user-tags.md` | Complete ✅ |
+| Phase 5a: Products & Categories | — | Complete ✅ (ProductsClient, ProductFormModal) |
+| Phase 6a: Member Check-in | — | Complete ✅ (static QR + self-check-in) |
+| Phase 7a: Admin Check-in | — | Complete ✅ (admin page + sell flows) |
+| Phase 8a: Packages & Credits | — | Complete ✅ (PackagePlan, MemberPackage, credit usage) |
+| Court Rentals CR-a | — | Complete ✅ (rental window events + /rentals grid) |
+| Phase 9a: Invoicing | — | Complete ✅ (running tab, billing, refunds, void) |
+| Phase 9b: Invoice PDF | — | Complete ✅ |
+| Phase 10a: Memberships | — | Complete ✅ — **⚠️ migration 20260528010832 must be applied to prod** |
+| Phase 12a: Stripe Connect | — | Complete ✅ (PaymentProvider, checkout, webhooks) |
+| Drop-in Rotation DI-2/DI-4 | `drop-in/HANDOFF.md` | Complete ✅ (TIMED + MATCH, kiosk, QR, party join) |
+| Multi-facility (F-A through F-E) | `progressPhase2_5.md` | Complete ✅ |
+| Multi-club (M1/M2/M4) | `progressPhase2_5.md` | Complete ✅ (M3 admin invite deferred) |
+| Recurring event reg migration | — | Deferred (R1/R2 — guarded TODOs, low priority) |
+| Phase 13: Communications | — | Not Started |
+| Phase 14: Reporting | — | Not Started |
+| DI-5: GBR stitch | `drop-in/gbr-integration.md` | Not Started (blocked on owner GBR setup) |
 
 ---
 
 ## Tech debt / prerequisites (from nextSteps.md)
 
-- Club landing shortname leak — P0 security fix needed
-- Input sanitization on user fields
-- Video collection pagination
-- Coach dashboard cleanup
-- Sidebar migration to shadcn
+- ✅ Club landing shortname leak — FIXED (S1/S2 in progressPhase2_5.md)
+- ✅ Input sanitization on user fields — FIXED (firstName/lastName/timezone regex)
+- ✅ Video collection pagination — FIXED (B1)
+- ✅ Coach dashboard cleanup — FIXED (D2)
+- ✅ Sidebar migration to shadcn — FIXED (U1)
 
 ---
 
