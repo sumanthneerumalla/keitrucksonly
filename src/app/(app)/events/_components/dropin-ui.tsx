@@ -85,11 +85,11 @@ export function Countdown({
 	const ss = String(total % 60).padStart(2, "0");
 	return (
 		<span
-			className={`flex items-center gap-1 font-mono text-xs ${
+			className={`flex items-center gap-1.5 font-mono font-semibold text-base tabular-nums ${
 				expired ? "text-red-600" : "text-[var(--foreground)]"
 			}`}
 		>
-			{expired && <Volume2 size={12} />}
+			{expired && <Volume2 size={15} />}
 			{expired ? "Time!" : `${mm}:${ss}`}
 		</span>
 	);
@@ -306,7 +306,7 @@ export function StaffAddToQueue({
 								? `Add ${ids.length} to queue`
 								: "Add to queue"}
 					</Button>
-					<p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+					<p className="mt-1 text-[var(--muted-foreground)] text-xs">
 						{format === "SINGLES"
 							? "Add players individually."
 							: "Pick 2 (or 4) — they queue together for doubles pairing."}
@@ -553,7 +553,7 @@ export function YourPartyCard({
 				<span className="font-medium text-[var(--foreground)] text-sm">
 					Your party
 				</span>
-				<span className="text-[11px] text-[var(--muted-foreground)]">
+				<span className="text-[var(--muted-foreground)] text-xs">
 					{stateLabel}
 					{party.preferredCourtId &&
 						` · ${courtName?.(party.preferredCourtId) ?? "Court"} only`}
@@ -795,23 +795,23 @@ export function QueueByParty({
 						<div className="flex-1">
 							{/* Header line — only for non-trivial parties */}
 							{!isTrivialSolo && (
-								<div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+								<div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
 									<span className="inline-flex items-center gap-1 font-medium text-[var(--foreground)]">
 										<Users size={12} />
 										{isSolo ? "Solo" : `Group of ${party.memberCount}`}
 									</span>
 									{isClosedIncomplete && (
-										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-900 text-xs dark:bg-amber-900/40 dark:text-amber-200">
 											Needs {party.needsCount} more — closed group
 										</span>
 									)}
 									{isOpenIncomplete && (
-										<span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200">
+										<span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-emerald-900 text-xs dark:bg-emerald-900/40 dark:text-emerald-200">
 											Needs {party.needsCount} more — open to anyone
 										</span>
 									)}
 									{hasNonReadyMember && (
-										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[var(--muted-foreground)] text-xs">
 											Will play when{" "}
 											{row.nonWaitingLiveMembers
 												.map((m) => memberDisplayName(m))
@@ -822,7 +822,7 @@ export function QueueByParty({
 										</span>
 									)}
 									{party.preferredCourtId && (
-										<span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-900 dark:bg-indigo-900/40 dark:text-indigo-200">
+										<span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-indigo-900 text-xs dark:bg-indigo-900/40 dark:text-indigo-200">
 											{courtName?.(party.preferredCourtId) ?? "Court"} only
 										</span>
 									)}
@@ -836,7 +836,7 @@ export function QueueByParty({
 													})
 												}
 												disabled={joinExistingParty.isPending}
-												className="rounded-full bg-[var(--primary)] px-2 py-0.5 font-medium text-[10px] text-white hover:opacity-90 disabled:opacity-50"
+												className="rounded-full bg-[var(--primary)] px-2 py-0.5 font-medium text-white text-xs hover:opacity-90 disabled:opacity-50"
 											>
 												Join this group
 											</button>
@@ -849,7 +849,7 @@ export function QueueByParty({
 													disbandParty.mutate({ partyId: party.partyId })
 												}
 												disabled={disbandParty.isPending}
-												className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+												className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[var(--muted-foreground)] text-xs hover:border-red-400 hover:text-red-600 disabled:opacity-50"
 											>
 												Disband
 											</button>
@@ -930,7 +930,7 @@ export function QueueByParty({
 											title={`Status: ${m.status}`}
 										>
 											{memberDisplayName(m)}
-											<span className="text-[10px]">
+											<span className="text-xs">
 												{PILL_STATUS_LABEL[m.status] ?? m.status.toLowerCase()}
 											</span>
 										</span>

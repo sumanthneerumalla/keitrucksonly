@@ -512,19 +512,23 @@ export default function DropInEventDetails({
 			{/* Header */}
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<div>
-					<h3 className="font-semibold text-[var(--foreground)]">
-						{eventTitle}
-					</h3>
-					<p className="text-[var(--muted-foreground)] text-xs">
+					<div className="flex items-center gap-2">
+						<h3 className="font-semibold text-[var(--foreground)]">
+							{eventTitle}
+						</h3>
+						<span
+							className={`rounded-full px-2 py-0.5 font-medium text-xs ${
+								isWindingDown || isPaused
+									? "bg-amber-50 text-amber-700"
+									: "bg-green-50 text-green-700"
+							}`}
+						>
+							{isWindingDown ? "Ending" : isPaused ? "Paused" : "Live"}
+						</span>
+					</div>
+					<p className="mt-0.5 text-[var(--muted-foreground)] text-sm">
 						{session.mode === "TIMED" ? "Timed rotation" : "Match play"} ·{" "}
-						{session.format ?? "—"} ·{" "}
-						{isWindingDown ? (
-							<span className="text-amber-600">ending</span>
-						) : isPaused ? (
-							<span className="text-amber-600">paused</span>
-						) : (
-							<span className="text-green-600">live</span>
-						)}
+						{session.format ?? "—"}
 					</p>
 				</div>
 				<div className="flex flex-wrap items-center justify-end gap-2">
@@ -570,13 +574,13 @@ export default function DropInEventDetails({
 			</div>
 
 			{isPaused && (
-				<p className="rounded-md bg-amber-100 px-3 py-2 text-amber-800 text-sm">
+				<p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800 text-sm">
 					Session paused — current games can finish, but no new games or queue
 					joins until a staff member resumes.
 				</p>
 			)}
 			{isWindingDown && (
-				<p className="rounded-md bg-amber-100 px-3 py-2 text-amber-800 text-sm">
+				<p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800 text-sm">
 					Session ending — let the current games finish. No new games or queue
 					joins; use “Cancel game” to clear a court that can't finish.
 				</p>
@@ -698,47 +702,50 @@ export default function DropInEventDetails({
 									)}
 
 									{a.status === "PENDING_CONFIRM" ? (
-										<div className="rounded bg-amber-100 px-2 py-1 font-semibold text-amber-800 text-xs">
-											⏳ Awaiting confirmation — this court is held until the
-											opponent confirms the score.
+										<div className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 text-xs">
+											<span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+											Awaiting opponent's confirmation
 										</div>
 									) : a.status === "DISPUTED" ? (
-										<div className="rounded bg-red-100 px-2 py-1 font-semibold text-red-700 text-xs">
-											⚠ Disputed — this court is held until a staff member
-											resolves the score.
+										<div className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 font-medium text-red-700 text-xs">
+											<span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+											Disputed — staff will resolve
 										</div>
 									) : (
-										<div className="text-[var(--muted-foreground)] text-xs">
-											In progress
+										<div className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-2.5 py-1 font-medium text-green-700 text-xs">
+											<span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+											In play
 										</div>
 									)}
 
-									{/* Controls */}
+									{/* Court controls (staff) */}
 									{isStaff && (
-										<Button
-											variant="outline"
-											size="sm"
-											className="border-red-200 text-red-600 hover:bg-red-50"
-											disabled={cancelAssignment.isPending}
-											onClick={() =>
-												cancelAssignment.mutate({
-													assignmentId: a.assignmentId,
-												})
-											}
-										>
-											Cancel game
-										</Button>
-									)}
-									{!isMatch && isStaff && (
-										<Button
-											variant="outline"
-											size="sm"
-											onClick={() =>
-												endSlot.mutate({ assignmentId: a.assignmentId })
-											}
-										>
-											End slot
-										</Button>
+										<div className="flex flex-wrap gap-2">
+											{!isMatch && (
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={() =>
+														endSlot.mutate({ assignmentId: a.assignmentId })
+													}
+												>
+													End slot
+												</Button>
+											)}
+											<Button
+												variant="outline"
+												size="sm"
+												className="border-red-200 text-red-600 hover:bg-red-50"
+												disabled={cancelAssignment.isPending}
+												onClick={() =>
+													cancelAssignment.mutate({
+														assignmentId: a.assignmentId,
+													})
+												}
+											>
+												Cancel game
+											</Button>
+										</div>
 									)}
 
 									{isMatch &&
