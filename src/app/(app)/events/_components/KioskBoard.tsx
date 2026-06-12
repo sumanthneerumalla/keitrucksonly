@@ -9,6 +9,7 @@ import {
 	Leaderboard,
 	QueueByParty,
 	formatGames,
+	memberDisplayName,
 } from "~/app/(app)/events/_components/dropin-ui";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -138,9 +139,6 @@ export default function KioskBoard({
 		{ enabled: !!session && session.mode === "MATCH", refetchInterval: 5000 },
 	);
 
-	const fullName = (u: { firstName: string | null; lastName: string | null }) =>
-		`${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "Player";
-
 	// -------------------------------------------------------------------------
 	if (boardQuery.isLoading) {
 		return <div className="h-40 animate-pulse rounded-lg bg-[var(--muted)]" />;
@@ -210,7 +208,9 @@ export default function KioskBoard({
 				{i > 0 && (
 					<span className="mx-1 text-[var(--muted-foreground)]">&</span>
 				)}
-				<span className="text-[var(--foreground)]">{fullName(p.user)}</span>
+				<span className="text-[var(--foreground)]">
+					{memberDisplayName(p.user)}
+				</span>
 			</span>
 		));
 	};
@@ -306,7 +306,7 @@ export default function KioskBoard({
 													key={p.userId}
 													className="rounded-full bg-[var(--muted)] px-2 py-0.5 text-xs"
 												>
-													{fullName(p.user)}
+													{memberDisplayName(p.user)}
 												</span>
 											))}
 										</div>

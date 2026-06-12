@@ -13,6 +13,7 @@ import {
 	SwapPlayer,
 	YourPartyCard,
 	formatGames,
+	memberDisplayName,
 } from "~/app/(app)/events/_components/dropin-ui";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
@@ -436,8 +437,6 @@ export default function DropInEventDetails({
 	const availableCourts = (resourcesQuery.data?.resources ?? []).filter(
 		(r) => !session.courtIds.includes(r.resourceId),
 	);
-	const fullName = (u: { firstName: string | null; lastName: string | null }) =>
-		`${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "Player";
 
 	// Staff can swap a player on a live game (e.g. seat a test account).
 	type Assignment = (typeof assignments)[number];
@@ -455,7 +454,7 @@ export default function DropInEventDetails({
 					<span className="mx-1 text-[var(--muted-foreground)]">&</span>
 				)}
 				<SwapPlayer
-					name={fullName(p.user)}
+					name={memberDisplayName(p.user)}
 					canSwap={canSwapPlayers(a.status)}
 					sessionId={session.sessionId}
 					onPick={(inUserId) =>
@@ -696,7 +695,7 @@ export default function DropInEventDetails({
 													className="rounded-full bg-[var(--muted)] px-2 py-0.5 text-xs"
 												>
 													<SwapPlayer
-														name={fullName(p.user)}
+														name={memberDisplayName(p.user)}
 														canSwap={canSwapPlayers(a.status)}
 														sessionId={session.sessionId}
 														onPick={(inUserId) =>

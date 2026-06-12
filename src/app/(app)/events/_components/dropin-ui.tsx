@@ -620,7 +620,6 @@ export function YourPartyCard({
 		openToFill: boolean;
 		preferredCourtId: string | null;
 		memberCount: number;
-		isReady: boolean;
 		derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT";
 		members: Array<{
 			userId: string;
@@ -770,7 +769,6 @@ export type QueueByPartyEntry = {
 	memberCount: number;
 	capacity: number;
 	needsCount: number;
-	isReady: boolean;
 	derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT";
 	members: Array<{
 		userId: string;
@@ -799,11 +797,11 @@ const PILL_STATUS_LABEL: Record<string, string> = {
 	DONE: "done",
 };
 
-function memberDisplayName(m: {
+export function memberDisplayName(m: {
 	firstName: string | null;
 	lastName: string | null;
 }): string {
-	return `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
+	return `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Player";
 }
 
 export function QueueByParty({

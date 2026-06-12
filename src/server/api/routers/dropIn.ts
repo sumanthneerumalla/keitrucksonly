@@ -255,7 +255,6 @@ function deriveBoardView(session: BoardSession) {
 					lastName: m.user.lastName,
 					status: m.status,
 				})),
-				isReady: !anyPlaying && !anyAwaiting,
 				derivedState,
 			};
 		});
