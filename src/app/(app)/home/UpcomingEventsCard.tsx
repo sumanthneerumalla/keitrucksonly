@@ -32,28 +32,52 @@ function formatDayLabel(date: Date): string {
 	}).format(date);
 }
 
-export function UpcomingEventsCard() {
-	const { data, isLoading, error } = api.calendar.getMyUpcomingEvents.useQuery({
-		limit: 5,
-	});
+/**
+ * Upcoming-events list. Two modes from one component so it's reusable:
+ *  - default (no props): the signed-in member's registered upcoming events
+ *    (`getMyUpcomingEvents`) — used on /home, shows a Registered/Checked-in chip.
+ *  - public (pass `clubShortName`, optionally `facilityId`): a club's upcoming
+ *    public events (`getPublicUpcomingEvents`) — used on club landing pages,
+ *    no registration chip.
+ */
+export function UpcomingEventsCard({
+	clubShortName,
+	facilityId,
+}: {
+	clubShortName?: string;
+	facilityId?: string;
+} = {}) {
+	const isPublic = !!clubShortName;
+
+	const memberQuery = api.calendar.getMyUpcomingEvents.useQuery(
+		{ limit: 5 },
+		{ enabled: !isPublic },
+	);
+	const publicQuery = api.calendar.getPublicUpcomingEvents.useQuery(
+		{ clubShortName: clubShortName ?? "", facilityId, limit: 5 },
+		{ enabled: isPublic },
+	);
+
+	const { data, isLoading, error } = isPublic ? publicQuery : memberQuery;
+
+	const heading = isPublic ? "Upcoming events" : "Your upcoming events";
+	const emptyMessage = isPublic
+		? "No upcoming events scheduled yet."
+		: "You're not registered for any upcoming events yet.";
 
 	return (
 		<div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
 			<div className="mb-4 flex items-center gap-2">
 				<CalendarClock className="h-5 w-5 text-blue-600" />
-				<h2 className="font-semibold text-gray-900 text-xl">
-					Your upcoming events
-				</h2>
+				<h2 className="font-semibold text-gray-900 text-xl">{heading}</h2>
 			</div>
 
 			{isLoading ? (
-				<p className="text-gray-500 text-sm">Loading your events…</p>
+				<p className="text-gray-500 text-sm">Loading events…</p>
 			) : error ? (
-				<p className="text-gray-500 text-sm">Couldn't load your events.</p>
+				<p className="text-gray-500 text-sm">Couldn't load events.</p>
 			) : !data || data.events.length === 0 ? (
-				<p className="text-gray-500 text-sm">
-					You're not registered for any upcoming events yet.
-				</p>
+				<p className="text-gray-500 text-sm">{emptyMessage}</p>
 			) : (
 				<div className="space-y-2">
 					{data.events.map((ev) => {
@@ -74,8 +98,11 @@ export function UpcomingEventsCard() {
 							},
 						} as unknown as IlamyCalendarEvent;
 
+						// Registration chip is member-only; public club events carry no
+						// per-viewer status, so we omit it there.
+						const status = "status" in ev ? ev.status : null;
 						const statusChip =
-							ev.status === "CHECKED_IN" ? (
+							status == null ? null : status === "CHECKED_IN" ? (
 								<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700 text-xs">
 									<CalendarCheck size={12} />
 									Checked in

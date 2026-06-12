@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "~/server/db";
-import { HomePage } from "../../page";
+import { ClubUpcomingEvents } from "./ClubUpcomingEvents";
 
 /**
  * Club-specific landing page.
@@ -40,7 +40,7 @@ export default async function ClubPage({ params }: ClubPageProps) {
 					View Calendar
 				</Link>
 			</div>
-			<HomePage clubShortName={clubShortName} />
+			<ClubUpcomingEvents clubShortName={clubShortName} />
 		</>
 	);
 }
