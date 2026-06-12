@@ -4,6 +4,7 @@ import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/nextjs";
 import { ArrowLeft, Loader2, MapPin, Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import { ErrorBanner } from "~/app/_components/shared/ErrorBanner";
 import { api } from "~/trpc/react";
 
@@ -118,19 +119,7 @@ function ClubSearchStep({
 	joinError: string | null;
 }) {
 	const [query, setQuery] = useState("");
-	const [debouncedQuery, setDebouncedQuery] = useState("");
-	const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-	// Debounce the query so we don't fire on every keystroke
-	useEffect(() => {
-		if (debounceRef.current) clearTimeout(debounceRef.current);
-		debounceRef.current = setTimeout(() => {
-			setDebouncedQuery(query.trim());
-		}, 300);
-		return () => {
-			if (debounceRef.current) clearTimeout(debounceRef.current);
-		};
-	}, [query]);
+	const debouncedQuery = useDebouncedValue(query.trim(), 300);
 
 	const isSearchReady = debouncedQuery.length >= MIN_QUERY_LEN;
 
