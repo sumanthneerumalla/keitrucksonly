@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
+import BillToUserPicker from "~/app/_components/shared/BillToUserPicker";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -173,11 +174,10 @@ export default function SellMembershipModal({
 	const [notes, setNotes] = useState("");
 	const [saving, setSaving] = useState(false);
 
-	// --- Bill-to / payer typeahead (reused from SellPackageModal) ---
-	const [billToQuery, setBillToQuery] = useState("");
+	// --- Bill-to / payer — the shared BillToUserPicker (as SellPackageModal). ---
 	const [billToUser, setBillToUser] = useState<SearchUser | null>(null);
-	const [showBillToDropdown, setShowBillToDropdown] = useState(true);
-	const billToWrapperRef = useRef<HTMLDivElement>(null);
+	const [billToTypedButUnselected, setBillToTypedButUnselected] =
+		useState(false);
 
 	const today = todayISO();
 
@@ -189,11 +189,10 @@ export default function SellMembershipModal({
 			? formatUserName(selectedMember)
 			: "this member";
 
-	// Debounce both typeaheads (200ms) — matches SellPackageModal.
+	// Debounce the member typeahead (200ms) — matches SellPackageModal.
 	const debouncedMemberQuery = useDebouncedValue(memberQuery, 200);
-	const debouncedBillToQuery = useDebouncedValue(billToQuery, 200);
 
-	// Outside-click dismissal for both dropdowns (mirrors SellPackageModal Fix E).
+	// Outside-click dismissal for the member dropdown (mirrors SellPackageModal Fix E).
 	useEffect(() => {
 		function handleClickOutside(e: MouseEvent) {
 			if (
@@ -201,12 +200,6 @@ export default function SellMembershipModal({
 				!memberWrapperRef.current.contains(e.target as Node)
 			) {
 				setShowMemberDropdown(false);
-			}
-			if (
-				billToWrapperRef.current &&
-				!billToWrapperRef.current.contains(e.target as Node)
-			) {
-				setShowBillToDropdown(false);
 			}
 		}
 		document.addEventListener("mousedown", handleClickOutside);
@@ -231,21 +224,6 @@ export default function SellMembershipModal({
 		{ enabled: memberSearchEnabled },
 	);
 	const memberResults = memberSearch.data?.members ?? [];
-
-	// Bill-to search — gated on 4 chars + debounce, consumer filtered out.
-	const trimmedBillToQuery = billToQuery.trim();
-	const trimmedDebouncedBillToQuery = debouncedBillToQuery.trim();
-	const billToSearchEnabled =
-		billToUser === null && trimmedDebouncedBillToQuery.length >= 4;
-	const billToSearch = api.user.searchMembers.useQuery(
-		{ query: trimmedDebouncedBillToQuery },
-		{ enabled: billToSearchEnabled },
-	);
-	const billToResults = (billToSearch.data?.members ?? []).filter(
-		(r) => r.userId !== consumerId,
-	);
-	const billToTypedButUnselected =
-		trimmedBillToQuery.length > 0 && billToUser === null;
 
 	// Full-term fee + term-end preview (no proration).
 	const termEndPreview = useMemo(() => {
@@ -566,115 +544,16 @@ export default function SellMembershipModal({
 						/>
 					</div>
 
-					{/* Bill to (optional) — reused from SellPackageModal */}
-					<div className="space-y-1">
-						<label
-							htmlFor="sell-membership-bill-to"
-							className="font-medium text-[var(--foreground)] text-sm"
-						>
-							Bill to{" "}
-							<span className="font-normal text-[var(--muted-foreground)]">
-								(optional)
-							</span>
-						</label>
-
-						{billToUser ? (
-							<div className="flex flex-wrap items-center gap-2">
-								<span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--muted)] px-3 py-1 text-[var(--foreground)] text-sm">
-									<span className="font-medium">
-										{formatUserName(billToUser)}
-									</span>
-									{billToUser.email ? (
-										<span className="text-[var(--muted-foreground)] text-xs">
-											({billToUser.email})
-										</span>
-									) : null}
-									<button
-										type="button"
-										onClick={() => {
-											setBillToUser(null);
-											setBillToQuery("");
-										}}
-										disabled={saving}
-										aria-label="Clear bill-to user"
-										className="ml-1 rounded-full p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--background)] hover:text-[var(--foreground)] disabled:opacity-50"
-									>
-										<X size={12} />
-									</button>
-								</span>
-							</div>
-						) : (
-							<div ref={billToWrapperRef} className="relative">
-								<Input
-									id="sell-membership-bill-to"
-									value={billToQuery}
-									onChange={(e) => {
-										setBillToQuery(e.target.value);
-										setShowBillToDropdown(true);
-									}}
-									onFocus={() => setShowBillToDropdown(true)}
-									placeholder="Search by name or email..."
-									disabled={saving}
-									autoComplete="off"
-									maxLength={100}
-									className="h-9"
-								/>
-								{trimmedBillToQuery.length > 0 && showBillToDropdown && (
-									<div className="absolute top-full right-0 left-0 z-10 mt-1 max-h-64 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--card)] shadow-md">
-										{trimmedBillToQuery.length < 4 ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												Type at least 4 characters to search.
-											</p>
-										) : billToSearch.isLoading ||
-											trimmedBillToQuery !== trimmedDebouncedBillToQuery ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												Searching...
-											</p>
-										) : billToResults.length === 0 ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												No matches found.
-											</p>
-										) : (
-											<ul className="py-1">
-												{billToResults.map((r) => (
-													<li key={r.userId}>
-														<button
-															type="button"
-															onClick={() => {
-																setBillToUser(r);
-																setBillToQuery("");
-															}}
-															className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--muted)]"
-														>
-															<span className="text-[var(--foreground)]">
-																{formatUserName(r)}
-															</span>
-															{r.email ? (
-																<span className="text-[var(--muted-foreground)] text-xs">
-																	{r.email}
-																</span>
-															) : null}
-														</button>
-													</li>
-												))}
-											</ul>
-										)}
-									</div>
-								)}
-							</div>
-						)}
-
-						{billToTypedButUnselected ? (
-							<p className="text-amber-600 text-xs dark:text-amber-400">
-								Pick someone from the dropdown, or clear the search to bill{" "}
-								{consumerName} directly.
-							</p>
-						) : (
-							<p className="text-[var(--muted-foreground)] text-xs">
-								Leave blank to bill {consumerName} directly.
-							</p>
-						)}
-					</div>
+					{/* Bill to (optional) — shared picker, same as SellPackageModal */}
+					<BillToUserPicker
+						consumerId={consumerId ?? ""}
+						value={billToUser}
+						onChange={setBillToUser}
+						disabled={saving}
+						label="Bill to (optional)"
+						helperText={`Leave blank to bill ${consumerName} directly.`}
+						onTypedButUnselectedChange={setBillToTypedButUnselected}
+					/>
 				</div>
 
 				{/* Footer */}
