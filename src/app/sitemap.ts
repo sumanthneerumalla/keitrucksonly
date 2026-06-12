@@ -1,5 +1,6 @@
 import { AnnouncementStatus, ArticleStatus } from "@prisma/client";
 import type { MetadataRoute } from "next";
+import { getClubBaseUrl, getClubPublicUrl } from "~/lib/clubPublicUrl";
 import { SITE_URL } from "~/lib/marketing";
 import { db } from "~/server/db";
 import { api } from "~/trpc/server";
@@ -62,6 +63,21 @@ async function fetchAllPlatformArticles(): Promise<
 	return out;
 }
 
+// Phase 16 Step 1 — one landing-page entry per club. The landing page is the
+// highest-value local-SEO URL we have, so every club is listed regardless of
+// whether it has published content yet.
+async function fetchClubLandingEntries(): Promise<MetadataRoute.Sitemap> {
+	const clubs = await db.club.findMany({
+		select: { clubShortName: true, canonicalDomain: true, updatedAt: true },
+	});
+	return clubs.map((club) => ({
+		url: getClubBaseUrl(club),
+		lastModified: club.updatedAt,
+		changeFrequency: "daily",
+		priority: 0.8,
+	}));
+}
+
 // For each club with ≥1 published article, return the rows needed to emit
 // per-club sitemap entries: the club itself, every published article, and
 // every tag that has ≥1 published article in that club.
@@ -75,6 +91,7 @@ async function fetchClubArticleEntries(): Promise<MetadataRoute.Sitemap> {
 	const clubs = await db.club.findMany({
 		select: {
 			clubShortName: true,
+			canonicalDomain: true,
 			articles: {
 				where: {
 					status: ArticleStatus.PUBLISHED,
@@ -94,7 +111,7 @@ async function fetchClubArticleEntries(): Promise<MetadataRoute.Sitemap> {
 	const entries: MetadataRoute.Sitemap = [];
 	for (const club of clubs) {
 		if (club.articles.length === 0) continue;
-		const clubBase = `${SITE_URL}/${club.clubShortName}/articles`;
+		const clubBase = getClubPublicUrl(club, "/articles");
 
 		// Index page for the club.
 		entries.push({
@@ -141,6 +158,7 @@ async function fetchClubAnnouncementEntries(): Promise<MetadataRoute.Sitemap> {
 	const clubs = await db.club.findMany({
 		select: {
 			clubShortName: true,
+			canonicalDomain: true,
 			announcements: {
 				where: {
 					status: AnnouncementStatus.PUBLISHED,
@@ -159,7 +177,7 @@ async function fetchClubAnnouncementEntries(): Promise<MetadataRoute.Sitemap> {
 		if (club.announcements.length === 0) continue;
 		const lastPublished = club.announcements[0]?.publishedAt ?? now;
 		entries.push({
-			url: `${SITE_URL}/${club.clubShortName}/announcements`,
+			url: getClubPublicUrl(club, "/announcements"),
 			lastModified: lastPublished,
 			changeFrequency: "weekly",
 			priority: 0.4,
@@ -174,52 +192,65 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 		// doesn't wipe out the dynamic sections from the other three. The outer
 		// try/catch below remains the catastrophic-failure fallback (e.g. if
 		// even building the static routes throws).
-		const [articleEntries, tagEntries, clubEntries, announcementEntries] =
-			await Promise.all([
-				(async (): Promise<MetadataRoute.Sitemap> => {
-					try {
-						const articles = await fetchAllPlatformArticles();
-						return articles.map((p) => ({
-							url: `${SITE_URL}/articles/${p.slug}`,
-							lastModified: p.publishedAt,
-							changeFrequency: "monthly",
-							priority: 0.7,
-						}));
-					} catch {
-						return [];
-					}
-				})(),
-				(async (): Promise<MetadataRoute.Sitemap> => {
-					try {
-						const tags = await api.articles.listTags();
-						return tags.map((t) => ({
-							url: `${SITE_URL}/articles/tag/${t.slug}`,
-							lastModified: new Date(),
-							changeFrequency: "weekly",
-							priority: 0.5,
-						}));
-					} catch {
-						return [];
-					}
-				})(),
-				(async (): Promise<MetadataRoute.Sitemap> => {
-					try {
-						return await fetchClubArticleEntries();
-					} catch {
-						return [];
-					}
-				})(),
-				(async (): Promise<MetadataRoute.Sitemap> => {
-					try {
-						return await fetchClubAnnouncementEntries();
-					} catch {
-						return [];
-					}
-				})(),
-			]);
+		const [
+			landingEntries,
+			articleEntries,
+			tagEntries,
+			clubEntries,
+			announcementEntries,
+		] = await Promise.all([
+			(async (): Promise<MetadataRoute.Sitemap> => {
+				try {
+					return await fetchClubLandingEntries();
+				} catch {
+					return [];
+				}
+			})(),
+			(async (): Promise<MetadataRoute.Sitemap> => {
+				try {
+					const articles = await fetchAllPlatformArticles();
+					return articles.map((p) => ({
+						url: `${SITE_URL}/articles/${p.slug}`,
+						lastModified: p.publishedAt,
+						changeFrequency: "monthly",
+						priority: 0.7,
+					}));
+				} catch {
+					return [];
+				}
+			})(),
+			(async (): Promise<MetadataRoute.Sitemap> => {
+				try {
+					const tags = await api.articles.listTags();
+					return tags.map((t) => ({
+						url: `${SITE_URL}/articles/tag/${t.slug}`,
+						lastModified: new Date(),
+						changeFrequency: "weekly",
+						priority: 0.5,
+					}));
+				} catch {
+					return [];
+				}
+			})(),
+			(async (): Promise<MetadataRoute.Sitemap> => {
+				try {
+					return await fetchClubArticleEntries();
+				} catch {
+					return [];
+				}
+			})(),
+			(async (): Promise<MetadataRoute.Sitemap> => {
+				try {
+					return await fetchClubAnnouncementEntries();
+				} catch {
+					return [];
+				}
+			})(),
+		]);
 
 		return [
 			...STATIC_ROUTES,
+			...landingEntries,
 			...articleEntries,
 			...tagEntries,
 			...clubEntries,

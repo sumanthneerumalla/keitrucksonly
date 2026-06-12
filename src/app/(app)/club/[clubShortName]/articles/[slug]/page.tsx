@@ -7,6 +7,7 @@ import type {
 	ArticleCard as ArticleCardType,
 	ArticleDetail,
 } from "~/lib/article";
+import { getClubPublicUrl } from "~/lib/clubPublicUrl";
 import { SITE_URL } from "~/lib/marketing";
 import { db } from "~/server/db";
 import { api } from "~/trpc/server";
@@ -23,12 +24,14 @@ interface ClubArticlePageProps {
 	params: Promise<{ clubShortName: string; slug: string }>;
 }
 
-async function fetchClub(
-	clubShortName: string,
-): Promise<{ clubShortName: string; clubName: string } | null> {
+async function fetchClub(clubShortName: string): Promise<{
+	clubShortName: string;
+	clubName: string;
+	canonicalDomain: string | null;
+} | null> {
 	return db.club.findUnique({
 		where: { clubShortName },
-		select: { clubShortName: true, clubName: true },
+		select: { clubShortName: true, clubName: true, canonicalDomain: true },
 	});
 }
 
@@ -93,7 +96,7 @@ export async function generateMetadata({
 
 	const title = article.metaTitle || article.title;
 	const description = buildDescription(article);
-	const url = `${SITE_URL}/${clubShortName}/articles/${article.slug}`;
+	const url = getClubPublicUrl(club, `/articles/${article.slug}`);
 	const absoluteCover = article.coverImageUrl
 		? `${SITE_URL}${article.coverImageUrl}`
 		: null;
@@ -184,7 +187,7 @@ export default async function ClubArticlePage({
 	// and ADD_TAGS as needed for any new HTML primitives the CTA TipTap node emits.
 	// See designFiles/roadmap/phase15-articles-and-announcements.md §"CTA support".
 	const safeHtml = DOMPurify.sanitize(article.bodyHtml);
-	const canonical = `${SITE_URL}/${clubShortName}/articles/${article.slug}`;
+	const canonical = getClubPublicUrl(club, `/articles/${article.slug}`);
 	const absoluteCover = article.coverImageUrl
 		? `${SITE_URL}${article.coverImageUrl}`
 		: null;

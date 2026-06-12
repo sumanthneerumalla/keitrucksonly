@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArticleCard } from "~/app/_components/client/public/articles/ArticleCard";
 import type { ArticleCard as ArticleCardType } from "~/lib/article";
-import { SITE_URL } from "~/lib/marketing";
+import { getClubPublicUrl } from "~/lib/clubPublicUrl";
 import { db } from "~/server/db";
 import { api } from "~/trpc/server";
 
@@ -33,12 +33,14 @@ async function loadIndexData(clubShortName: string): Promise<{
 
 // Fetch club display name + existence check. Returns null on missing club so
 // the page can route to notFound().
-async function fetchClub(
-	clubShortName: string,
-): Promise<{ clubShortName: string; clubName: string } | null> {
+async function fetchClub(clubShortName: string): Promise<{
+	clubShortName: string;
+	clubName: string;
+	canonicalDomain: string | null;
+} | null> {
 	return db.club.findUnique({
 		where: { clubShortName },
-		select: { clubShortName: true, clubName: true },
+		select: { clubShortName: true, clubName: true, canonicalDomain: true },
 	});
 }
 
@@ -55,7 +57,7 @@ export async function generateMetadata({
 	}
 	const title = `${club.clubName} Articles`;
 	const description = `Articles from ${club.clubName} — news, updates, and stories from the club.`;
-	const url = `${SITE_URL}/${clubShortName}/articles`;
+	const url = getClubPublicUrl(club, "/articles");
 	return {
 		title,
 		description,

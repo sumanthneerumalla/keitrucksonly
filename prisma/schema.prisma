@@ -21,6 +21,12 @@ datasource db {
 model Club {
   clubShortName         String   @id
   clubName              String   @unique
+  // Phase 16 D2 (2026-06-12): club's canonical public base URL, e.g.
+  // "https://cba.facilitypresence.com" or a customer-owned domain. NULL =
+  // default platform URL https://facilitypresence.com/<clubShortName>.
+  // ALL public URL generation (canonical tags, sitemap, JSON-LD, OG) must go
+  // through getClubBaseUrl() in src/lib/clubPublicUrl.ts — never hardcode.
+  canonicalDomain       String?  @db.VarChar(255)
   // Phase 9-EOD (2026-05-02): per-club sequential invoice number counter.
   // Atomically incremented inside the same $transaction as the invoice insert.
   nextInvoiceNumber     Int      @default(1)

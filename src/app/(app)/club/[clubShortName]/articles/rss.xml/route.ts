@@ -1,5 +1,5 @@
 import type { ArticleCard } from "~/lib/article";
-import { SITE_URL } from "~/lib/marketing";
+import { getClubPublicUrl } from "~/lib/clubPublicUrl";
 import { db } from "~/server/db";
 import { api } from "~/trpc/server";
 
@@ -34,8 +34,11 @@ async function loadArticles(clubShortName: string): Promise<ArticleCard[]> {
 	}
 }
 
-function buildItem(article: ArticleCard, clubShortName: string): string {
-	const url = `${SITE_URL}/${clubShortName}/articles/${article.slug}`;
+function buildItem(
+	article: ArticleCard,
+	club: { clubShortName: string; canonicalDomain: string | null },
+): string {
+	const url = getClubPublicUrl(club, `/articles/${article.slug}`);
 	const descSource = article.excerpt ?? article.title;
 	const truncated =
 		descSource.length > 300 ? `${descSource.slice(0, 297)}...` : descSource;
@@ -61,7 +64,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
 
 	const club = await db.club.findUnique({
 		where: { clubShortName },
-		select: { clubShortName: true, clubName: true },
+		select: { clubShortName: true, clubName: true, canonicalDomain: true },
 	});
 	if (!club) {
 		return new Response("Not found", { status: 404 });
@@ -69,8 +72,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
 
 	const articles = await loadArticles(clubShortName);
 	const lastBuildDate = toRfc2822(articles[0]?.publishedAt ?? new Date());
-	const channelLink = `${SITE_URL}/${clubShortName}/articles`;
-	const selfHref = `${SITE_URL}/${clubShortName}/articles/rss.xml`;
+	const channelLink = getClubPublicUrl(club, "/articles");
+	const selfHref = getClubPublicUrl(club, "/articles/rss.xml");
 
 	const channelMeta = [
 		`    <title>${escapeXml(club.clubName)} Articles</title>`,
@@ -81,7 +84,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
 		`    <atom:link href="${selfHref}" rel="self" type="application/rss+xml" />`,
 	].join("\n");
 
-	const items = articles.map((a) => buildItem(a, clubShortName)).join("\n");
+	const items = articles.map((a) => buildItem(a, club)).join("\n");
 
 	const xml = [
 		'<?xml version="1.0" encoding="UTF-8" ?>',

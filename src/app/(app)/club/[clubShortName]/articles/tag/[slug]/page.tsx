@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArticleCard } from "~/app/_components/client/public/articles/ArticleCard";
 import type { ArticleCard as ArticleCardType } from "~/lib/article";
-import { SITE_URL } from "~/lib/marketing";
+import { getClubPublicUrl } from "~/lib/clubPublicUrl";
 import { db } from "~/server/db";
 import { api } from "~/trpc/server";
 
@@ -13,12 +13,14 @@ interface ClubTagPageProps {
 	params: Promise<{ clubShortName: string; slug: string }>;
 }
 
-async function fetchClub(
-	clubShortName: string,
-): Promise<{ clubShortName: string; clubName: string } | null> {
+async function fetchClub(clubShortName: string): Promise<{
+	clubShortName: string;
+	clubName: string;
+	canonicalDomain: string | null;
+} | null> {
 	return db.club.findUnique({
 		where: { clubShortName },
-		select: { clubShortName: true, clubName: true },
+		select: { clubShortName: true, clubName: true, canonicalDomain: true },
 	});
 }
 
@@ -75,7 +77,7 @@ export async function generateMetadata({
 	}
 	const title = `Articles tagged ${tag.name} | ${club.clubName}`;
 	const description = `Articles from ${club.clubName} tagged "${tag.name}".`;
-	const url = `${SITE_URL}/${clubShortName}/articles/tag/${tag.slug}`;
+	const url = getClubPublicUrl(club, `/articles/tag/${tag.slug}`);
 	return {
 		title,
 		description,
