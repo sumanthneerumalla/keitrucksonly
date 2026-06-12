@@ -1,3 +1,4 @@
+import { clerkClient } from "@clerk/nextjs/server";
 import { Gender, Prisma, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -5,6 +6,7 @@ import {
 	clubAdminProcedure,
 	createTRPCRouter,
 	facilityProcedure,
+	memberProcedure,
 	protectedProcedure,
 } from "~/server/api/trpc";
 import {
@@ -19,7 +21,6 @@ import {
 	canAssignRole,
 	canManageUser,
 	formatUserForFrontend,
-	getCurrentUser,
 	isAnyAdmin,
 	isFacilityOrAbove,
 	isPlatformAdmin,
@@ -171,15 +172,6 @@ const updateStudentProfileSchema = z.object({
 			"Profile image must be 5MB or less",
 		)
 		.optional(),
-});
-
-const switchUserTypeSchema = z.object({
-	userType: z.enum([
-		UserType.STUDENT,
-		UserType.COACH,
-		UserType.FACILITY,
-		UserType.CLUB_ADMIN,
-	] as const),
 });
 
 const getStudentDetailSchema = z.object({
@@ -426,22 +418,51 @@ export const userRouter = createTRPCRouter({
 			});
 		}
 
+		// Backfill email from Clerk so users don't have to re-type it during
+		// onboarding. Only hit Clerk when our row has no email (new users, or
+		// legacy rows predating this), keeping the common path free of an HTTP
+		// round-trip. Non-fatal: if Clerk is unreachable, onboarding can still
+		// collect the email manually.
+		const resolvedUser = user as NonNullable<typeof user>;
+		if (!resolvedUser.email?.trim()) {
+			try {
+				const clerk = await clerkClient();
+				const clerkUser = await clerk.users.getUser(ctx.auth.userId);
+				const primaryEmail =
+					clerkUser.emailAddresses.find(
+						(e) => e.id === clerkUser.primaryEmailAddressId,
+					)?.emailAddress ??
+					clerkUser.emailAddresses[0]?.emailAddress ??
+					null;
+				if (primaryEmail) {
+					user = await ctx.db.user.update({
+						where: { userId: resolvedUser.userId },
+						data: { email: primaryEmail },
+						include: {
+							studentProfile: true,
+							coachProfile: true,
+							club: true,
+						},
+					});
+				}
+			} catch (error) {
+				console.error("Failed to backfill email from Clerk:", error);
+			}
+		}
+
 		return formatUserForFrontend(user as NonNullable<typeof user>);
 	}),
 
 	// Update basic user profile.
 	// NOTE: Does NOT update clubShortName. Club changes must go through
 	// `joinClub` or `switchClub` to keep `activeFacilityId` in sync.
-	updateProfile: protectedProcedure
+	updateProfile: memberProcedure
 		.input(updateProfileSchema)
 		.mutation(async ({ ctx, input }) => {
 			// Gender is set-once (B1): only persist it if the user hasn't set it yet.
 			// Once set, the UI locks it and we ignore any incoming change here.
 			// Admins can still correct it directly in the DB if ever needed.
-			const existing = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				select: { gender: true },
-			});
+			const existing = ctx.user;
 
 			const dataToUpdate = {
 				firstName: input.firstName,
@@ -449,7 +470,7 @@ export const userRouter = createTRPCRouter({
 				email: input.email,
 				profileImage: input.profileImage,
 				timeZone: input.timeZone,
-				...(existing?.gender == null && input.gender
+				...(existing.gender == null && input.gender
 					? { gender: input.gender }
 					: {}),
 			};
@@ -470,7 +491,7 @@ export const userRouter = createTRPCRouter({
 	// Returns a list of clubs for selector UIs.
 	// scope="all"         → all clubs in the system (admin-only).
 	// scope="memberships" → only the clubs the calling user has joined (any role, no admin gate).
-	getAvailableClubs: protectedProcedure
+	getAvailableClubs: memberProcedure
 		.input(
 			z
 				.object({
@@ -479,7 +500,7 @@ export const userRouter = createTRPCRouter({
 				.optional(),
 		)
 		.query(async ({ ctx, input }) => {
-			const user = await getCurrentUser(ctx);
+			const user = ctx.user;
 			const scope = input?.scope ?? "all";
 
 			if (scope === "all" && !isPlatformAdmin(user)) {
@@ -533,124 +554,17 @@ export const userRouter = createTRPCRouter({
 				.sort((a, b) => a.clubName.localeCompare(b.clubName));
 		}),
 
-	// Switch user type — restricted to roles valid in UserClub (excludes PLATFORM_ADMIN)
-	switchUserType: protectedProcedure
-		.input(switchUserTypeSchema)
-		.mutation(async ({ ctx, input }) => {
-			const currentUser = await getCurrentUser(ctx);
-
-			if (!currentUser.activeFacilityId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "No active facility set. Switch to a facility first.",
-				});
-			}
-
-			// Only allow switching to a role the user actually holds at their active facility.
-			// Note: UserClub has @@unique([userId, facilityId]), so a user can only hold one
-			// role per facility — meaning this check will only pass for their exact assigned role.
-			// If multi-role support per facility is needed later, this constraint must be revisited.
-			const membership = await ctx.db.userClub.findUnique({
-				where: {
-					userId_facilityId: {
-						userId: currentUser.userId,
-						facilityId: currentUser.activeFacilityId,
-					},
-				},
-				select: { role: true },
-			});
-
-			if (!membership || membership.role !== input.userType) {
-				throw new TRPCError({
-					code: "FORBIDDEN",
-					message: "You do not have this role at your active facility.",
-				});
-			}
-
-			const user = await ctx.db.user.update({
-				where: { clerkUserId: ctx.auth.userId },
-				data: { userType: input.userType },
-				include: {
-					studentProfile: true,
-					coachProfile: true,
-				},
-			});
-
-			// Create the appropriate profile(s) if they don't exist
-			if (input.userType === UserType.CLUB_ADMIN) {
-				// CLUB_ADMIN gets both profiles
-				if (!user.studentProfile) {
-					await ctx.db.studentProfile.create({
-						data: {
-							userId: user.userId,
-							skillLevel: "Intermediate",
-							goals: "Improve overall badminton skills and techniques",
-							bio: "Admin user with access to all platform features",
-						},
-					});
-				}
-				if (!user.coachProfile) {
-					await ctx.db.coachProfile.create({
-						data: {
-							userId: user.userId,
-							displayUsername: await generateUniqueUsername(user, ctx.db),
-							rate: 50,
-							bio: "Admin user with coaching capabilities",
-							experience: "Platform administrator with coaching access",
-							specialties: ["Administration", "Platform Management"],
-							teachingStyles: ["Flexible", "Adaptive"],
-						},
-					});
-				}
-			} else if (input.userType === UserType.STUDENT && !user.studentProfile) {
-				await ctx.db.studentProfile.create({
-					data: {
-						userId: user.userId,
-						skillLevel: "Beginner",
-						goals: "Learn and improve badminton skills",
-						bio: "New badminton student eager to learn",
-					},
-				});
-			} else if (input.userType === UserType.COACH && !user.coachProfile) {
-				await ctx.db.coachProfile.create({
-					data: {
-						userId: user.userId,
-						displayUsername: await generateUniqueUsername(user, ctx.db),
-						rate: 40,
-						bio: "Experienced badminton coach",
-						experience: "Several years of badminton coaching experience",
-						specialties: ["Fundamentals", "Technique"],
-						teachingStyles: ["Patient", "Structured"],
-					},
-				});
-			}
-
-			return ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-				include: {
-					studentProfile: true,
-					coachProfile: true,
-				},
-			});
-		}),
-
 	// Update student profile — SELF-SERVE. Updates the authenticated user's own
 	// StudentProfile (skillLevel, goals, bio, displayUsername, avatar bytes).
 	// NOT to be confused with `updateStudentProfileData` below, which is the
 	// staff-facing endpoint for the admin student detail page and writes the
 	// `profileData` JSON blob (phone/DOB/medical/allergies/notes). Split because
-	// this one is `protectedProcedure` (auth = target), whereas the other is
+	// this one is `memberProcedure` (auth = target), whereas the other is
 	// `facilityProcedure` (staff acting on a student in their club).
-	updateStudentProfile: protectedProcedure
+	updateStudentProfile: memberProcedure
 		.input(updateStudentProfileSchema)
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-			});
-
-			if (!user) {
-				throw new Error("User not found");
-			}
+			const user = ctx.user;
 
 			// Prepare data for saving using helper function
 			const dataToSave = prepareProfileData(input);
@@ -698,16 +612,10 @@ export const userRouter = createTRPCRouter({
 		}),
 
 	// Update coach profile
-	updateCoachProfile: protectedProcedure
+	updateCoachProfile: memberProcedure
 		.input(updateCoachProfileSchema)
 		.mutation(async ({ ctx, input }) => {
-			const user = await ctx.db.user.findUnique({
-				where: { clerkUserId: ctx.auth.userId },
-			});
-
-			if (!user) {
-				throw new Error("User not found");
-			}
+			const user = ctx.user;
 
 			// Prepare data for saving using helper function
 			const dataToSave = prepareProfileData(input);
@@ -768,9 +676,9 @@ export const userRouter = createTRPCRouter({
 		}),
 
 	// Get coach dashboard metrics
-	getCoachDashboardMetrics: protectedProcedure.query(async ({ ctx }) => {
+	getCoachDashboardMetrics: memberProcedure.query(async ({ ctx }) => {
 		// Get the current user
-		const user = await getCurrentUser(ctx);
+		const user = ctx.user;
 
 		// Check if user has coaching privileges (COACH or ADMIN only)
 		if (user.userType !== UserType.COACH && !isAnyAdmin(user)) {
@@ -835,7 +743,7 @@ export const userRouter = createTRPCRouter({
 	// Switch the current user's active club. Validates the user has a UserClub row for the
 	// target club, then updates User.clubShortName + User.userType in-place so all existing
 	// authorization logic continues to work without any changes.
-	switchClub: protectedProcedure
+	switchClub: memberProcedure
 		.input(
 			z.object({
 				clubShortName: z
@@ -846,7 +754,7 @@ export const userRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const user = await getCurrentUser(ctx);
+			const user = ctx.user;
 			const sanitized = input.clubShortName.trim().toLowerCase();
 
 			if (sanitized === user.clubShortName) {
@@ -912,10 +820,10 @@ export const userRouter = createTRPCRouter({
 
 	// Switch the user's active facility. Looks up the per-facility UserClub row to get
 	// the user's role at that facility, then updates User.activeFacilityId, clubShortName, and userType.
-	switchFacility: protectedProcedure
+	switchFacility: memberProcedure
 		.input(z.object({ facilityId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
-			const user = await getCurrentUser(ctx);
+			const user = ctx.user;
 
 			if (input.facilityId === user.activeFacilityId) {
 				return {
@@ -1065,7 +973,7 @@ export const userRouter = createTRPCRouter({
 	// Create a UserClub membership for the calling user at a SINGLE facility, then
 	// (for first-time joiners only) make it their active club + facility.
 	// Idempotent — re-joining a facility you already belong to is a no-op on the row.
-	joinClub: protectedProcedure
+	joinClub: memberProcedure
 		.input(
 			z.object({
 				clubShortName: z
@@ -1079,7 +987,7 @@ export const userRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const user = await getCurrentUser(ctx);
+			const user = ctx.user;
 			const sanitized = input.clubShortName.trim().toLowerCase();
 
 			// Verify club exists
@@ -1176,8 +1084,8 @@ export const userRouter = createTRPCRouter({
 
 	// Returns all clubs the current user is a member of (deduplicated from per-facility rows).
 	// Used by the navbar club switcher.
-	getClubMemberships: protectedProcedure.query(async ({ ctx }) => {
-		const user = await getCurrentUser(ctx);
+	getClubMemberships: memberProcedure.query(async ({ ctx }) => {
+		const user = ctx.user;
 
 		const memberships = await ctx.db.userClub.findMany({
 			where: { userId: user.userId },
@@ -2090,8 +1998,8 @@ export const userRouter = createTRPCRouter({
 
 	// Returns all facility memberships for the user's current club.
 	// Used by the calendar facility switcher dropdown.
-	getFacilityMemberships: protectedProcedure.query(async ({ ctx }) => {
-		const user = await getCurrentUser(ctx);
+	getFacilityMemberships: memberProcedure.query(async ({ ctx }) => {
+		const user = ctx.user;
 
 		const memberships = await ctx.db.userClub.findMany({
 			where: {
