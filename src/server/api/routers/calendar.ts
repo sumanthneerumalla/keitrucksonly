@@ -2518,7 +2518,18 @@ export const calendarRouter = createTRPCRouter({
 	// registration state, so the dashboard can render registration-aware badges
 	// (reusing CalendarEventBadge) that link to the event page.
 	getMemberTodayEvents: protectedProcedure
-		.input(z.object({ date: z.date().optional() }).optional())
+		.input(
+			z
+				.object({
+					date: z.date().optional(),
+					// Home events period filter (Today/Tomorrow/This Week/This Month/
+					// Custom): an explicit instant range computed client-side on the
+					// member's local day boundaries. Takes precedence over `date`.
+					rangeStart: z.date().optional(),
+					rangeEnd: z.date().optional(),
+				})
+				.optional(),
+		)
 		.query(async ({ ctx, input }) => {
 			const user = await getCurrentUser(ctx);
 			const facilityId = user.activeFacilityId;
@@ -2540,10 +2551,27 @@ export const calendarRouter = createTRPCRouter({
 
 			// "Today" is the member's local day (their timezone), so the dashboard
 			// matches what they'd consider today regardless of facility/server tz.
-			const { startOfDay, endOfDay } = getDayRangeInZone(
-				user.timeZone,
-				input?.date,
-			);
+			// An explicit rangeStart/rangeEnd (period filter) overrides the single
+			// day; capped at 62 days to bound rrule expansion cost.
+			const MAX_RANGE_MS = 62 * 24 * 60 * 60 * 1000;
+			let startOfDay: Date;
+			let endOfDay: Date;
+			if (input?.rangeStart && input?.rangeEnd) {
+				const spanMs = input.rangeEnd.getTime() - input.rangeStart.getTime();
+				if (spanMs <= 0 || spanMs > MAX_RANGE_MS) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Invalid date range (must be 1–62 days)",
+					});
+				}
+				startOfDay = input.rangeStart;
+				endOfDay = input.rangeEnd;
+			} else {
+				({ startOfDay, endOfDay } = getDayRangeInZone(
+					user.timeZone,
+					input?.date,
+				));
+			}
 
 			const candidates = await ctx.db.calendarEvent.findMany({
 				where: {
