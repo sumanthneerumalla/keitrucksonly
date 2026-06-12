@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -162,7 +163,6 @@ export default function SellMembershipModal({
 
 	// --- Member picker (only when not launched from a profile) ---
 	const [memberQuery, setMemberQuery] = useState("");
-	const [debouncedMemberQuery, setDebouncedMemberQuery] = useState("");
 	const [selectedMember, setSelectedMember] = useState<SearchUser | null>(null);
 	const [showMemberDropdown, setShowMemberDropdown] = useState(true);
 	const memberWrapperRef = useRef<HTMLDivElement>(null);
@@ -175,7 +175,6 @@ export default function SellMembershipModal({
 
 	// --- Bill-to / payer typeahead (reused from SellPackageModal) ---
 	const [billToQuery, setBillToQuery] = useState("");
-	const [debouncedBillToQuery, setDebouncedBillToQuery] = useState("");
 	const [billToUser, setBillToUser] = useState<SearchUser | null>(null);
 	const [showBillToDropdown, setShowBillToDropdown] = useState(true);
 	const billToWrapperRef = useRef<HTMLDivElement>(null);
@@ -191,14 +190,8 @@ export default function SellMembershipModal({
 			: "this member";
 
 	// Debounce both typeaheads (200ms) — matches SellPackageModal.
-	useEffect(() => {
-		const t = setTimeout(() => setDebouncedMemberQuery(memberQuery), 200);
-		return () => clearTimeout(t);
-	}, [memberQuery]);
-	useEffect(() => {
-		const t = setTimeout(() => setDebouncedBillToQuery(billToQuery), 200);
-		return () => clearTimeout(t);
-	}, [billToQuery]);
+	const debouncedMemberQuery = useDebouncedValue(memberQuery, 200);
+	const debouncedBillToQuery = useDebouncedValue(billToQuery, 200);
 
 	// Outside-click dismissal for both dropdowns (mirrors SellPackageModal Fix E).
 	useEffect(() => {

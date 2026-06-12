@@ -1,7 +1,6 @@
 "use client";
 
 import {
-	Check,
 	LogOut,
 	Trophy,
 	Unlock,
@@ -10,15 +9,11 @@ import {
 	Volume2,
 	X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import { Button } from "~/app/_components/shared/Button";
-import { Input } from "~/app/_components/shared/Input";
+import { MemberSearchCombobox } from "~/app/_components/shared/MemberSearchCombobox";
 import { useToast } from "~/app/_components/shared/Toast";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "~/app/_components/shared/ui/popover";
 import { api } from "~/trpc/react";
 
 /**
@@ -127,7 +122,11 @@ export function SwapPlayer({
 	);
 }
 
-/** Single-select club member typeahead in a popover. */
+/** Single-select club member typeahead in a popover. Thin wrapper over the
+ * shared MemberSearchCombobox, bound to the member-facing
+ * `dropIn.searchPartyMembers` API (club-wide; the target's check-in is
+ * created on add). Used by player flows (YourPartyCard) and staff flows
+ * (SwapPlayer). */
 export function MemberSearchPopover({
 	children,
 	sessionId,
@@ -139,60 +138,23 @@ export function MemberSearchPopover({
 }) {
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [debounced, setDebounced] = useState("");
-	useEffect(() => {
-		const t = setTimeout(() => setDebounced(query.trim()), 300);
-		return () => clearTimeout(t);
-	}, [query]);
-	// `searchPartyMembers` is protectedProcedure and club-wide — any club
-	// member can be found and added (their check-in is created on add). Works
-	// for both player flows (YourPartyCard) and staff flows (SwapPlayer).
+	const debounced = useDebouncedValue(query.trim(), 300);
 	const search = api.dropIn.searchPartyMembers.useQuery(
 		{ sessionId, query: debounced },
 		{ enabled: open && debounced.length > 0 },
 	);
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>{children}</PopoverTrigger>
-			<PopoverContent className="w-64 p-2" align="start">
-				<Input
-					placeholder="Search members…"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					className="h-8"
-				/>
-				<div className="mt-2 max-h-48 space-y-0.5 overflow-auto">
-					{debounced.length === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Type a name to search.
-						</p>
-					)}
-					{search.data?.map((m) => {
-						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
-						return (
-							<button
-								key={m.userId}
-								type="button"
-								onClick={() => {
-									onPick(m.userId);
-									setOpen(false);
-									setQuery("");
-								}}
-								className="block w-full rounded px-2 py-1 text-left text-[var(--foreground)] text-sm hover:bg-[var(--muted)]"
-							>
-								{name}
-							</button>
-						);
-					})}
-					{debounced.length > 0 && (search.data?.length ?? 0) === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							No matches.
-						</p>
-					)}
-				</div>
-			</PopoverContent>
-		</Popover>
+		<MemberSearchCombobox
+			trigger={children}
+			open={open}
+			onOpenChange={setOpen}
+			query={query}
+			onQueryChange={setQuery}
+			results={search.data}
+			isFetching={search.isFetching}
+			mode="single"
+			onPick={(m) => onPick(m.userId)}
+		/>
 	);
 }
 
@@ -286,13 +248,8 @@ export function StaffAddToQueue({
 	const { toast } = useToast();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [debounced, setDebounced] = useState("");
 	const [selected, setSelected] = useState<Set<string>>(new Set());
-
-	useEffect(() => {
-		const t = setTimeout(() => setDebounced(query.trim()), 300);
-		return () => clearTimeout(t);
-	}, [query]);
+	const debounced = useDebouncedValue(query.trim(), 300);
 
 	const search = api.user.searchMembers.useQuery(
 		{ query: debounced },
@@ -320,79 +277,43 @@ export function StaffAddToQueue({
 	const ids = [...selected];
 
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
+		<MemberSearchCombobox
+			trigger={
 				<Button variant="outline" size="sm">
 					<UserPlus size={14} /> Add to queue
 				</Button>
-			</PopoverTrigger>
-			<PopoverContent className="w-72 p-2" align="end">
-				<Input
-					placeholder="Search members…"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					className="h-8"
-				/>
-				<div className="mt-2 max-h-48 space-y-0.5 overflow-auto">
-					{debounced.length === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Type a name to search.
-						</p>
-					)}
-					{debounced.length > 0 && search.isFetching && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Searching…
-						</p>
-					)}
-					{search.data?.members.map((m) => {
-						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() ||
-							m.email ||
-							"Member";
-						const isSel = selected.has(m.userId);
-						return (
-							<button
-								key={m.userId}
-								type="button"
-								onClick={() => toggle(m.userId)}
-								className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${
-									isSel
-										? "bg-[var(--primary)]/10 text-[var(--foreground)]"
-										: "text-[var(--foreground)] hover:bg-[var(--muted)]"
-								}`}
-							>
-								<span>{name}</span>
-								{isSel && <Check size={14} className="text-[var(--primary)]" />}
-							</button>
-						);
-					})}
-					{debounced.length > 0 &&
-						!search.isFetching &&
-						(search.data?.members.length ?? 0) === 0 && (
-							<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-								No matches.
-							</p>
-						)}
-				</div>
-				<Button
-					size="sm"
-					className="mt-2 w-full"
-					disabled={ids.length === 0 || addToQueue.isPending}
-					onClick={() => addToQueue.mutate({ sessionId, userIds: ids })}
-				>
-					{addToQueue.isPending
-						? "Adding…"
-						: ids.length > 0
-							? `Add ${ids.length} to queue`
-							: "Add to queue"}
-				</Button>
-				<p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-					{format === "SINGLES"
-						? "Add players individually."
-						: "Pick 2 (or 4) — they queue together for doubles pairing."}
-				</p>
-			</PopoverContent>
-		</Popover>
+			}
+			open={open}
+			onOpenChange={setOpen}
+			query={query}
+			onQueryChange={setQuery}
+			results={search.data?.members}
+			isFetching={search.isFetching}
+			mode="multi"
+			selected={selected}
+			onToggle={(m) => toggle(m.userId)}
+			footer={
+				<>
+					<Button
+						size="sm"
+						className="mt-2 w-full"
+						disabled={ids.length === 0 || addToQueue.isPending}
+						onClick={() => addToQueue.mutate({ sessionId, userIds: ids })}
+					>
+						{addToQueue.isPending
+							? "Adding…"
+							: ids.length > 0
+								? `Add ${ids.length} to queue`
+								: "Add to queue"}
+					</Button>
+					<p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+						{format === "SINGLES"
+							? "Add players individually."
+							: "Pick 2 (or 4) — they queue together for doubles pairing."}
+					</p>
+				</>
+			}
+		/>
 	);
 }
 
@@ -428,16 +349,11 @@ export function JoinPartyPopover({
 	const { toast } = useToast();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [debounced, setDebounced] = useState("");
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [openToFill, setOpenToFill] = useState(false);
+	const debounced = useDebouncedValue(query.trim(), 300);
 
-	useEffect(() => {
-		const t = setTimeout(() => setDebounced(query.trim()), 300);
-		return () => clearTimeout(t);
-	}, [query]);
-
-	// Player-facing search, scoped to this session's checked-in roster.
+	// Player-facing search (club-wide).
 	const search = api.dropIn.searchPartyMembers.useQuery(
 		{ sessionId, query: debounced },
 		{ enabled: open && debounced.length > 0 },
@@ -510,87 +426,55 @@ export function JoinPartyPopover({
 	};
 
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
+		<MemberSearchCombobox
+			trigger={
 				<Button variant="outline" size="sm" disabled={disabled}>
 					<UserPlus size={14} /> Join queue as a group
 				</Button>
-			</PopoverTrigger>
-			<PopoverContent className="w-72 p-2" align="end">
-				<p className="px-1 pb-1 text-[var(--muted-foreground)] text-xs">
-					You + up to {maxAddable} other player
-					{maxAddable === 1 ? "" : "s"} — queues together.
-				</p>
-				<Input
-					placeholder="Search members…"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					className="h-8"
-				/>
-				<div className="mt-2 max-h-44 space-y-0.5 overflow-auto">
-					{debounced.length === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Type a name to add.
-						</p>
-					)}
-					{debounced.length > 0 && search.isFetching && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Searching…
-						</p>
-					)}
-					{search.data?.map((m) => {
-						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
-						const isSel = selected.has(m.userId);
-						return (
-							<button
-								key={m.userId}
-								type="button"
-								onClick={() => toggle(m.userId)}
-								className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${
-									isSel
-										? "bg-[var(--primary)]/10 text-[var(--foreground)]"
-										: "text-[var(--foreground)] hover:bg-[var(--muted)]"
-								}`}
-							>
-								<span>{name}</span>
-								{isSel && <Check size={14} className="text-[var(--primary)]" />}
-							</button>
-						);
-					})}
-					{debounced.length > 0 &&
-						!search.isFetching &&
-						(search.data?.length ?? 0) === 0 && (
-							<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-								No matches.
-							</p>
-						)}
-				</div>
-				<label className="mt-2 flex items-center gap-2 text-[var(--foreground)] text-xs">
-					<input
-						type="checkbox"
-						checked={openToFill}
-						onChange={(e) => setOpenToFill(e.target.checked)}
-						disabled={submitting}
-					/>
-					<span>
-						Open to filling remaining seats with others (e.g. when 3 of 4)
-					</span>
-				</label>
-				<Button
-					size="sm"
-					className="mt-2 w-full"
-					disabled={ids.length === 0 || submitting}
-					onClick={submit}
-				>
-					{submitting
-						? "Creating…"
-						: ids.length > 0
-							? `Create party (you + ${ids.length})`
-							: "Pick at least one"}
-				</Button>
-			</PopoverContent>
-		</Popover>
+			}
+			open={open}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) reset();
+			}}
+			query={query}
+			onQueryChange={setQuery}
+			results={search.data}
+			isFetching={search.isFetching}
+			emptyHint={`You + up to ${maxAddable} other player${
+				maxAddable === 1 ? "" : "s"
+			} — type a name to add.`}
+			mode="multi"
+			selected={selected}
+			onToggle={(m) => toggle(m.userId)}
+			footer={
+				<>
+					<label className="mt-2 flex items-center gap-2 text-[var(--foreground)] text-xs">
+						<input
+							type="checkbox"
+							checked={openToFill}
+							onChange={(e) => setOpenToFill(e.target.checked)}
+							disabled={submitting}
+						/>
+						<span>
+							Open to filling remaining seats with others (e.g. when 3 of 4)
+						</span>
+					</label>
+					<Button
+						size="sm"
+						className="mt-2 w-full"
+						disabled={ids.length === 0 || submitting}
+						onClick={submit}
+					>
+						{submitting
+							? "Creating…"
+							: ids.length > 0
+								? `Create party (you + ${ids.length})`
+								: "Pick at least one"}
+					</Button>
+				</>
+			}
+		/>
 	);
 }
 
