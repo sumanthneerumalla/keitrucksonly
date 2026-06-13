@@ -9,6 +9,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { RRule } from "rrule";
 import { z } from "zod";
+import { operatingHoursSchema } from "~/lib/clubProfile";
 import {
 	createTRPCRouter,
 	facilityProcedure, // user must be FACILITY or ADMIN
@@ -16,6 +17,7 @@ import {
 	publicProcedure,
 	staffProcedure, // user must be FACILITY, ADMIN, or COACH
 } from "~/server/api/trpc";
+import { revalidateClub } from "~/server/revalidateClub";
 import { validateDateRange } from "~/server/utils/dateUtils";
 import {
 	formatEventTimeInZone,
@@ -134,6 +136,10 @@ const updateFacilitySchema = z.object({
 	// null here would let staff blank out the timezone, which would break date
 	// math elsewhere (consumeCredit, dashboard ranges). Pass a value or omit.
 	timezone: z.string().max(100).trim().optional(),
+	// Phase 16 Step 2 (D4): facility-level hours + public blurb for the club
+	// landing page. null clears (→ landing hides the section).
+	operatingHours: operatingHoursSchema.nullable().optional(),
+	description: z.string().trim().max(2000).nullable().optional(),
 });
 
 const deleteFacilitySchema = z.object({
@@ -548,6 +554,8 @@ export const calendarRouter = createTRPCRouter({
 			phone: f.phone,
 			email: f.email,
 			timezone: f.timezone,
+			operatingHours: f.operatingHours,
+			description: f.description,
 			isActive: f.isActive,
 			position: f.position,
 			resourceCount: f._count.resources,
@@ -574,10 +582,19 @@ export const calendarRouter = createTRPCRouter({
 			requireSameClub(ctx.user, existing.clubShortName);
 
 			try {
+				const { operatingHours, ...rest } = data;
 				const updated = await ctx.db.clubFacility.update({
 					where: { facilityId },
-					data,
+					data: {
+						...rest,
+						// Prisma Json null semantics: DbNull clears the column.
+						...(operatingHours !== undefined
+							? { operatingHours: operatingHours ?? { set: null } }
+							: {}),
+					},
 				});
+				// Hours/blurb/address show on the public club landing page.
+				revalidateClub(existing.clubShortName);
 				return updated;
 			} catch (error) {
 				if (error instanceof Error && error.message.includes("unique")) {
@@ -2260,7 +2277,12 @@ export const calendarRouter = createTRPCRouter({
 						(d): d is Date => d !== null,
 					);
 					if (candidates.length === 0) continue;
-					items.push(shape(e, candidates.reduce((a, d) => (d < a ? d : a))));
+					items.push(
+						shape(
+							e,
+							candidates.reduce((a, d) => (d < a ? d : a)),
+						),
+					);
 				} else {
 					const item = shape(e, e.start);
 					// Keep events that haven't ended yet (in-progress or future).
@@ -2877,7 +2899,12 @@ export const calendarRouter = createTRPCRouter({
 						(d): d is Date => d !== null,
 					);
 					if (candidates.length === 0) continue;
-					items.push(shape(r, candidates.reduce((a, d) => (d < a ? d : a))));
+					items.push(
+						shape(
+							r,
+							candidates.reduce((a, d) => (d < a ? d : a)),
+						),
+					);
 				} else {
 					const occStart = r.instanceDate ?? r.event.start;
 					const item = shape(r, occStart);
