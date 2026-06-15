@@ -1,4 +1,4 @@
-import { AnnouncementStatus, ArticleStatus } from "@prisma/client";
+import { AnnouncementStatus, ArticleStatus, EventType } from "@prisma/client";
 import type { MetadataRoute } from "next";
 import { getClubBaseUrl, getClubPublicUrl } from "~/lib/clubPublicUrl";
 import { SITE_URL } from "~/lib/marketing";
@@ -186,6 +186,30 @@ async function fetchClubAnnouncementEntries(): Promise<MetadataRoute.Sitemap> {
 	return entries;
 }
 
+// One sitemap entry per PUBLIC, non-deleted, non-BLOCK event whose `end` is
+// still in the future. Capped at 500 (ordered by start asc) so the sitemap
+// stays bounded even for high-volume clubs.
+async function fetchEventEntries(): Promise<MetadataRoute.Sitemap> {
+	const now = new Date();
+	const events = await db.calendarEvent.findMany({
+		where: {
+			isPublic: true,
+			isDeleted: false,
+			eventType: { not: EventType.BLOCK },
+			end: { gt: now },
+		},
+		select: { eventId: true, updatedAt: true },
+		orderBy: { start: "asc" },
+		take: 500,
+	});
+	return events.map((event) => ({
+		url: `${SITE_URL}/events/${event.eventId}`,
+		lastModified: event.updatedAt,
+		changeFrequency: "daily",
+		priority: 0.6,
+	}));
+}
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 	try {
 		// F27: each fetch is independently guarded so one transient failure
@@ -198,6 +222,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 			tagEntries,
 			clubEntries,
 			announcementEntries,
+			eventEntries,
 		] = await Promise.all([
 			(async (): Promise<MetadataRoute.Sitemap> => {
 				try {
@@ -246,6 +271,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 					return [];
 				}
 			})(),
+			(async (): Promise<MetadataRoute.Sitemap> => {
+				try {
+					return await fetchEventEntries();
+				} catch {
+					return [];
+				}
+			})(),
 		]);
 
 		return [
@@ -255,6 +287,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 			...tagEntries,
 			...clubEntries,
 			...announcementEntries,
+			...eventEntries,
 		];
 	} catch {
 		// Build-safe: if Prisma is unreachable during a build, ship the static

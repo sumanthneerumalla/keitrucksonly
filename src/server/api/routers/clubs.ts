@@ -1,3 +1,5 @@
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
 
 /**
@@ -15,4 +17,53 @@ export const clubsRouter = createTRPCRouter({
 			orderBy: { clubName: "asc" },
 		});
 	}),
+
+	/**
+	 * Phase 16 — public branding for club landing-page chrome (navbar + footer).
+	 * Public because logged-out visitors render the club-branded chrome. Returns
+	 * only non-sensitive branding + the club's ACTIVE facilities' NAP/hours
+	 * (local-SEO signal). Throws NOT_FOUND when the club does not exist.
+	 */
+	getPublicBranding: publicProcedure
+		.input(z.object({ clubShortName: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const club = await ctx.db.club.findUnique({
+				where: { clubShortName: input.clubShortName },
+				select: {
+					clubShortName: true,
+					clubName: true,
+					tagline: true,
+					description: true,
+					websiteUrl: true,
+					socialLinks: true,
+					logoImageId: true,
+					canonicalDomain: true,
+					facilities: {
+						where: { isActive: true },
+						orderBy: { position: "asc" },
+						select: {
+							facilityId: true,
+							name: true,
+							streetAddress: true,
+							city: true,
+							state: true,
+							zipCode: true,
+							phone: true,
+							email: true,
+							operatingHours: true,
+						},
+					},
+				},
+			});
+
+			if (!club) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: `Club "${input.clubShortName}" not found`,
+				});
+			}
+
+			const { facilities, ...clubFields } = club;
+			return { club: clubFields, facilities };
+		}),
 });

@@ -11,6 +11,7 @@ import {
 	isAllowedContentImageMimeType,
 } from "~/lib/article";
 import { SOCIAL_PLATFORMS, type SocialLinks } from "~/lib/clubProfile";
+import { downscaleImage } from "~/lib/downscaleImage";
 import { api } from "~/trpc/react";
 
 type SocialKey = keyof SocialLinks;
@@ -72,6 +73,7 @@ export default function ClubSettingsClient() {
 
 	async function uploadImage(
 		file: File,
+		maxDimension: number,
 		setUploading: (v: boolean) => void,
 		onDone: (id: string) => void,
 	) {
@@ -82,18 +84,13 @@ export default function ClubSettingsClient() {
 			);
 			return;
 		}
-		const mimeType = file.type;
 		setUploading(true);
 		setUploadError(null);
 		try {
-			const dataUrl = await new Promise<string>((resolve, reject) => {
-				const reader = new FileReader();
-				reader.onload = () => resolve(reader.result as string);
-				reader.onerror = () => reject(reader.error);
-				reader.readAsDataURL(file);
+			// Downscale + re-encode client-side so we never store a multi-MB image.
+			const { base64, mimeType } = await downscaleImage(file, {
+				maxDimension,
 			});
-			const commaIdx = dataUrl.indexOf(",");
-			const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
 
 			const result = await uploadImageMutation.mutateAsync({
 				base64,
@@ -114,14 +111,14 @@ export default function ClubSettingsClient() {
 		const file = e.target.files?.[0];
 		if (e.target) e.target.value = "";
 		if (!file) return;
-		void uploadImage(file, setLogoUploading, setLogoImageId);
+		void uploadImage(file, 512, setLogoUploading, setLogoImageId);
 	}
 
 	function handleHeroFile(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.target.files?.[0];
 		if (e.target) e.target.value = "";
 		if (!file) return;
-		void uploadImage(file, setHeroUploading, setHeroImageId);
+		void uploadImage(file, 1920, setHeroUploading, setHeroImageId);
 	}
 
 	function handleSave() {
@@ -200,7 +197,7 @@ export default function ClubSettingsClient() {
 										Replace
 										<input
 											type="file"
-											accept="image/*"
+											accept="image/png,image/webp,image/jpeg"
 											hidden
 											onChange={handleLogoFile}
 										/>
@@ -230,13 +227,16 @@ export default function ClubSettingsClient() {
 								)}
 								<input
 									type="file"
-									accept="image/*"
+									accept="image/png,image/webp,image/jpeg"
 									hidden
 									onChange={handleLogoFile}
 									disabled={logoUploading}
 								/>
 							</label>
 						)}
+						<p className="text-[var(--muted-foreground)] text-xs">
+							PNG with a transparent background recommended.
+						</p>
 					</div>
 
 					{/* Hero photo */}
@@ -256,7 +256,7 @@ export default function ClubSettingsClient() {
 										Replace
 										<input
 											type="file"
-											accept="image/*"
+											accept="image/png,image/webp,image/jpeg"
 											hidden
 											onChange={handleHeroFile}
 										/>
@@ -286,7 +286,7 @@ export default function ClubSettingsClient() {
 								)}
 								<input
 									type="file"
-									accept="image/*"
+									accept="image/png,image/webp,image/jpeg"
 									hidden
 									onChange={handleHeroFile}
 									disabled={heroUploading}

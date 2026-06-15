@@ -63,9 +63,13 @@ export default async function AppLayout({
 				 * provider — call sites should NOT mount their own. */}
 				<ToastProvider>
 					<main className="min-h-screen">
-						<AuthedLayout initialUser={initialUser}>{children}</AuthedLayout>
+						<AuthedLayout
+							initialUser={initialUser}
+							marketingFooter={<Footer deployStamp={<DeployStamp />} />}
+						>
+							{children}
+						</AuthedLayout>
 					</main>
-					<Footer deployStamp={<DeployStamp />} />
 				</ToastProvider>
 			</TRPCReactProvider>
 		</ClerkProvider>
