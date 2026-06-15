@@ -48,7 +48,7 @@ import type { RenderableInvoice } from "./types";
  * retroactively re-render all cached invoices on next read. The string is
  * free-form; any change to its value invalidates every cached row.
  */
-export const CURRENT_RENDERER_VERSION = "v1.2.0";
+export const CURRENT_RENDERER_VERSION = "v1.3.0";
 
 export type InvoicePdfResult = {
 	/** PDF bytes. Backed by a Node Buffer; safe to pass to NextResponse. */
@@ -155,7 +155,13 @@ export async function getOrRenderInvoicePdf(
 	// vs. the @react-pdf render cost, and this keeps `filename` strictly
 	// derived from CURRENT data (consumer-name edits show up in the filename
 	// of subsequent downloads).
-	const dto = await assembleRenderableInvoice(invoiceId);
+	// The PDF is a customer-facing document (members can download it), so
+	// assemble it with the customer audience — staff-only fields
+	// (revenueCategoryLabel, payment/refund/close attribution) are omitted at
+	// the source (phase9c §4.3).
+	const dto = await assembleRenderableInvoice(invoiceId, {
+		audience: "customer",
+	});
 	const filename = buildInvoiceFilename(dto);
 
 	const isFresh =

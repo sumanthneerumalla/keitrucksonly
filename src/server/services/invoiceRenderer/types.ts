@@ -40,6 +40,14 @@ export { KIND_LABELS, PAYMENT_METHOD_LABELS } from "~/lib/invoice/labels";
 // RenderableInvoice — the DTO.
 // ---------------------------------------------------------------------------
 
+/**
+ * A reference to a person, reusable across invoice surfaces + future reports.
+ * `userId` null = display-only (no link); set = a renderer MAY deep-link to
+ * /clients/{userId}. Staff-attribution refs (closedBy/receivedBy/refundedBy)
+ * are OMITTED (null) by the assembler for `audience: "customer"` (phase9c §4.3).
+ */
+export type RenderablePersonRef = { userId: string | null; fullName: string };
+
 export type RenderableInvoiceMeta = {
 	invoiceId: string;
 	invoiceNumber: string; // "INV-000003"
@@ -51,6 +59,8 @@ export type RenderableInvoiceMeta = {
 	issueDate: Date;
 	dueDate: Date | null;
 	closedAt: Date | null;
+	/** Staff who marked the invoice due ("closed"). Staff-only → null for customer audience. */
+	closedBy: RenderablePersonRef | null;
 	notes: string | null;
 };
 
@@ -111,6 +121,23 @@ export type RenderableInvoicePaymentRefund = {
 	/** Positive number; renderers should display it as negative. */
 	amountInCents: number;
 	reason: string | null;
+	/** Staff who issued the refund. Staff-only → null for customer audience. */
+	refundedBy: RenderablePersonRef | null;
+};
+
+/**
+ * A refund flattened to the invoice level for a dedicated Refunds section.
+ * Built FROM the nested payment refunds in one assembler pass (phase9c §4.3) —
+ * amounts are never omitted; only `refundedBy` attribution is omitted for
+ * customers.
+ */
+export type RenderableInvoiceRefund = {
+	refundId: string;
+	paymentId: string;
+	refundedAt: Date;
+	amountInCents: number;
+	reason: string | null;
+	refundedBy: RenderablePersonRef | null;
 };
 
 export type RenderableInvoicePayment = {
@@ -123,6 +150,8 @@ export type RenderableInvoicePayment = {
 	refundedTotalInCents: number;
 	netInCents: number;
 	refunds: RenderableInvoicePaymentRefund[];
+	/** Staff who recorded the payment. Staff-only → null for customer audience. */
+	receivedBy: RenderablePersonRef | null;
 };
 
 export type RenderableInvoiceFooter = {
@@ -148,5 +177,30 @@ export type RenderableInvoice = {
 	lines: RenderableInvoiceLine[];
 	totals: RenderableInvoiceTotals;
 	payments: RenderableInvoicePayment[];
+	/** Flattened refunds for a dedicated Refunds section (mirror of payments[].refunds). */
+	refunds: RenderableInvoiceRefund[];
 	footer: RenderableInvoiceFooter;
+};
+
+// ---------------------------------------------------------------------------
+// ViewerCapabilities + InvoiceView — the WEB-only wrapper (phase9c §4.2).
+//
+// The PDF consumes only `RenderableInvoice`. The web tRPC `getInvoice` returns
+// `InvoiceView`. Capabilities carry ONLY what's cheaply derivable from the
+// already-loaded invoice + viewer (no new queries). `canPayNow` is NOT here —
+// it needs the club's Stripe-Connect health, resolved as a page prop.
+// ---------------------------------------------------------------------------
+
+export type ViewerCapabilities = {
+	/** consumer/payer = false; facility-and-above / platform admin = true. */
+	isStaff: boolean;
+	/** Gates Void; club admin or platform admin in the invoice's club. */
+	isClubAdmin: boolean;
+	/** This invoice's overpayment credit was consumed elsewhere → refund blocked. */
+	hasConsumedCredit: boolean;
+};
+
+export type InvoiceView = {
+	invoice: RenderableInvoice;
+	viewer: ViewerCapabilities;
 };

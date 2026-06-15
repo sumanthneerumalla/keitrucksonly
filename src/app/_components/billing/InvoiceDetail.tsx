@@ -32,7 +32,7 @@ import { api } from "~/trpc/react";
  * rollups). ONE component backs every detail route:
  *   - staff:  /clients/[userId]/invoices/[invoiceId]  (drill-down from BillingPanel)
  *   - staff:  /admin/invoices/[invoiceId]
- *   - member: (future) — pass audience="member"
+ *   - member: /invoices/[invoiceId]  (audience="member")
  *
  * `audience` (not the route) decides the labelling + which controls show:
  * staff see revenue categories, who-received-payment, internal action buttons,

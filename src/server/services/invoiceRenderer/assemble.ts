@@ -28,10 +28,13 @@
  * the caching layer wraps it.
  */
 
+import { type User, UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { formatPersonName } from "~/lib/invoice/format";
 import { invoiceStatusDisplay } from "~/lib/invoiceStatus";
+import { isFacilityOrAbove, isPlatformAdmin } from "~/lib/utils";
 import { db } from "~/server/db";
+import { isSameClub } from "~/server/utils/utils";
 import {
 	KIND_LABELS,
 	PAYMENT_METHOD_LABELS,
@@ -39,6 +42,8 @@ import {
 	type RenderableInvoiceFrom,
 	type RenderableInvoiceLine,
 	type RenderableInvoiceParty,
+	type RenderablePersonRef,
+	type ViewerCapabilities,
 } from "./types";
 
 // Phone is per-club on MemberClubProfile (per-club-profiles.md). Prisma can't
@@ -81,7 +86,23 @@ const CONTROL_CHARS_RE = new RegExp(
  */
 export async function assembleRenderableInvoice(
 	invoiceId: string,
+	opts: { audience?: "staff" | "customer" } = {},
 ): Promise<RenderableInvoice> {
+	// Customer audience (PDF + member web view) OMITS staff-only fields at the
+	// SOURCE so customer surfaces structurally can't leak them (phase9c §4.3).
+	const isCustomer = opts.audience === "customer";
+	/** Staff-attribution ref → null for customer audience (or when absent). */
+	const staffRef = (
+		u: {
+			userId: string;
+			firstName: string | null;
+			lastName: string | null;
+		} | null,
+	): RenderablePersonRef | null =>
+		isCustomer || u == null
+			? null
+			: { userId: u.userId, fullName: formatPersonName(u) };
+
 	const invoice = await db.invoice.findUnique({
 		where: { invoiceId },
 		include: {
@@ -119,6 +140,9 @@ export async function assembleRenderableInvoice(
 					},
 				},
 			},
+			closedByUser: {
+				select: { userId: true, firstName: true, lastName: true },
+			},
 			lineItems: {
 				orderBy: { sortOrder: "asc" },
 				include: {
@@ -134,8 +158,25 @@ export async function assembleRenderableInvoice(
 				// rows (mirrors billing.getInvoice).
 				orderBy: [{ receivedAt: "desc" }, { paymentId: "asc" }],
 				include: {
+					receivedByUser: {
+						select: { userId: true, firstName: true, lastName: true },
+					},
 					refunds: {
 						orderBy: [{ refundedAt: "desc" }, { refundId: "asc" }],
+						include: {
+							refundedByUser: {
+								select: { userId: true, firstName: true, lastName: true },
+							},
+						},
+					},
+				},
+			},
+			// Flattened invoice-level refunds for a dedicated Refunds section.
+			refunds: {
+				orderBy: [{ refundedAt: "desc" }, { refundId: "asc" }],
+				include: {
+					refundedByUser: {
+						select: { userId: true, firstName: true, lastName: true },
 					},
 				},
 			},
@@ -227,7 +268,9 @@ export async function assembleRenderableInvoice(
 			taxRateBps: li.taxRateBps,
 			taxAmountInCents: li.taxAmountInCents,
 			totalInCents: li.totalInCents,
-			revenueCategoryLabel: li.revenueCategory?.label ?? null,
+			revenueCategoryLabel: isCustomer
+				? null
+				: (li.revenueCategory?.label ?? null),
 			creditSource,
 		};
 	});
@@ -264,14 +307,28 @@ export async function assembleRenderableInvoice(
 			amountInCents: p.amountInCents,
 			refundedTotalInCents,
 			netInCents: p.amountInCents - refundedTotalInCents,
+			receivedBy: staffRef(p.receivedByUser),
 			refunds: p.refunds.map((r) => ({
 				refundId: r.refundId,
 				refundedAt: r.refundedAt,
 				amountInCents: r.amountInCents,
 				reason: r.reason,
+				refundedBy: staffRef(r.refundedByUser),
 			})),
 		};
 	});
+
+	// Flattened invoice-level refunds (mirror of payments[].refunds) for a
+	// dedicated Refunds section. Amounts always present; attribution omitted for
+	// customer audience via staffRef.
+	const refunds = invoice.refunds.map((r) => ({
+		refundId: r.refundId,
+		paymentId: r.paymentId,
+		refundedAt: r.refundedAt,
+		amountInCents: r.amountInCents,
+		reason: r.reason,
+		refundedBy: staffRef(r.refundedByUser),
+	}));
 
 	const dto: RenderableInvoice = {
 		meta: {
@@ -283,6 +340,7 @@ export async function assembleRenderableInvoice(
 			issueDate: invoice.issueDate,
 			dueDate: invoice.dueDate,
 			closedAt: invoice.closedAt,
+			closedBy: staffRef(invoice.closedByUser),
 			notes: invoice.notes,
 		},
 		from,
@@ -298,6 +356,7 @@ export async function assembleRenderableInvoice(
 			hasAnyTax,
 		},
 		payments,
+		refunds,
 		footer: { text: null },
 	};
 
@@ -308,4 +367,30 @@ export async function assembleRenderableInvoice(
 	// convention; this freeze catches only outright reassignments to the
 	// top-level keys (e.g. `dto.lines = []`).
 	return Object.freeze(dto);
+}
+
+/**
+ * Web-only viewer capabilities (phase9c §4.2). Cheaply derived from the
+ * already-loaded invoice + viewer — NO new queries. Mirrors the gating that
+ * `billing.getInvoice` computed inline (`viewerIsClubAdmin`) plus the D1
+ * refund guard (`hasConsumedCredit`). The PDF never needs this; only the web
+ * tRPC `getInvoice` returns it (as part of `InvoiceView`).
+ */
+export function computeViewerCapabilities(
+	viewer: User,
+	invoice: {
+		clubShortName: string;
+		creditConsumedInCents: number;
+		creditConsumedAt: Date | null;
+	},
+): ViewerCapabilities {
+	const sameClub = isSameClub(viewer, { clubShortName: invoice.clubShortName });
+	return {
+		isStaff: isPlatformAdmin(viewer) || (isFacilityOrAbove(viewer) && sameClub),
+		isClubAdmin:
+			(isPlatformAdmin(viewer) || viewer.userType === UserType.CLUB_ADMIN) &&
+			sameClub,
+		hasConsumedCredit:
+			invoice.creditConsumedInCents > 0 || invoice.creditConsumedAt !== null,
+	};
 }

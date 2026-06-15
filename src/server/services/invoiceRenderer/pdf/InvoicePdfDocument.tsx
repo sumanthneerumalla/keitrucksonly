@@ -198,11 +198,10 @@ function LineItemsTable({ dto }: { dto: RenderableInvoice }) {
 											: ""}
 									</Text>
 								)}
-								{line.revenueCategoryLabel != null && (
-									<Text style={[styles.descSubtle, { fontStyle: "italic" }]}>
-										{line.revenueCategoryLabel}
-									</Text>
-								)}
+								{/* revenueCategoryLabel is intentionally NOT rendered on the
+								    PDF: it's internal bookkeeping and this document is
+								    downloadable by members. It stays staff-only on the web
+								    invoice view. (Phase 9c §4.3) */}
 							</View>
 							<Text style={styles.colQty}>{line.quantity}</Text>
 							<Text style={[styles.colUnit, styles.mono]}>
