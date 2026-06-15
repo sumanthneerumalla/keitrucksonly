@@ -12,6 +12,13 @@ import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import {
+	formatInvoiceDate as formatDate,
+	formatInvoiceDateTime as formatDateTime,
+	formatPersonName,
+	signedCents,
+} from "~/lib/invoice/format";
+import { KIND_LABELS, PAYMENT_METHOD_LABELS } from "~/lib/invoice/labels";
+import {
 	type InvoiceAudience,
 	type InvoiceStatusTone,
 	invoiceStatusDisplay,
@@ -38,29 +45,6 @@ import { api } from "~/trpc/react";
  * one place (src/lib/invoiceStatus.ts); the word "closed" never reaches the UI.
  */
 
-// Line-item `kind` (InvoiceLineItemKind) → short badge label. Record<string>
-// (not the enum type) so an unmapped future value still renders via the
-// `?? kind` fallback rather than throwing.
-const KIND_LABELS: Record<string, string> = {
-	PACKAGE_SALE: "Package",
-	CREDIT: "Credit",
-	PRODUCT_SALE: "Product",
-	FEE: "Fee",
-	EVENT_REGISTRATION: "Event",
-	RENTAL: "Rental",
-	MEMBERSHIP_FEE: "Membership",
-};
-
-const PAYMENT_METHOD_LABELS: Record<string, string> = {
-	cash: "Cash",
-	check: "Check",
-	credit_card: "Credit card",
-	pos_transaction: "POS transaction",
-	stripe: "Stripe",
-	paysafe: "Paysafe",
-	other: "Other",
-};
-
 const TONE_PILL_STYLES: Record<InvoiceStatusTone, string> = {
 	success:
 		"bg-emerald-100 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-300",
@@ -72,37 +56,6 @@ const TONE_PILL_STYLES: Record<InvoiceStatusTone, string> = {
 // Statuses on which staff may still record a payment (overpaying a `paid`
 // invoice adds account credit — Version A). Mirrors BillingPanel.
 const PAYMENT_ELIGIBLE_STATUSES = new Set(["open", "partially_paid", "paid"]);
-
-function formatDate(date: Date | string): string {
-	return new Date(date).toLocaleDateString([], {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
-}
-
-function formatDateTime(date: Date | string): string {
-	return new Date(date).toLocaleString([], {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-		hour: "numeric",
-		minute: "2-digit",
-	});
-}
-
-function formatPersonName(p: {
-	firstName: string | null;
-	lastName: string | null;
-}): string {
-	const name = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
-	return name || "(no name)";
-}
-
-/** Render an amount that may be negative (credit) without a bare "-$". */
-function signedCents(cents: number): string {
-	return cents < 0 ? `−${formatCents(Math.abs(cents))}` : formatCents(cents);
-}
 
 interface InvoiceDetailProps {
 	invoiceId: string;

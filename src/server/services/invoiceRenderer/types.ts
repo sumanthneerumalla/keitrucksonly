@@ -29,37 +29,12 @@
 import type { InvoiceLineItemKind } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
-// Shared label maps — SINGLE source of truth for both renderers.
+// Shared label maps — now defined in ~/lib/invoice/labels.ts (client-safe so
+// InvoiceDetail.tsx can import them too) and re-exported here for back-compat
+// with existing importers (assemble.ts, etc.).
 // ---------------------------------------------------------------------------
 
-/**
- * InvoiceLineItem.kind → short label printed in the line-items table.
- * Record<string, …> (not the enum type) so an unmapped future enum value
- * still renders via the `?? kind` fallback rather than throwing.
- */
-export const KIND_LABELS: Record<string, string> = {
-	PACKAGE_SALE: "Package",
-	CREDIT: "Credit",
-	PRODUCT_SALE: "Product",
-	FEE: "Fee",
-	EVENT_REGISTRATION: "Event",
-	RENTAL: "Rental",
-	MEMBERSHIP_FEE: "Membership",
-};
-
-/**
- * InvoicePayment.paymentMethod → display label. Mirrors the legacy map in
- * InvoiceDetail.tsx so the on-screen and PDF copies match.
- */
-export const PAYMENT_METHOD_LABELS: Record<string, string> = {
-	cash: "Cash",
-	check: "Check",
-	credit_card: "Credit card",
-	pos_transaction: "POS transaction",
-	stripe: "Stripe",
-	paysafe: "Paysafe",
-	other: "Other",
-};
+export { KIND_LABELS, PAYMENT_METHOD_LABELS } from "~/lib/invoice/labels";
 
 // ---------------------------------------------------------------------------
 // RenderableInvoice — the DTO.

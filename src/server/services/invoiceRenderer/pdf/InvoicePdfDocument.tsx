@@ -29,41 +29,21 @@ import { Document, Page, Text, View } from "@react-pdf/renderer";
 // React.createElement at runtime, so the import has to be visible at the
 // module's top scope.
 import React from "react";
+import {
+	formatInvoiceDate,
+	formatInvoiceDateTime,
+	signedCents,
+} from "~/lib/invoice/format";
 import { formatCents } from "~/lib/money";
 import type { RenderableInvoice } from "../types";
 import { COLORS, statusPillColor, styles } from "./styles";
 
-// ---------- formatting helpers (local; same rules as InvoiceDetail.tsx) ----------
-
-function formatDate(d: Date): string {
-	// Locale pinned to en-US so server-rendered PDFs read identically
-	// regardless of the Node host's default locale (Docker images and
-	// developers' laptops drift here).
-	return new Date(d).toLocaleDateString("en-US", {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
-}
-
-function formatDateTime(d: Date): string {
-	return new Date(d).toLocaleString("en-US", {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-		hour: "numeric",
-		minute: "2-digit",
-	});
-}
-
-function signedCents(cents: number): string {
-	// Render a negative as "−$X" (Unicode minus) — same convention as the
-	// web view (InvoiceDetail.tsx) so the on-screen and PDF copies of a
-	// credit line read identically.
-	return cents < 0
-		? `\u2212${formatCents(Math.abs(cents))}`
-		: formatCents(cents);
-}
+// ---------- formatting helpers ----------
+// Dates are pinned to en-US so server-rendered PDFs read identically regardless
+// of the Node host's default locale (Docker images vs laptops). The date option
+// shapes + signedCents are shared with the web view via ~/lib/invoice/format.
+const formatDate = (d: Date): string => formatInvoiceDate(d, "en-US");
+const formatDateTime = (d: Date): string => formatInvoiceDateTime(d, "en-US");
 
 function formatAddressLine(from: RenderableInvoice["from"]): string | null {
 	const cityState = [from.city, from.state].filter((p) => p).join(", ");

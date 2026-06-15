@@ -2,6 +2,7 @@
 
 import { History } from "lucide-react";
 import { Button } from "~/app/_components/shared/Button";
+import { formatPersonName } from "~/lib/invoice/format";
 import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
 
@@ -59,13 +60,6 @@ function formatTimestamp(d: Date | string): string {
 		hour: "numeric",
 		minute: "2-digit",
 	});
-}
-
-function formatPersonName(p: {
-	firstName: string | null;
-	lastName: string | null;
-}): string {
-	return `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || "(no name)";
 }
 
 // Pull a few common metadata fields out for the row subline. Missing keys

@@ -29,6 +29,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { formatPersonName } from "~/lib/invoice/format";
 import { invoiceStatusDisplay } from "~/lib/invoiceStatus";
 import { db } from "~/server/db";
 import {
@@ -50,14 +51,6 @@ function phoneForClub(
 	return (
 		profiles?.find((p) => p.clubShortName === clubShortName)?.phone ?? null
 	);
-}
-
-function formatPersonName(p: {
-	firstName: string | null;
-	lastName: string | null;
-}): string {
-	const name = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
-	return name || "(no name)";
 }
 
 /**

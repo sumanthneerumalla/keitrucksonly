@@ -8,6 +8,10 @@ import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import {
+	formatInvoiceDate as formatDate,
+	formatPersonName,
+} from "~/lib/invoice/format";
+import {
 	type InvoiceStatusTone,
 	invoiceStatusDisplay,
 } from "~/lib/invoiceStatus";
@@ -90,22 +94,6 @@ type InvoiceRow = {
 	amountPaidInCents: number;
 	balanceInCents: number;
 };
-
-function formatDate(date: Date | string): string {
-	return new Date(date).toLocaleDateString([], {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
-}
-
-function formatPersonName(p: {
-	firstName: string | null;
-	lastName: string | null;
-}): string {
-	const name = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
-	return name || "(no name)";
-}
 
 /**
  * Decide what (if anything) to show under the invoice number, based on how
