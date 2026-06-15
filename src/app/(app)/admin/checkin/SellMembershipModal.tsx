@@ -52,6 +52,7 @@ type MembershipPlanRow = {
 	billingInterval: number;
 	billingUnit: string;
 	feePerTermInCents: number;
+	initiationFeeInCents: number;
 	membershipType: { name: string } | null;
 };
 
@@ -174,6 +175,12 @@ export default function SellMembershipModal({
 	const [notes, setNotes] = useState("");
 	const [saving, setSaving] = useState(false);
 
+	// --- One-time registration fee (plan.initiationFeeInCents) ---
+	// Defaults ON for first-time members (no prior non-voided membership in the
+	// club); staff can override either way. Recomputed when the plan or member
+	// changes — see the effect below the listForMember query.
+	const [chargeInitFee, setChargeInitFee] = useState(false);
+
 	// --- Bill-to / payer — the shared BillToUserPicker (as SellPackageModal). ---
 	const [billToUser, setBillToUser] = useState<SearchUser | null>(null);
 	const [billToTypedButUnselected, setBillToTypedButUnselected] =
@@ -211,6 +218,25 @@ export default function SellMembershipModal({
 		api.memberships.listPlans.useQuery({ isActive: true });
 	const plans = (plansData?.plans ?? []) as MembershipPlanRow[];
 	const selectedPlan = plans.find((p) => p.membershipPlanId === selectedPlanId);
+
+	// Prior memberships for the consumer — drives the registration-fee default
+	// ("new member" = zero non-voided memberships; cancelled/expired count as
+	// returning). listForMember already excludes voided rows.
+	const { data: priorMemberships } = api.memberships.listForMember.useQuery(
+		{ userId: consumerId ?? "" },
+		{ enabled: !!consumerId },
+	);
+	const historyLoaded = !!consumerId && priorMemberships !== undefined;
+	const isNewMember =
+		historyLoaded && priorMemberships.memberships.length === 0;
+	const planInitFeeInCents = selectedPlan?.initiationFeeInCents ?? 0;
+
+	// Re-default the toggle whenever the plan or member (or their history)
+	// changes; staff can still flip it afterwards.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-defaults on plan/member change only
+	useEffect(() => {
+		setChargeInitFee(planInitFeeInCents > 0 && isNewMember);
+	}, [selectedPlanId, consumerId, planInitFeeInCents, isNewMember]);
 
 	// Member search query (only when picker is shown + 4+ chars typed).
 	const trimmedMemberQuery = memberQuery.trim();
@@ -283,6 +309,7 @@ export default function SellMembershipModal({
 			// yyyy-mm-dd; the server interprets it in the member's facility tz.
 			startDate,
 			notes: notes.trim() || undefined,
+			chargeInitiationFee: chargeInitFee,
 			// Only send billToUserId when a different payer was explicitly picked.
 			...(billToUser ? { billToUserId: billToUser.userId } : {}),
 		});
@@ -516,7 +543,49 @@ export default function SellMembershipModal({
 								<div className="font-semibold text-[var(--foreground)]">
 									{formatCents(selectedPlan.feePerTermInCents)}
 								</div>
+								{chargeInitFee && planInitFeeInCents > 0 && (
+									<>
+										<div className="text-[var(--muted-foreground)]">
+											Registration fee
+										</div>
+										<div className="text-[var(--foreground)]">
+											{formatCents(planInitFeeInCents)}
+										</div>
+										<div className="text-[var(--muted-foreground)]">
+											Total due
+										</div>
+										<div className="font-semibold text-[var(--foreground)]">
+											{formatCents(
+												selectedPlan.feePerTermInCents + planInitFeeInCents,
+											)}
+										</div>
+									</>
+								)}
 							</div>
+							{planInitFeeInCents > 0 && (
+								<label className="mt-3 flex cursor-pointer select-none items-start gap-2 border-[var(--border)] border-t pt-2 text-sm">
+									<input
+										type="checkbox"
+										checked={chargeInitFee}
+										onChange={(e) => setChargeInitFee(e.target.checked)}
+										disabled={saving}
+										className="mt-0.5 h-4 w-4 rounded border-input accent-[var(--primary)]"
+									/>
+									<span className="text-[var(--foreground)]">
+										Charge {formatCents(planInitFeeInCents)} one-time
+										registration fee
+										<span className="block text-[var(--muted-foreground)] text-xs">
+											{!consumerId
+												? "Select a member to set the default automatically."
+												: !historyLoaded
+													? "Checking membership history..."
+													: isNewMember
+														? "Defaulted on — no prior membership on file."
+														: "Defaulted off — this member has a prior membership."}
+										</span>
+									</span>
+								</label>
+							)}
 							<p className="mt-3 border-[var(--border)] border-t pt-2 text-[var(--muted-foreground)] text-xs">
 								No proration — a full term is charged at sale. Final dates are
 								confirmed when the sale is recorded.

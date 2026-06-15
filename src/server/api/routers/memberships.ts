@@ -143,6 +143,8 @@ const planFieldsSchema = z.object({
 	billingUnit: billingUnitSchema,
 	billingCycles: z.number().int().min(1).max(1000).nullable(),
 	feePerTermInCents: z.number().int().min(0),
+	// One-time registration fee charged at signup (staff-waivable at sale).
+	initiationFeeInCents: z.number().int().min(0).default(0),
 });
 
 const createPlanSchema = planFieldsSchema;
@@ -168,6 +170,9 @@ const sellSchema = z.object({
 	startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected yyyy-mm-dd"),
 	notes: z.string().max(2000).optional(),
 	billToUserId: z.string().min(1).optional(),
+	// Charge the plan's one-time registration fee (modal defaults this from
+	// "member has no prior non-voided membership"; staff can override).
+	chargeInitiationFee: z.boolean().optional(),
 });
 
 const listForMemberSchema = z.object({
@@ -369,6 +374,7 @@ export const membershipsRouter = createTRPCRouter({
 					billingUnit: input.billingUnit,
 					billingCycles: input.billingCycles,
 					feePerTermInCents: input.feePerTermInCents,
+					initiationFeeInCents: input.initiationFeeInCents,
 				},
 			});
 			return { plan };
@@ -406,6 +412,7 @@ export const membershipsRouter = createTRPCRouter({
 					billingUnit: input.billingUnit,
 					billingCycles: input.billingCycles,
 					feePerTermInCents: input.feePerTermInCents,
+					initiationFeeInCents: input.initiationFeeInCents,
 					...(input.isActive !== undefined && { isActive: input.isActive }),
 				},
 			});
@@ -501,6 +508,7 @@ export const membershipsRouter = createTRPCRouter({
 				startDate: input.startDate,
 				notes: input.notes,
 				billToUserId: input.billToUserId,
+				chargeInitiationFee: input.chargeInitiationFee,
 			},
 		});
 	}),

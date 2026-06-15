@@ -61,6 +61,7 @@ export default function MembershipPlanForm({
 	const [hasCycleLimit, setHasCycleLimit] = useState(false);
 	const [billingCycles, setBillingCycles] = useState<number>(12);
 	const [feePerTermInCents, setFeePerTermInCents] = useState<number>(0);
+	const [initiationFeeInCents, setInitiationFeeInCents] = useState<number>(0);
 	const [isActive, setIsActive] = useState(true);
 	const [saving, setSaving] = useState(false);
 
@@ -98,6 +99,7 @@ export default function MembershipPlanForm({
 			setHasCycleLimit(false);
 		}
 		setFeePerTermInCents(plan.feePerTermInCents);
+		setInitiationFeeInCents(plan.initiationFeeInCents);
 		setIsActive(plan.isActive);
 	}, [editPlanData, mode, membershipPlanId]);
 
@@ -131,7 +133,18 @@ export default function MembershipPlanForm({
 		}
 	};
 
+	const handleInitiationFeeChange = (
+		e: React.ChangeEvent<HTMLInputElement>,
+	) => {
+		const value = e.target.value;
+		if (value === "" || /^\d*\.?\d{0,2}$/.test(value)) {
+			const dollars = Number.parseFloat(value || "0");
+			setInitiationFeeInCents(Math.round(dollars * 100));
+		}
+	};
+
 	const feeInDollars = (feePerTermInCents / 100).toFixed(2);
+	const initiationFeeInDollars = (initiationFeeInCents / 100).toFixed(2);
 
 	const types = useMemo(() => typesData?.types ?? [], [typesData]);
 
@@ -169,6 +182,7 @@ export default function MembershipPlanForm({
 			billingUnit,
 			billingCycles: hasCycleLimit ? billingCycles : null,
 			feePerTermInCents,
+			initiationFeeInCents,
 		};
 
 		if (mode === "create") {
@@ -412,6 +426,34 @@ export default function MembershipPlanForm({
 						</div>
 						<p className="text-[var(--muted-foreground)] text-xs">
 							Charged {billingPreview}.
+						</p>
+					</div>
+
+					<div className="space-y-1">
+						<label
+							htmlFor="plan-initiation-fee"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
+							Registration fee (one-time, USD)
+						</label>
+						<div className="relative">
+							<span className="-translate-y-1/2 absolute top-1/2 left-3 text-[var(--muted-foreground)] text-sm">
+								$
+							</span>
+							<Input
+								id="plan-initiation-fee"
+								type="text"
+								value={initiationFeeInDollars}
+								onChange={handleInitiationFeeChange}
+								placeholder="0.00"
+								disabled={saving}
+								className="pl-7"
+							/>
+						</div>
+						<p className="text-[var(--muted-foreground)] text-xs">
+							Charged once at signup, on top of the first term's fee. At sale it
+							defaults on for first-time members and staff can waive it. Leave
+							$0.00 for no registration fee.
 						</p>
 					</div>
 				</section>

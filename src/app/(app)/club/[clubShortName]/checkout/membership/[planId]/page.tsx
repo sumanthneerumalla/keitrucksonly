@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import BuyerBeneficiaryForm from "~/app/_components/client/shared/BuyerBeneficiaryForm";
 import { Button } from "~/app/_components/shared/Button";
+import { formatCents } from "~/lib/money";
 import { db } from "~/server/db";
 
 /**
@@ -94,6 +95,13 @@ export default async function MembershipCheckoutFormPage({
 				<h1 className="font-semibold text-[var(--foreground)] text-xl">
 					Start membership: {plan.membershipType?.name ?? plan.description}
 				</h1>
+				{plan.initiationFeeInCents > 0 && (
+					<p className="text-[var(--muted-foreground)] text-sm">
+						Includes a one-time {formatCents(plan.initiationFeeInCents)}{" "}
+						registration fee on top of the {formatCents(plan.feePerTermInCents)}{" "}
+						term fee.
+					</p>
+				)}
 			</div>
 
 			<BuyerBeneficiaryForm
