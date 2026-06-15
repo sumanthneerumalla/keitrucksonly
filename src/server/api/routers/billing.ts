@@ -12,7 +12,12 @@ import {
 	getFromAddress,
 	getResendClient,
 } from "~/server/services/email/resend";
+import {
+	assembleRenderableInvoice,
+	computeViewerCapabilities,
+} from "~/server/services/invoiceRenderer/assemble";
 import { getOrRenderInvoicePdf } from "~/server/services/invoiceRenderer/getOrRender";
+import type { InvoiceView } from "~/server/services/invoiceRenderer/types";
 import {
 	AUDIT_ACTIONS,
 	AUDIT_SOURCES,
@@ -333,79 +338,20 @@ export const billingRouter = createTRPCRouter({
 			// authorization can live here and be reused by the future member view.
 			const viewer = await getCurrentUser(ctx);
 
+			// Light auth query: only the fields needed to authorize + derive viewer
+			// capabilities; the full render shape comes from the shared assembler.
 			const invoice = await ctx.db.invoice.findUnique({
 				where: { invoiceId: input.invoiceId },
-				include: {
-					user: {
-						select: {
-							userId: true,
-							firstName: true,
-							lastName: true,
-							email: true,
-							// Phase 9b — surface phone on the invoice detail view + PDF
-							// "Bill to / For" blocks. Phone is now per-club on
-							// MemberClubProfile (per-club-profiles.md); picked for the
-							// invoice's club via phoneForClub() below.
-							memberClubProfiles: {
-								select: { clubShortName: true, phone: true },
-							},
-						},
-					},
-					billedToUser: {
-						select: {
-							userId: true,
-							firstName: true,
-							lastName: true,
-							email: true,
-							memberClubProfiles: {
-								select: { clubShortName: true, phone: true },
-							},
-						},
-					},
-					closedByUser: {
-						select: { userId: true, firstName: true, lastName: true },
-					},
-					createdByUser: {
-						select: { userId: true, firstName: true, lastName: true },
-					},
-					lineItems: {
-						orderBy: { sortOrder: "asc" },
-						include: {
-							revenueCategory: {
-								select: { revenueCategoryId: true, label: true },
-							},
-							creditFromUser: {
-								select: { userId: true, firstName: true, lastName: true },
-							},
-							creditFromInvoice: {
-								select: { invoiceId: true, invoiceNumber: true },
-							},
-						},
-					},
-					payments: {
-						// Newest first; paymentId tiebreaker stabilizes equal-millisecond
-						// rows (matches getMemberBilling).
-						orderBy: [{ receivedAt: "desc" }, { paymentId: "asc" }],
-						include: {
-							receivedByUser: {
-								select: { userId: true, firstName: true, lastName: true },
-							},
-							refunds: true,
-						},
-					},
-					refunds: {
-						orderBy: [{ refundedAt: "desc" }, { refundId: "asc" }],
-						include: {
-							refundedByUser: {
-								select: { userId: true, firstName: true, lastName: true },
-							},
-						},
-					},
+				select: {
+					userId: true,
+					billedToUserId: true,
+					clubShortName: true,
+					creditConsumedInCents: true,
+					creditConsumedAt: true,
 				},
 			});
 
-			// A missing invoice and an invoice the viewer may not see BOTH return
-			// NOT_FOUND, so an unauthorized viewer can't probe for invoice ids.
+			// Missing invoice and unauthorized BOTH return NOT_FOUND (no id probing).
 			if (!invoice) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
@@ -413,171 +359,24 @@ export const billingRouter = createTRPCRouter({
 				});
 			}
 
-			// Reuse the shared role/club helpers rather than re-deriving userType
-			// comparisons. `isFacilityOrAbove` already includes PLATFORM_ADMIN; the
-			// explicit `isPlatformAdmin` disjunct is what lets a platform admin read
-			// ACROSS clubs, while facility/club admins are scoped to the invoice's
-			// club via `isSameClub`.
+			const viewerCaps = computeViewerCapabilities(viewer, invoice);
 			const isConsumer = invoice.userId === viewer.userId;
 			const isPayer = invoice.billedToUserId === viewer.userId;
-			const isStaffViewer =
-				isPlatformAdmin(viewer) ||
-				(isFacilityOrAbove(viewer) && isSameClub(viewer, invoice));
-			if (!(isConsumer || isPayer || isStaffViewer)) {
+			if (!(isConsumer || isPayer || viewerCaps.isStaff)) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
 					message: "Invoice not found",
 				});
 			}
 
-			// Whether THIS viewer may void the invoice: a club admin or platform
-			// admin, AND in the invoice's own club. The same-club gate applies even
-			// to platform admins because `voidInvoice` (clubAdminProcedure) scopes
-			// its lookup to the caller's own clubShortName — so the button must only
-			// appear where the void will actually succeed, not on another club's
-			// invoice where the mutation would 404. (Cross-club platform operations
-			// would be a separate, broader change.) FACILITY staff are excluded.
-			// Button-visibility gate only — the mutation re-checks authoritatively.
-			const viewerIsClubAdmin =
-				(isPlatformAdmin(viewer) || viewer.userType === UserType.CLUB_ADMIN) &&
-				isSameClub(viewer, invoice);
-
-			// UI gate for the per-payment Refund button — refunds are blocked when
-			// this invoice's overpayment credit was applied elsewhere (D1).
-			const hasConsumedCredit =
-				invoice.creditConsumedInCents > 0 || invoice.creditConsumedAt !== null;
-
-			const balanceInCents = invoice.totalInCents - invoice.amountPaidInCents;
-
+			// Audience is ALWAYS derived server-side from the authenticated viewer,
+			// NEVER a client input (phase9c security linchpin): a member must not be
+			// able to request the staff DTO. Staff -> "staff"; else "customer".
+			const audience = viewerCaps.isStaff ? "staff" : "customer";
 			return {
-				invoiceId: invoice.invoiceId,
-				invoiceNumber: invoice.invoiceNumber,
-				// Phase 12a — surfaced so the member-facing pay-now button can
-				// resolve the right ClubStripeAccount via `getProviderForClub`
-				// (Stream 2 + Stream 6). Already part of the row; pure select add.
-				clubShortName: invoice.clubShortName,
-				status: invoice.status,
-				// UI gate for the Void button (see above) — NOT security; the
-				// voidInvoice mutation re-checks via clubAdminProcedure.
-				viewerIsClubAdmin,
-				// UI gate for the per-payment Refund button (D1 — refunds blocked
-				// once this invoice's credit was consumed elsewhere).
-				hasConsumedCredit,
-				issueDate: invoice.issueDate,
-				dueDate: invoice.dueDate,
-				closedAt: invoice.closedAt,
-				createdAt: invoice.createdAt,
-				subtotalInCents: invoice.subtotalInCents,
-				taxTotalInCents: invoice.taxTotalInCents,
-				totalInCents: invoice.totalInCents,
-				amountPaidInCents: invoice.amountPaidInCents,
-				// Signed: negative = account credit (Version A overpayment, #104).
-				balanceInCents,
-				// Invoice-level staff comment; renders on the PDF later (Phase 13).
-				notes: invoice.notes,
-				consumer: {
-					userId: invoice.user.userId,
-					firstName: invoice.user.firstName,
-					lastName: invoice.user.lastName,
-					email: invoice.user.email,
-					// Phase 9b — phone for THIS invoice's club (per-club-profiles.md).
-					phone: phoneForClub(
-						invoice.user.memberClubProfiles,
-						invoice.clubShortName,
-					),
-				},
-				billedTo: invoice.billedToUser
-					? {
-							userId: invoice.billedToUser.userId,
-							firstName: invoice.billedToUser.firstName,
-							lastName: invoice.billedToUser.lastName,
-							email: invoice.billedToUser.email,
-							phone: phoneForClub(
-								invoice.billedToUser.memberClubProfiles,
-								invoice.clubShortName,
-							),
-						}
-					: null,
-				closedBy: invoice.closedByUser
-					? {
-							userId: invoice.closedByUser.userId,
-							firstName: invoice.closedByUser.firstName,
-							lastName: invoice.closedByUser.lastName,
-						}
-					: null,
-				createdBy: {
-					userId: invoice.createdByUser.userId,
-					firstName: invoice.createdByUser.firstName,
-					lastName: invoice.createdByUser.lastName,
-				},
-				lineItems: invoice.lineItems.map((li) => ({
-					lineItemId: li.lineItemId,
-					kind: li.kind,
-					description: li.description,
-					quantity: li.quantity,
-					unitPriceInCents: li.unitPriceInCents,
-					discountInCents: li.discountInCents,
-					taxAmountInCents: li.taxAmountInCents,
-					// Signed: negative on CREDIT lines.
-					totalInCents: li.totalInCents,
-					revenueCategory: li.revenueCategory
-						? {
-								revenueCategoryId: li.revenueCategory.revenueCategoryId,
-								label: li.revenueCategory.label,
-							}
-						: null,
-					// CREDIT lines name their source person + invoice (hardening #115).
-					creditFrom: li.creditFromUser
-						? {
-								userId: li.creditFromUser.userId,
-								firstName: li.creditFromUser.firstName,
-								lastName: li.creditFromUser.lastName,
-							}
-						: null,
-					creditFromInvoice: li.creditFromInvoice
-						? {
-								invoiceId: li.creditFromInvoice.invoiceId,
-								invoiceNumber: li.creditFromInvoice.invoiceNumber,
-							}
-						: null,
-				})),
-				payments: invoice.payments.map((p) => {
-					const refundedTotalInCents = p.refunds.reduce(
-						(sum, r) => sum + r.amountInCents,
-						0,
-					);
-					return {
-						paymentId: p.paymentId,
-						amountInCents: p.amountInCents,
-						paymentMethod: p.paymentMethod,
-						status: p.status,
-						processor: p.processor,
-						processorTransactionId: p.processorTransactionId,
-						reference: p.reference,
-						receivedAt: p.receivedAt,
-						receivedBy: {
-							userId: p.receivedByUser.userId,
-							firstName: p.receivedByUser.firstName,
-							lastName: p.receivedByUser.lastName,
-						},
-						refundedTotalInCents,
-						netInCents: p.amountInCents - refundedTotalInCents,
-					};
-				}),
-				refunds: invoice.refunds.map((r) => ({
-					refundId: r.refundId,
-					paymentId: r.paymentId,
-					amountInCents: r.amountInCents,
-					reason: r.reason,
-					processor: r.processor,
-					refundedAt: r.refundedAt,
-					refundedBy: {
-						userId: r.refundedByUser.userId,
-						firstName: r.refundedByUser.firstName,
-						lastName: r.refundedByUser.lastName,
-					},
-				})),
-			};
+				invoice: await assembleRenderableInvoice(input.invoiceId, { audience }),
+				viewer: viewerCaps,
+			} satisfies InvoiceView;
 		}),
 
 	/**

@@ -14,10 +14,8 @@ import { useToast } from "~/app/_components/shared/Toast";
 import {
 	formatInvoiceDate as formatDate,
 	formatInvoiceDateTime as formatDateTime,
-	formatPersonName,
 	signedCents,
 } from "~/lib/invoice/format";
-import { KIND_LABELS, PAYMENT_METHOD_LABELS } from "~/lib/invoice/labels";
 import {
 	type InvoiceAudience,
 	type InvoiceStatusTone,
@@ -87,8 +85,7 @@ function PartyBlock({
 	label: string;
 	party: {
 		userId: string;
-		firstName: string | null;
-		lastName: string | null;
+		fullName: string;
 		email: string | null;
 		phone: string | null;
 	};
@@ -103,10 +100,10 @@ function PartyBlock({
 						href={`/clients/${party.userId}`}
 						className="underline-offset-2 hover:underline"
 					>
-						{formatPersonName(party)}
+						{party.fullName}
 					</Link>
 				) : (
-					formatPersonName(party)
+					party.fullName
 				)}
 			</dd>
 			{(party.email || party.phone) && (
@@ -144,19 +141,22 @@ export default function InvoiceDetail({
 
 	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
 		onSuccess: async () => {
-			toast(`Invoice ${inv?.invoiceNumber ?? ""} marked as due`, "success");
+			toast(
+				`Invoice ${inv?.invoice.meta.invoiceNumber ?? ""} marked as due`,
+				"success",
+			);
 			// Refresh this page's query + any cached BillingPanels (consumer's and,
 			// when bill-to differs, the payer's).
 			await Promise.all([
 				utils.billing.getInvoice.invalidate({ invoiceId }),
 				inv
 					? utils.billing.getMemberBilling.invalidate({
-							userId: inv.consumer.userId,
+							userId: inv.invoice.consumer.userId,
 						})
 					: Promise.resolve(),
-				inv?.billedTo
+				inv?.invoice.billedTo
 					? utils.billing.getMemberBilling.invalidate({
-							userId: inv.billedTo.userId,
+							userId: inv.invoice.billedTo.userId,
 						})
 					: Promise.resolve(),
 			]);
@@ -170,18 +170,21 @@ export default function InvoiceDetail({
 
 	const voidMutation = api.billing.voidInvoice.useMutation({
 		onSuccess: async () => {
-			toast(`Invoice ${inv?.invoiceNumber ?? ""} voided`, "success");
+			toast(
+				`Invoice ${inv?.invoice.meta.invoiceNumber ?? ""} voided`,
+				"success",
+			);
 			// Refresh this page + both parties' BillingPanels + the admin list.
 			await Promise.all([
 				utils.billing.getInvoice.invalidate({ invoiceId }),
 				inv
 					? utils.billing.getMemberBilling.invalidate({
-							userId: inv.consumer.userId,
+							userId: inv.invoice.consumer.userId,
 						})
 					: Promise.resolve(),
-				inv?.billedTo
+				inv?.invoice.billedTo
 					? utils.billing.getMemberBilling.invalidate({
-							userId: inv.billedTo.userId,
+							userId: inv.invoice.billedTo.userId,
 						})
 					: Promise.resolve(),
 				utils.billing.listInvoices.invalidate(),
@@ -236,12 +239,15 @@ export default function InvoiceDetail({
 	}
 
 	// Member-facing guard: void invoices are hidden from members entirely.
+	const dto = inv.invoice;
+	const viewer = inv.viewer;
+
 	const statusDisplay = invoiceStatusDisplay(
 		{
-			status: inv.status,
-			closedAt: inv.closedAt,
-			dueDate: inv.dueDate,
-			balanceInCents: inv.balanceInCents,
+			status: dto.meta.rawStatus,
+			closedAt: dto.meta.closedAt,
+			dueDate: dto.meta.dueDate,
+			balanceInCents: dto.totals.balanceInCents,
 		},
 		audience,
 	);
@@ -261,31 +267,32 @@ export default function InvoiceDetail({
 	}
 
 	const hasSeparatePayer =
-		inv.billedTo !== null && inv.billedTo.userId !== inv.consumer.userId;
-	const isCredit = inv.balanceInCents < 0;
+		dto.billedTo !== null && dto.billedTo.userId !== dto.consumer.userId;
+	const isCredit = dto.totals.balanceInCents < 0;
 
 	// Action gating (staff only). Mirrors the BillingPanel contract.
-	const canRecordPayment = isStaff && PAYMENT_ELIGIBLE_STATUSES.has(inv.status);
+	const canRecordPayment =
+		isStaff && PAYMENT_ELIGIBLE_STATUSES.has(dto.meta.rawStatus);
 	const canMarkDue =
 		isStaff &&
-		inv.status !== "void" &&
-		inv.status !== "paid" &&
-		inv.status !== "draft" &&
-		inv.closedAt === null;
+		dto.meta.rawStatus !== "void" &&
+		dto.meta.rawStatus !== "paid" &&
+		dto.meta.rawStatus !== "draft" &&
+		dto.meta.closedAt === null;
 	// Void is clubAdmin-only and only for a "clean" invoice: no money in (refund
 	// first) and no applied account credit. Mirrors the backend guards; the
 	// voidInvoice mutation re-checks authoritatively.
-	const hasCreditLine = inv.lineItems.some((li) => li.kind === "CREDIT");
+	const hasCreditLine = dto.lines.some((li) => li.kind === "CREDIT");
 	const canVoid =
 		isStaff &&
-		inv.viewerIsClubAdmin &&
-		inv.status !== "void" &&
-		inv.amountPaidInCents === 0 &&
+		viewer.isClubAdmin &&
+		dto.meta.rawStatus !== "void" &&
+		dto.totals.amountPaidInCents === 0 &&
 		!hasCreditLine;
 	// Refund is clubAdmin-only; blocked once this invoice's overpayment credit
 	// was consumed elsewhere (D1). Per-payment also requires a positive
 	// refundable balance (p.netInCents > 0). The mutation re-checks all of this.
-	const canRefund = isStaff && inv.viewerIsClubAdmin && !inv.hasConsumedCredit;
+	const canRefund = isStaff && viewer.isClubAdmin && !viewer.hasConsumedCredit;
 
 	// Phase 12a Round 3 Stream 6 — "Pay $X" button visibility (§12.1):
 	//   - audience is 'member' or 'staff' (admin can ALSO trigger pay-now)
@@ -295,11 +302,12 @@ export default function InvoiceDetail({
 	// The server-side `payments.startCheckout.invoice` mutation re-checks all
 	// of this authoritatively; the button-visibility gate just avoids showing
 	// the user a button that's guaranteed to bounce.
-	const outstandingInCents = inv.balanceInCents > 0 ? inv.balanceInCents : 0;
+	const outstandingInCents =
+		dto.totals.balanceInCents > 0 ? dto.totals.balanceInCents : 0;
 	const canPayNow =
 		(audience === "member" || audience === "staff") &&
 		outstandingInCents > 0 &&
-		inv.status !== "void" &&
+		dto.meta.rawStatus !== "void" &&
 		clubChargesEnabled;
 
 	return (
@@ -318,7 +326,7 @@ export default function InvoiceDetail({
 					)}
 					<div className="flex items-center gap-3">
 						<h1 className="font-semibold text-[var(--foreground)] text-xl">
-							Invoice {inv.invoiceNumber}
+							Invoice {dto.meta.invoiceNumber}
 						</h1>
 						<span
 							className={`inline-flex items-center rounded-full px-2.5 py-0.5 font-medium text-xs ${TONE_PILL_STYLES[statusDisplay.tone]}`}
@@ -334,7 +342,7 @@ export default function InvoiceDetail({
 				    the same consumer-OR-payer-OR-staff auth check. */}
 				<div className="flex items-center gap-2">
 					<a
-						href={`/api/invoices/${inv.invoiceId}/pdf`}
+						href={`/api/invoices/${dto.meta.invoiceId}/pdf`}
 						// `download` forces a save instead of opening inline in a new
 						// tab. Left valueless so the browser uses the server's
 						// Content-Disposition filename (<Last>_<First>_<INV>.pdf);
@@ -352,7 +360,7 @@ export default function InvoiceDetail({
 							size="sm"
 							disabled={starting}
 							onClick={() =>
-								startInvoiceCheckout.mutate({ invoiceId: inv.invoiceId })
+								startInvoiceCheckout.mutate({ invoiceId: dto.meta.invoiceId })
 							}
 						>
 							<CreditCard size={14} />
@@ -398,23 +406,23 @@ export default function InvoiceDetail({
 					<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
 						<dt className="text-[var(--muted-foreground)]">Issued</dt>
 						<dd className="text-right text-[var(--foreground)]">
-							{formatDate(inv.issueDate)}
+							{formatDate(dto.meta.issueDate)}
 						</dd>
-						{inv.dueDate && (
+						{dto.meta.dueDate && (
 							<>
 								<dt className="text-[var(--muted-foreground)]">Due</dt>
 								<dd className="text-right text-[var(--foreground)]">
-									{formatDate(inv.dueDate)}
+									{formatDate(dto.meta.dueDate)}
 								</dd>
 							</>
 						)}
-						{isStaff && inv.closedBy && inv.closedAt && (
+						{dto.meta.closedBy && dto.meta.closedAt && (
 							<>
 								<dt className="text-[var(--muted-foreground)]">
 									Marked due by
 								</dt>
 								<dd className="text-right text-[var(--foreground)]">
-									{formatPersonName(inv.closedBy)}
+									{dto.meta.closedBy.fullName}
 								</dd>
 							</>
 						)}
@@ -422,20 +430,20 @@ export default function InvoiceDetail({
 				</div>
 
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
-					{hasSeparatePayer && inv.billedTo ? (
+					{hasSeparatePayer && dto.billedTo ? (
 						<dl className="space-y-3">
 							<PartyBlock
 								label="Bill to"
-								party={inv.billedTo}
+								party={dto.billedTo}
 								isStaff={isStaff}
 							/>
-							<PartyBlock label="For" party={inv.consumer} isStaff={isStaff} />
+							<PartyBlock label="For" party={dto.consumer} isStaff={isStaff} />
 						</dl>
 					) : (
 						<dl className="space-y-2">
 							<PartyBlock
 								label="Member"
-								party={inv.consumer}
+								party={dto.consumer}
 								isStaff={isStaff}
 							/>
 						</dl>
@@ -451,11 +459,14 @@ export default function InvoiceDetail({
 							<th className="px-4 py-2 text-left font-medium">Description</th>
 							<th className="px-4 py-2 text-right font-medium">Qty</th>
 							<th className="px-4 py-2 text-right font-medium">Unit</th>
+							{dto.totals.hasAnyTax && (
+								<th className="px-4 py-2 text-right font-medium">Tax</th>
+							)}
 							<th className="px-4 py-2 text-right font-medium">Amount</th>
 						</tr>
 					</thead>
 					<tbody>
-						{inv.lineItems.length === 0 ? (
+						{dto.lines.length === 0 ? (
 							<tr>
 								<td
 									colSpan={4}
@@ -465,7 +476,7 @@ export default function InvoiceDetail({
 								</td>
 							</tr>
 						) : (
-							inv.lineItems.map((li) => (
+							dto.lines.map((li) => (
 								<tr
 									key={li.lineItemId}
 									className="border-[var(--border)] border-t align-top"
@@ -476,21 +487,21 @@ export default function InvoiceDetail({
 												{li.description}
 											</span>
 											<span className="inline-flex items-center rounded-full bg-[var(--muted)] px-2 py-0.5 text-[var(--muted-foreground)] text-xs">
-												{KIND_LABELS[li.kind] ?? li.kind}
+												{li.kindLabel}
 											</span>
 										</div>
 										{/* CREDIT lines name their source person + invoice. */}
-										{li.creditFrom && (
+										{li.creditSource && (
 											<div className="mt-1 text-[var(--muted-foreground)] text-xs">
-												Credit from {formatPersonName(li.creditFrom)}
-												{li.creditFromInvoice &&
-													` · ${li.creditFromInvoice.invoiceNumber}`}
+												Credit from {li.creditSource.payerName}
+												{li.creditSource.invoiceNumber &&
+													` · ${li.creditSource.invoiceNumber}`}
 											</div>
 										)}
 										{/* Revenue category is an internal classification. */}
-										{isStaff && li.revenueCategory && (
+										{li.revenueCategoryLabel && (
 											<div className="mt-1 text-[var(--muted-foreground)] text-xs italic">
-												{li.revenueCategory.label}
+												{li.revenueCategoryLabel}
 											</div>
 										)}
 									</td>
@@ -500,6 +511,13 @@ export default function InvoiceDetail({
 									<td className="px-4 py-3 text-right font-mono text-[var(--muted-foreground)] text-xs">
 										{signedCents(li.unitPriceInCents)}
 									</td>
+									{dto.totals.hasAnyTax && (
+										<td className="px-4 py-3 text-right font-mono text-[var(--muted-foreground)] text-xs">
+											{li.taxAmountInCents > 0
+												? formatCents(li.taxAmountInCents)
+												: "—"}
+										</td>
+									)}
 									<td className="px-4 py-3 text-right font-mono text-[var(--foreground)]">
 										{signedCents(li.totalInCents)}
 									</td>
@@ -515,27 +533,27 @@ export default function InvoiceDetail({
 						<div className="flex justify-between">
 							<dt className="text-[var(--muted-foreground)]">Subtotal</dt>
 							<dd className="font-mono text-[var(--foreground)]">
-								{signedCents(inv.subtotalInCents)}
+								{signedCents(dto.totals.subtotalInCents)}
 							</dd>
 						</div>
-						{inv.taxTotalInCents > 0 && (
+						{dto.totals.taxTotalInCents > 0 && (
 							<div className="flex justify-between">
 								<dt className="text-[var(--muted-foreground)]">Tax</dt>
 								<dd className="font-mono text-[var(--foreground)]">
-									{formatCents(inv.taxTotalInCents)}
+									{formatCents(dto.totals.taxTotalInCents)}
 								</dd>
 							</div>
 						)}
 						<div className="flex justify-between border-[var(--border)] border-t pt-1.5 font-semibold">
 							<dt className="text-[var(--foreground)]">Total</dt>
 							<dd className="font-mono text-[var(--foreground)]">
-								{signedCents(inv.totalInCents)}
+								{signedCents(dto.totals.totalInCents)}
 							</dd>
 						</div>
 						<div className="flex justify-between">
 							<dt className="text-[var(--muted-foreground)]">Paid</dt>
 							<dd className="font-mono text-[var(--muted-foreground)]">
-								{formatCents(inv.amountPaidInCents)}
+								{formatCents(dto.totals.amountPaidInCents)}
 							</dd>
 						</div>
 						<div className="flex justify-between font-semibold">
@@ -549,7 +567,7 @@ export default function InvoiceDetail({
 										: "text-[var(--foreground)]"
 								}`}
 							>
-								{formatCents(Math.abs(inv.balanceInCents))}
+								{formatCents(Math.abs(dto.totals.balanceInCents))}
 							</dd>
 						</div>
 					</dl>
@@ -557,20 +575,20 @@ export default function InvoiceDetail({
 			</div>
 
 			{/* Payments */}
-			{inv.payments.length > 0 && (
+			{dto.payments.length > 0 && (
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
 					<h2 className="mb-3 font-semibold text-[var(--foreground)] text-sm">
 						Payments
 					</h2>
 					<div className="space-y-2">
-						{inv.payments.map((p) => (
+						{dto.payments.map((p) => (
 							<div
 								key={p.paymentId}
 								className="flex items-start justify-between gap-3 border-[var(--border)] border-b pb-2 text-sm last:border-b-0 last:pb-0"
 							>
 								<div className="space-y-0.5">
 									<div className="text-[var(--foreground)]">
-										{PAYMENT_METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}
+										{p.methodLabel}
 										{p.processor && (
 											<span className="text-[var(--muted-foreground)]">
 												{" "}
@@ -580,7 +598,7 @@ export default function InvoiceDetail({
 									</div>
 									<div className="text-[var(--muted-foreground)] text-xs">
 										{formatDateTime(p.receivedAt)}
-										{isStaff && ` · ${formatPersonName(p.receivedBy)}`}
+										{p.receivedBy && ` · ${p.receivedBy.fullName}`}
 									</div>
 									{p.reference && (
 										<div className="text-[var(--muted-foreground)] text-xs">
@@ -606,10 +624,10 @@ export default function InvoiceDetail({
 											onClick={() =>
 												setRefundCtx({
 													paymentId: p.paymentId,
-													invoiceId: inv.invoiceId,
-													invoiceNumber: inv.invoiceNumber,
+													invoiceId: dto.meta.invoiceId,
+													invoiceNumber: dto.meta.invoiceNumber,
 													refundableInCents: p.netInCents,
-													paymentLabel: `${PAYMENT_METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod} · ${formatCents(p.amountInCents)}`,
+													paymentLabel: `${p.methodLabel} · ${formatCents(p.amountInCents)}`,
 													// Phase 12a Round 3 — gates the "Refund to Stripe
 													// card" option in RefundModal. Stripe-collected
 													// payments can be refunded back to the card;
@@ -629,13 +647,13 @@ export default function InvoiceDetail({
 			)}
 
 			{/* Refunds */}
-			{inv.refunds.length > 0 && (
+			{dto.refunds.length > 0 && (
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
 					<h2 className="mb-3 font-semibold text-[var(--foreground)] text-sm">
 						Refunds
 					</h2>
 					<div className="space-y-2">
-						{inv.refunds.map((r) => (
+						{dto.refunds.map((r) => (
 							<div
 								key={r.refundId}
 								className="flex items-start justify-between gap-3 border-[var(--border)] border-b pb-2 text-sm last:border-b-0 last:pb-0"
@@ -643,7 +661,7 @@ export default function InvoiceDetail({
 								<div className="space-y-0.5">
 									<div className="text-[var(--muted-foreground)] text-xs">
 										{formatDateTime(r.refundedAt)}
-										{isStaff && ` · ${formatPersonName(r.refundedBy)}`}
+										{r.refundedBy && ` · ${r.refundedBy.fullName}`}
 									</div>
 									{r.reason && (
 										<div className="text-[var(--foreground)] text-xs">
@@ -661,13 +679,13 @@ export default function InvoiceDetail({
 			)}
 
 			{/* Invoice-level comment (renders on the PDF later). */}
-			{inv.notes && (
+			{dto.meta.notes && (
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
 					<h2 className="mb-2 font-semibold text-[var(--foreground)] text-sm">
 						Notes
 					</h2>
 					<p className="whitespace-pre-wrap text-[var(--muted-foreground)] text-sm">
-						{inv.notes}
+						{dto.meta.notes}
 					</p>
 				</div>
 			)}
@@ -678,22 +696,22 @@ export default function InvoiceDetail({
 					<RecordPaymentModal
 						open={paymentOpen}
 						onOpenChange={setPaymentOpen}
-						userId={inv.consumer.userId}
+						userId={dto.consumer.userId}
 						invoice={{
-							invoiceId: inv.invoiceId,
-							invoiceNumber: inv.invoiceNumber,
-							totalInCents: inv.totalInCents,
-							amountPaidInCents: inv.amountPaidInCents,
-							balanceInCents: inv.balanceInCents,
+							invoiceId: dto.meta.invoiceId,
+							invoiceNumber: dto.meta.invoiceNumber,
+							totalInCents: dto.totals.totalInCents,
+							amountPaidInCents: dto.totals.amountPaidInCents,
+							balanceInCents: dto.totals.balanceInCents,
 						}}
 					/>
 
 					<AlertDialog
 						open={markDueOpen}
-						title={`Mark as due — Invoice ${inv.invoiceNumber}`}
+						title={`Mark as due — Invoice ${dto.meta.invoiceNumber}`}
 						description={
-							inv.balanceInCents > 0
-								? `Member still owes ${formatCents(inv.balanceInCents)}. Mark this invoice as due? They can still pay the balance later, but new charges will start a fresh invoice.`
+							dto.totals.balanceInCents > 0
+								? `Member still owes ${formatCents(dto.totals.balanceInCents)}. Mark this invoice as due? They can still pay the balance later, but new charges will start a fresh invoice.`
 								: "Mark this invoice as due? No new charges will be added, and any account credit carries forward to the next invoice."
 						}
 						confirmLabel={marking ? "Marking…" : "Mark as due"}
@@ -711,7 +729,7 @@ export default function InvoiceDetail({
 					<AlertDialog
 						open={voidOpen}
 						destructive
-						title={`Void invoice ${inv.invoiceNumber}`}
+						title={`Void invoice ${dto.meta.invoiceNumber}`}
 						description="This cancels the invoice and removes it from balances and reporting. It does NOT revoke any package or credits granted by this sale — reverse those separately if needed. This can't be undone."
 						confirmLabel={voiding ? "Voiding…" : "Void invoice"}
 						cancelLabel="Cancel"
@@ -750,8 +768,8 @@ export default function InvoiceDetail({
 							if (!o) setRefundCtx(null);
 						}}
 						refund={refundCtx}
-						consumerUserId={inv.consumer.userId}
-						payerUserId={inv.billedTo?.userId ?? null}
+						consumerUserId={dto.consumer.userId}
+						payerUserId={dto.billedTo?.userId ?? null}
 					/>
 				</>
 			)}
