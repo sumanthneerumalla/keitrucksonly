@@ -95,6 +95,151 @@ export function Countdown({
 	);
 }
 
+// =============================================================================
+// CourtCard — the single source of court rendering, shared by the authenticated
+// board (DropInEventDetails, interactive) and the read-only kiosk/TV board
+// (KioskBoard). Styling lives here once; interactivity is injected by props:
+//   - renderPlayer: wrap each name (authed → SwapPlayer; kiosk → plain text)
+//   - controls / extra: action row + panels for the authed view (omit for kiosk)
+//   - emptyControls: what an open court offers (authed → queue/start/remove)
+// The kiosk scales the whole board up via a transform wrapper, so these in-app
+// sizes render large on a TV without any duplicate styling.
+// =============================================================================
+
+export type BoardParticipant = {
+	userId: string;
+	side: "A" | "B" | null;
+	user: { firstName: string | null; lastName: string | null };
+};
+
+export type BoardAssignment = {
+	assignmentId: string;
+	status: string;
+	expiresAt: string | Date | null;
+	reportedScoreA: number | null;
+	reportedScoreB: number | null;
+	participants: BoardParticipant[];
+};
+
+function CourtStatusChip({ status }: { status: string }) {
+	if (status === "PENDING_CONFIRM") {
+		return (
+			<div className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 text-xs">
+				<span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+				Awaiting opponent's confirmation
+			</div>
+		);
+	}
+	if (status === "DISPUTED") {
+		return (
+			<div className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 font-medium text-red-700 text-xs">
+				<span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+				Disputed — staff will resolve
+			</div>
+		);
+	}
+	return (
+		<div className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-2.5 py-1 font-medium text-green-700 text-xs">
+			<span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+			In play
+		</div>
+	);
+}
+
+export function CourtCard({
+	title,
+	assignment,
+	now,
+	isMatch,
+	renderPlayer,
+	emptyControls,
+	controls,
+	extra,
+}: {
+	title: string;
+	assignment?: BoardAssignment;
+	now: number;
+	isMatch: boolean;
+	/** Render one participant's name (without a key — CourtCard wraps with keys). */
+	renderPlayer: (p: BoardParticipant) => ReactNode;
+	/** Actions shown when the court is open (no assignment). */
+	emptyControls?: ReactNode;
+	/** Action row shown under an in-progress court. */
+	controls?: ReactNode;
+	/** Extra panels (score entry, confirm/dispute) below the controls. */
+	extra?: ReactNode;
+}) {
+	const side = (s: "A" | "B") => {
+		const ps = assignment?.participants.filter((p) => p.side === s) ?? [];
+		if (ps.length === 0) {
+			return <span className="text-[var(--muted-foreground)]">Side {s}</span>;
+		}
+		return ps.map((p, i) => (
+			<span key={p.userId} className="inline-flex items-center">
+				{i > 0 && (
+					<span className="mx-1 text-[var(--muted-foreground)]">&</span>
+				)}
+				{renderPlayer(p)}
+			</span>
+		));
+	};
+
+	return (
+		<div className="rounded-lg border border-[var(--border)] p-3">
+			<div className="mb-2 flex items-center justify-between gap-2">
+				<span className="font-medium text-[var(--foreground)] text-sm">
+					{title}
+				</span>
+				{assignment?.expiresAt && (
+					<Countdown expiresAt={assignment.expiresAt} now={now} />
+				)}
+			</div>
+
+			{!assignment ? (
+				<div className="space-y-2">
+					<span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--muted)] px-2.5 py-1 font-medium text-[var(--muted-foreground)] text-xs">
+						<span className="h-1.5 w-1.5 rounded-full bg-[var(--muted-foreground)]" />
+						Open court
+					</span>
+					{emptyControls && (
+						<div className="flex flex-wrap items-center gap-2">
+							{emptyControls}
+						</div>
+					)}
+				</div>
+			) : (
+				<div className="space-y-2">
+					{isMatch ? (
+						<div className="flex items-center justify-between gap-2 text-sm">
+							<span className="flex flex-1 flex-wrap items-center gap-x-1">
+								{side("A")}
+							</span>
+							<span className="shrink-0 text-[var(--muted-foreground)] text-xs">
+								{assignment.reportedScoreA != null
+									? `${assignment.reportedScoreA}–${assignment.reportedScoreB}`
+									: "vs"}
+							</span>
+							<span className="flex flex-1 flex-wrap items-center justify-end gap-x-1">
+								{side("B")}
+							</span>
+						</div>
+					) : (
+						<div className="flex flex-wrap gap-x-4 gap-y-1 font-medium text-[var(--foreground)] text-base">
+							{assignment.participants.map((p) => (
+								<span key={p.userId}>{renderPlayer(p)}</span>
+							))}
+						</div>
+					)}
+
+					<CourtStatusChip status={assignment.status} />
+					{controls}
+					{extra}
+				</div>
+			)}
+		</div>
+	);
+}
+
 /** A player's name. For staff (canSwap), it's a typeahead trigger to replace the
  *  player with another member; otherwise a plain label. */
 export function SwapPlayer({

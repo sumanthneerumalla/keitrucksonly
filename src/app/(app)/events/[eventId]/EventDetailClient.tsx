@@ -153,6 +153,22 @@ export default function EventDetailClient({
 	// Rotation Play (DROP_IN): the event page IS the live board — render it instead
 	// of the normal bookable detail view (D2: the board is the event page).
 	if (event.eventType === "DROP_IN") {
+		// Logged-out viewers get the read-only kiosk board (no controls) rendered
+		// FULL-WIDTH with no page chrome — an unauthenticated TV / iPad on the wall
+		// displays the live board large and glanceable, and can't manipulate matches.
+		if (!userId) {
+			return (
+				<div className="h-[calc(100vh-5rem)] overflow-auto">
+					<KioskBoard
+						eventId={eventId}
+						eventStart={event.start}
+						eventTitle={event.title}
+						clubShortName={event.clubShortName}
+						facilityId={event.facilityId ?? null}
+					/>
+				</div>
+			);
+		}
 		return (
 			<div className="h-[calc(100vh-5rem)] overflow-auto p-6">
 				<div className="mb-6">
@@ -165,36 +181,21 @@ export default function EventDetailClient({
 					</Link>
 				</div>
 				<div className="mx-auto max-w-3xl space-y-4">
-					{/* Logged-out viewers get the read-only kiosk board (no controls),
-					    so an unauthenticated iPad on the wall can display the live board
-					    without players being able to manipulate timed matches. */}
-					{userId ? (
-						<>
-							<DropInEventDetails
-								eventId={eventId}
-								eventStart={event.start}
-								eventTitle={event.title}
-								isStaff={isFacilityOrAdmin}
-								userId={userId}
-							/>
-							{/* Registered roster (facility / club-admin / platform-admin). */}
-							{isFacilityOrAdmin && (
-								<EventRoster
-									eventId={eventId}
-									facilityId={event.facilityId ?? null}
-									maxParticipants={event.maxParticipants}
-									canManage={isFacilityOrAdmin}
-									canCheckIn={isFacilityOrAdmin}
-								/>
-							)}
-						</>
-					) : (
-						<KioskBoard
+					<DropInEventDetails
+						eventId={eventId}
+						eventStart={event.start}
+						eventTitle={event.title}
+						isStaff={isFacilityOrAdmin}
+						userId={userId}
+					/>
+					{/* Registered roster (facility / club-admin / platform-admin). */}
+					{isFacilityOrAdmin && (
+						<EventRoster
 							eventId={eventId}
-							eventStart={event.start}
-							eventTitle={event.title}
-							clubShortName={event.clubShortName}
 							facilityId={event.facilityId ?? null}
+							maxParticipants={event.maxParticipants}
+							canManage={isFacilityOrAdmin}
+							canCheckIn={isFacilityOrAdmin}
 						/>
 					)}
 				</div>

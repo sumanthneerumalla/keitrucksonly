@@ -3,7 +3,7 @@
 import { Check, Maximize2, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-	Countdown,
+	CourtCard,
 	JoinPartyPopover,
 	Leaderboard,
 	MemberSearchPopover,
@@ -258,6 +258,8 @@ export default function DropInEventDetails({
 
 	// -------------------------------------------------------------------------
 	if (!isLoggedIn) {
+		// Logged-out viewers are routed to KioskBoard by EventDetailClient; this is
+		// just a defensive fallback.
 		return (
 			<div className="rounded-lg border border-[var(--border)] p-6 text-center">
 				<p className="font-medium text-[var(--foreground)]">{eventTitle}</p>
@@ -425,35 +427,8 @@ export default function DropInEventDetails({
 	);
 
 	// Staff can swap a player on a live game (e.g. seat a test account).
-	type Assignment = (typeof assignments)[number];
 	const canSwapPlayers = (status: string) =>
 		isStaff && status === "IN_PROGRESS";
-	const renderSide = (a: Assignment, side: "A" | "B") => {
-		const ps = a.participants.filter((p) => p.side === side);
-		if (ps.length === 0)
-			return (
-				<span className="text-[var(--muted-foreground)]">Side {side}</span>
-			);
-		return ps.map((p, i) => (
-			<span key={p.userId} className="inline-flex items-center">
-				{i > 0 && (
-					<span className="mx-1 text-[var(--muted-foreground)]">&</span>
-				)}
-				<SwapPlayer
-					name={memberDisplayName(p.user)}
-					canSwap={canSwapPlayers(a.status)}
-					sessionId={session.sessionId}
-					onPick={(inUserId) =>
-						swapParticipant.mutate({
-							assignmentId: a.assignmentId,
-							outUserId: p.userId,
-							inUserId,
-						})
-					}
-				/>
-			</span>
-		));
-	};
 
 	// Court-preference button (CP9): tap a court to queue locked to it.
 	//  - not in queue  → "Queue for Court N" (joinQueue pinned to the court)
@@ -600,248 +575,191 @@ export default function DropInEventDetails({
 						a.status === "PENDING_CONFIRM" &&
 						!!meP &&
 						(!reporterP || meP.side !== reporterP.side);
-					return (
-						<div
-							key={courtId}
-							className="rounded-lg border border-[var(--border)] p-3"
-						>
-							<div className="mb-2 flex items-center justify-between">
-								<span className="font-medium text-[var(--foreground)] text-sm">
-									{courtName(courtId)}
-								</span>
-								{a?.expiresAt && (
-									<Countdown expiresAt={a.expiresAt} now={now} />
-								)}
-							</div>
-
-							{/* Court-preference (CP9): player taps to queue for THIS court. */}
-							{(() => {
-								const btn = renderCourtQueueButton(courtId);
-								return btn ? <div className="mb-2">{btn}</div> : null;
-							})()}
-
-							{!a && (
-								<div className="flex items-center justify-between">
-									<span className="text-[var(--muted-foreground)] text-sm">
-										Empty
-									</span>
-									{isStaff && (
-										<div className="flex items-center gap-1.5">
-											<Button
-												size="sm"
-												disabled={
-													formNext.isPending ||
-													blockNewGames ||
-													pool.length < playersPerCourt
-												}
-												onClick={() =>
-													formNext.mutate({
-														sessionId: session.sessionId,
-														courtId,
-													})
-												}
-											>
-												Start next
-											</Button>
-											<Button
-												variant="outline"
-												size="sm"
-												title="Remove this court from the session"
-												onClick={() =>
-													removeCourt.mutate({
-														sessionId: session.sessionId,
-														courtId,
-													})
-												}
-											>
-												<X size={14} />
-											</Button>
-										</div>
-									)}
-								</div>
+					const emptyControls = (
+						<>
+							{renderCourtQueueButton(courtId)}
+							{isStaff && (
+								<>
+									<Button
+										size="sm"
+										disabled={
+											formNext.isPending ||
+											blockNewGames ||
+											pool.length < playersPerCourt
+										}
+										onClick={() =>
+											formNext.mutate({
+												sessionId: session.sessionId,
+												courtId,
+											})
+										}
+									>
+										Start next
+									</Button>
+									<Button
+										variant="outline"
+										size="sm"
+										title="Remove this court from the session"
+										onClick={() =>
+											removeCourt.mutate({
+												sessionId: session.sessionId,
+												courtId,
+											})
+										}
+									>
+										<X size={14} />
+									</Button>
+								</>
 							)}
+						</>
+					);
 
-							{a && (
-								<div className="space-y-2">
-									{isMatch ? (
-										<div className="flex items-center justify-between gap-2 text-sm">
-											<span className="flex flex-1 flex-wrap items-center gap-x-1">
-												{renderSide(a, "A")}
-											</span>
-											<span className="shrink-0 text-[var(--muted-foreground)] text-xs">
-												{a.reportedScoreA != null
-													? `${a.reportedScoreA}–${a.reportedScoreB}`
-													: "vs"}
-											</span>
-											<span className="flex flex-1 flex-wrap items-center justify-end gap-x-1">
-												{renderSide(a, "B")}
-											</span>
-										</div>
-									) : (
-										<div className="flex flex-wrap gap-1 text-sm">
-											{a.participants.map((p) => (
-												<span
-													key={p.userId}
-													className="rounded-full bg-[var(--muted)] px-2 py-0.5 text-xs"
-												>
-													<SwapPlayer
-														name={memberDisplayName(p.user)}
-														canSwap={canSwapPlayers(a.status)}
-														sessionId={session.sessionId}
-														onPick={(inUserId) =>
-															swapParticipant.mutate({
-																assignmentId: a.assignmentId,
-																outUserId: p.userId,
-																inUserId,
-															})
-														}
-													/>
-												</span>
-											))}
-										</div>
-									)}
-
-									{a.status === "PENDING_CONFIRM" ? (
-										<div className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 text-xs">
-											<span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-											Awaiting opponent's confirmation
-										</div>
-									) : a.status === "DISPUTED" ? (
-										<div className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 font-medium text-red-700 text-xs">
-											<span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-											Disputed — staff will resolve
-										</div>
-									) : (
-										<div className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-2.5 py-1 font-medium text-green-700 text-xs">
-											<span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-											In play
-										</div>
-									)}
-
-									{/* Court controls (staff) */}
-									{isStaff && (
-										<div className="flex flex-wrap gap-2">
-											{!isMatch && (
-												<Button
-													variant="outline"
-													size="sm"
-													onClick={() =>
-														endSlot.mutate({ assignmentId: a.assignmentId })
-													}
-												>
-													End slot
-												</Button>
-											)}
-											<Button
-												variant="outline"
-												size="sm"
-												className="border-red-200 text-red-600 hover:bg-red-50"
-												disabled={cancelAssignment.isPending}
-												onClick={() =>
-													cancelAssignment.mutate({
-														assignmentId: a.assignmentId,
-													})
-												}
-											>
-												Cancel game
-											</Button>
-										</div>
-									)}
-
-									{isMatch &&
-										a.status === "IN_PROGRESS" &&
-										a.participants.some((p) => p.userId === userId) && (
-											<Button
-												size="sm"
-												onClick={() =>
-													setReporting({ id: a.assignmentId, staff: false })
-												}
-											>
-												Report score
-											</Button>
-										)}
-
-									{isMatch && canRespond && (
-										<div className="space-y-1.5 rounded-md bg-[var(--muted)] p-2">
-											<p className="text-[var(--muted-foreground)] text-xs">
-												Opponent reported:
-											</p>
-											<p className="font-mono text-[var(--foreground)] text-sm">
-												{formatGames(a.gameScores)}
-											</p>
-											<div className="flex gap-2">
-												<Button
-													size="sm"
-													disabled={confirmScore.isPending}
-													onClick={() =>
-														confirmScore.mutate({
-															assignmentId: a.assignmentId,
-														})
-													}
-												>
-													Confirm {a.reportedScoreA}–{a.reportedScoreB}
-												</Button>
-												<Button
-													variant="outline"
-													size="sm"
-													disabled={disputeScore.isPending}
-													onClick={() =>
-														disputeScore.mutate({
-															assignmentId: a.assignmentId,
-														})
-													}
-												>
-													Dispute
-												</Button>
-											</div>
-										</div>
-									)}
-
-									{/* Staff can enter/override the score for any court (authoritative),
-									    including resolving a dispute. */}
-									{isMatch &&
-										isStaff &&
-										(a.status === "IN_PROGRESS" ||
-											a.status === "PENDING_CONFIRM" ||
-											a.status === "DISPUTED") && (
-											<Button
-												variant="outline"
-												size="sm"
-												onClick={() =>
-													setReporting({ id: a.assignmentId, staff: true })
-												}
-											>
-												{a.status === "DISPUTED"
-													? "Resolve score"
-													: "Enter score"}
-											</Button>
-										)}
-
-									{reporting?.id === a.assignmentId && (
-										<ScoreEntry
-											bestOf={session.bestOf ?? 3}
-											pending={
-												reporting.staff
-													? staffSetScore.isPending
-													: reportScore.isPending
-											}
-											onCancel={() => setReporting(null)}
-											onSubmit={(gameScores) =>
-												reporting.staff
-													? staffSetScore.mutate({
-															assignmentId: a.assignmentId,
-															gameScores,
-														})
-													: reportScore.mutate({
-															assignmentId: a.assignmentId,
-															gameScores,
-														})
-											}
-										/>
-									)}
-								</div>
+					const controls = a && (
+						<div className="flex flex-wrap gap-2">
+							{renderCourtQueueButton(courtId)}
+							{isMatch &&
+								a.status === "IN_PROGRESS" &&
+								a.participants.some((p) => p.userId === userId) && (
+									<Button
+										size="sm"
+										onClick={() =>
+											setReporting({ id: a.assignmentId, staff: false })
+										}
+									>
+										Report score
+									</Button>
+								)}
+							{isMatch &&
+								isStaff &&
+								(a.status === "IN_PROGRESS" ||
+									a.status === "PENDING_CONFIRM" ||
+									a.status === "DISPUTED") && (
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() =>
+											setReporting({ id: a.assignmentId, staff: true })
+										}
+									>
+										{a.status === "DISPUTED" ? "Resolve score" : "Enter score"}
+									</Button>
+								)}
+							{!isMatch && isStaff && (
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() =>
+										endSlot.mutate({ assignmentId: a.assignmentId })
+									}
+								>
+									End slot
+								</Button>
+							)}
+							{isStaff && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="border-red-200 text-red-600 hover:bg-red-50"
+									disabled={cancelAssignment.isPending}
+									onClick={() =>
+										cancelAssignment.mutate({ assignmentId: a.assignmentId })
+									}
+								>
+									Cancel game
+								</Button>
 							)}
 						</div>
+					);
+
+					const extra = a && (
+						<>
+							{isMatch && canRespond && (
+								<div className="space-y-1.5 rounded-md bg-[var(--muted)] p-2">
+									<p className="text-[var(--muted-foreground)] text-xs">
+										Opponent reported:
+									</p>
+									<p className="font-mono text-[var(--foreground)] text-sm">
+										{formatGames(a.gameScores)}
+									</p>
+									<div className="flex gap-2">
+										<Button
+											size="sm"
+											disabled={confirmScore.isPending}
+											onClick={() =>
+												confirmScore.mutate({ assignmentId: a.assignmentId })
+											}
+										>
+											Confirm {a.reportedScoreA}–{a.reportedScoreB}
+										</Button>
+										<Button
+											variant="outline"
+											size="sm"
+											disabled={disputeScore.isPending}
+											onClick={() =>
+												disputeScore.mutate({ assignmentId: a.assignmentId })
+											}
+										>
+											Dispute
+										</Button>
+									</div>
+								</div>
+							)}
+							{reporting?.id === a.assignmentId && (
+								<ScoreEntry
+									bestOf={session.bestOf ?? 3}
+									pending={
+										reporting.staff
+											? staffSetScore.isPending
+											: reportScore.isPending
+									}
+									onCancel={() => setReporting(null)}
+									onSubmit={(gameScores) =>
+										reporting.staff
+											? staffSetScore.mutate({
+													assignmentId: a.assignmentId,
+													gameScores,
+												})
+											: reportScore.mutate({
+													assignmentId: a.assignmentId,
+													gameScores,
+												})
+									}
+								/>
+							)}
+						</>
+					);
+
+					return (
+						<CourtCard
+							key={courtId}
+							title={courtName(courtId)}
+							assignment={a}
+							now={now}
+							isMatch={isMatch}
+							renderPlayer={(p) =>
+								a ? (
+									<SwapPlayer
+										name={memberDisplayName(p.user)}
+										canSwap={canSwapPlayers(a.status)}
+										sessionId={session.sessionId}
+										onPick={(inUserId) =>
+											swapParticipant.mutate({
+												assignmentId: a.assignmentId,
+												outUserId: p.userId,
+												inUserId,
+											})
+										}
+									/>
+								) : (
+									<span className="text-[var(--foreground)]">
+										{memberDisplayName(p.user)}
+									</span>
+								)
+							}
+							emptyControls={emptyControls}
+							controls={controls}
+							extra={extra}
+						/>
 					);
 				})}
 			</div>
