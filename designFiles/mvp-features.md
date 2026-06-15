@@ -46,12 +46,12 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 ### 3. Billing & Revenue
 - **MVP:** Manual package assignment by staff, pay at desk
 - Revenue categories for products/packages (Phase 5c — deferred)
-- Invoicing & running tab (Phase 9 — post-MVP)
+- **Invoicing & running tab (Phase 9a/9b — BUILT)**: invoice list/search, detail page, PDF generation, account credit, void, `recordPayment`, member-facing `/invoices`
 - Earnings reports with date ranges (Phase 14 — post-MVP)
 - Accounts receivable, revenue reports, package sales reports (Phase 14 — post-MVP)
 
 **Design docs:** `roadmap/phase9-invoicing.md`, `roadmap/phase14-reporting.md`
-**Dependencies:** Polar integration (Phase 3 — in progress, pre-MVP)
+**Payments:** Stripe Connect (Phase 12a — BUILT). Per-club connected accounts, embedded checkout, direct charges, webhooks. **Polar was evaluated and dropped — do not reintroduce.**
 
 ### 4. Client Management ← COMPLETE
 - **Phase 4: User Tags** — tagging, filtering, bulk tagging, CSV export ✅
@@ -106,8 +106,9 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 | Phase 1: Platform foundations | — | Complete |
 | Phase 2: User Management | `phase2-user-management.md` | Complete |
 | Phase 2.5: Calendar & Public Embed | `progressPhase2_5.md` | Complete (all C1–C5, F-A–F-E, M1–M4, U1–U5 done) |
-| Phase 3: Polar Payments | `progressPhase3.md` | In progress (P1-P4 remaining — Polar product sync + checkout + capacity + coaching slot) |
 | Phase 4: User Tags | `phase4-user-tags.md` | Complete |
+| Phase 9a/9b: Invoicing + PDF | `roadmap/phase9-invoicing.md` | **Built** — invoice list/detail/PDF, account credit, void, `recordPayment`, `/invoices` + `/admin/invoices`. Needs QA. |
+| Phase 12a: Stripe Connect Payments | `roadmap/phase12-stripe-connect.md` | **Built** — per-club connected accounts, embedded checkout, webhooks, dispatch/failure, orphan queue (Accounts v2). Needs QA. **(Replaces the cancelled Polar integration.)** |
 | Phase 5a: Products & Categories | `roadmap/phase5-products.md` | **Built** — router + admin UI exist (`/admin/products`, `/admin/products/categories`). Needs QA. |
 | Phase 6a: Member Check-in | `roadmap/phase6-member-checkin.md` | **Built** — 760-line router + `/checkin/[clubShortName]/[facilityId]` pages. Needs QA. |
 | Phase 7a: Admin Check-in | `roadmap/phase7-admin-checkin.md` | **Built** — `/admin/checkin` page with SellPackageModal + MemberPackagesCard. Needs QA. |
@@ -130,20 +131,19 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 - [ ] **QA: Products & Categories CRUD** (`/admin/products`, `/admin/products/categories`) — admin creates a product (e.g. "Drop-In $10"), assigns a category. This is the prerequisite for selling anything.
 - [ ] **QA: Packages & Credits** (`/admin/packages`) — admin creates a package (e.g. "10 Drop-Ins"), sells it via `/admin/checkin`, member's credits decrement. The core revenue loop.
 - [ ] **QA: Court Rentals** (`/rentals`, `/admin/rentals`) — member books a court slot; admin sees it on the board. Club's #2 revenue source.
-- [ ] **Wire payment** — Polar P1+P2: sync products to Polar, checkout redirect for BOOKABLE events and package purchases. Without this, all sales are cash/manual. Can demo without it but need it before go-live.
+- [ ] **QA: Stripe Connect end-to-end** (Phase 12a, built) — connect the club's Stripe account via the onboarding banner, then run a real checkout for each item kind (package, rental, invoice). Verify the webhook creates the right downstream rows and the orphan queue stays empty. This is the live-money path; QA it hard before go-live.
 
 ### Tier 2 — High Value, Ship in Week 2
 
 - [ ] **Drop-In Rotation demo** (`/drop-in` board, kiosk QR) — DI-2 TIMED + DI-4 MATCH are fully built. Run a real drop-in session end-to-end: check-in players, rotate courts, score a match. Very impressive demo moment.
 - [ ] **Onboarding completeness gate** — Gate Drop-In participation (and check-in) on completed profile (gender, name). The handoff doc flagged this as a separate thread. Without it, new users can skip profile completion and end up in a broken state.
-- [ ] **Invoices / running tab** — `/invoices` pages exist. Verify staff can pull up a client's account and see their balance. Even a read-only view is valuable for the front desk.
+- [ ] **Invoices / running tab** — `/invoices` + `/admin/invoices` are built (Phase 9a/9b). Verify staff can pull up a client's account, see balance/outstanding, record a payment, and generate a PDF.
 - [ ] **Event Calendar** — public club calendar at `/club/[shortName]/calendar`, embeddable widget. Already built; just needs a real club's events loaded and the URL shared with members.
 
 ### Tier 3 — Ship Before Month-End
 
 - [ ] **Memberships** (`/admin/memberships`) — router is 1035 lines and admin pages exist. Fung is moving away from required memberships, but a status indicator at check-in (member vs. non-member) is low-effort and adds credibility.
-- [ ] **Polar P3+P4** — capacity enforcement on checkout, auto `isBlocking` for coaching slots.
-- [ ] **Multi-court conflict fix** — the multi-court conflict detection has a known gap (see `drop-in/multi-court-conflict-TODO.md`). Two BOOKABLE events sharing a secondary court won't conflict-detect. Fix before court rental goes live.
+- [ ] **Capacity enforcement on checkout** — confirm checkout is blocked once `maxParticipants` is reached for BOOKABLE/COACHING_SLOT, and that a `COACHING_SLOT` flips `isBlocking` on purchase. Verify against the Stripe Connect flow (not a Polar item).
 - [ ] **Security: input sanitization** — firstName/lastName regex was added but timezone validation and DB-layer enforcement should be audited. Low-effort hardening.
 
 ### Tier 4 — Post-Launch Polish
@@ -163,7 +163,7 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 - ~~Input sanitization on user fields~~ — **Partially done** (name regex added; DB-layer enforcement TBD)
 - ~~Video collection pagination~~ — **Done** (B1)
 - Coach dashboard cleanup — still pending (low priority)
-- Multi-court conflict detection gap — see `drop-in/multi-court-conflict-TODO.md`
+- **Multi-court conflict detection gap** — tracked in `drop-in/multi-court-conflict-TODO.md`. **This is NOT a quick fix.** The shipped "quick version" only loops the conflict check over courts the *new* event holds; it still matches *existing* events by their single `resourceId` column, so two multi-court BOOKABLE events sharing an extra court can double-book. The real fix is comprehensive: OR-match on `resourceId`/`resourceIds` in **both** `checkResourceConflicts` **and** `checkRecurringEventConflicts`, audit every caller + the recurring-occurrence expansion, and add regression tests — followed (separately) by the deferred `CalendarEventResource` join-table unification. Scope and sequence per the TODO doc; do not treat as a one-liner.
 
 ---
 
