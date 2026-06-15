@@ -14,6 +14,7 @@ import {
 	memberProcedure,
 	publicProcedure,
 } from "~/server/api/trpc";
+import { loadBoardCached } from "~/server/cache";
 import {
 	assertCallerInParty,
 	assertClubRow,
@@ -660,10 +661,14 @@ export const dropInRouter = createTRPCRouter({
 		.query(async ({ ctx, input }) => {
 			const user = ctx.user;
 
-			const session = await loadBoardSession(
+			// Hot polling read (every ~3s per viewer) → cached + coalesced across
+			// viewers. Mutations use the uncached loadBoardSession, so actors always
+			// see their own change immediately. See ~/server/cache/boardCache.
+			const session = await loadBoardCached(
 				ctx.db,
 				input.eventId,
 				input.occurrenceDate,
+				loadBoardSession,
 			);
 			if (!session) return null;
 			if (session.clubShortName !== user.clubShortName) {
@@ -691,10 +696,13 @@ export const dropInRouter = createTRPCRouter({
 	getPublicBoard: publicProcedure
 		.input(z.object({ eventId: z.string(), occurrenceDate: z.coerce.date() }))
 		.query(async ({ ctx, input }) => {
-			const session = await loadBoardSession(
+			// Hot kiosk polling read → cached + coalesced (shares the same entry as
+			// getBoard for this session). See ~/server/cache/boardCache.
+			const session = await loadBoardCached(
 				ctx.db,
 				input.eventId,
 				input.occurrenceDate,
+				loadBoardSession,
 			);
 			if (!session) return null;
 

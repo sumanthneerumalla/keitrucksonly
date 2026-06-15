@@ -45,6 +45,7 @@ function caller(clerkUserId: string) {
 		// biome-ignore lint/suspicious/noExplicitAny: synthetic Clerk auth for tests
 		auth: { userId: clerkUserId } as any,
 		headers: new Headers(),
+		loaders: new Map(),
 	});
 }
 
