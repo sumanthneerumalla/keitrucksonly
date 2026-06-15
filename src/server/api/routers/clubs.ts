@@ -1,6 +1,10 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
+import {
+	createTRPCRouter,
+	memberProcedure,
+	publicProcedure,
+} from "~/server/api/trpc";
 
 /**
  * Phase 15 Stage 2 — clubs router.
@@ -65,5 +69,20 @@ export const clubsRouter = createTRPCRouter({
 
 			const { facilities, ...clubFields } = club;
 			return { club: clubFields, facilities };
+		}),
+
+	/**
+	 * Phase 16 — does the caller already belong to this club? Used by the club
+	 * landing page to hide the "Join Our Club" CTA for existing members. Returns
+	 * false-y for non-members; the UI defaults to SHOWING Join when this is
+	 * unavailable (logged out / not onboarded).
+	 */
+	amIMember: memberProcedure
+		.input(z.object({ clubShortName: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const count = await ctx.db.userClub.count({
+				where: { userId: ctx.user.userId, clubShortName: input.clubShortName },
+			});
+			return { isMember: count > 0 };
 		}),
 });
