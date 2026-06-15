@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import EventDetailClient from "~/app/(app)/events/[eventId]/EventDetailClient";
+import { EventLocation } from "~/app/(app)/events/[eventId]/EventLocation";
 import {
 	buildEventJsonLd,
 	buildEventMetadata,
@@ -76,6 +77,7 @@ export default async function ClubEventPage({ params }: ClubEventPageProps) {
 				userType={userType ?? ""}
 				userId={userId ?? ""}
 			/>
+			<EventLocation facility={seoEvent.facility} />
 		</>
 	);
 }

@@ -8,6 +8,7 @@ import {
 	DAY_LABELS,
 	operatingHoursSchema,
 } from "~/lib/clubProfile";
+import { googleMapsSearchUrl } from "~/lib/maps";
 import { api } from "~/trpc/react";
 
 interface ClubFooterProps {
@@ -143,8 +144,21 @@ export function ClubFooter({ clubShortName }: ClubFooterProps) {
 									{f.name}
 								</h4>
 								<address className="space-y-1 text-[14.5px] text-white/75 not-italic">
-									{f.streetAddress && <div>{f.streetAddress}</div>}
-									{cityState && <div>{cityState}</div>}
+									{(f.streetAddress || cityState) && (
+										<a
+											href={googleMapsSearchUrl(
+												f.name,
+												f.streetAddress,
+												cityState,
+											)}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="block hover:text-white"
+										>
+											{f.streetAddress && <div>{f.streetAddress}</div>}
+											{cityState && <div>{cityState}</div>}
+										</a>
+									)}
 									{f.phone && phoneDigits && (
 										<a
 											href={`tel:${phoneDigits}`}

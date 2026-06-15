@@ -1,5 +1,6 @@
 import { MapPin, Phone } from "lucide-react";
 import { getHoursRows } from "~/lib/clubProfile";
+import { googleMapsSearchUrl } from "~/lib/maps";
 
 interface FacilityInfo {
 	facilityId: string;
@@ -24,8 +25,7 @@ function fullAddress(f: FacilityInfo): string | null {
 
 // Google Maps search link (B4 — a link, not an embed: no third-party load).
 function mapsLink(f: FacilityInfo): string {
-	const query = [f.name, fullAddress(f)].filter(Boolean).join(", ");
-	return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+	return googleMapsSearchUrl(f.name, fullAddress(f));
 }
 
 /**
