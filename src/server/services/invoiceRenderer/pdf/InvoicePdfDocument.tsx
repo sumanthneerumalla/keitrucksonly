@@ -353,14 +353,20 @@ function PageFooter({ dto }: { dto: RenderableInvoice }) {
 	});
 	return (
 		<View style={styles.footer} fixed>
-			<Text style={styles.footerText}>
-				{dto.meta.invoiceNumber} · {dto.from.clubName}
-			</Text>
-			<Text
-				render={({ pageNumber, totalPages }) =>
-					`Page ${pageNumber} of ${totalPages} · Generated ${generatedAt}`
-				}
-			/>
+			{/* Filled divider instead of borderTop — see styles.footer note
+			    (a border on this fixed element leaks a stroke through the
+			    invoice number in the header). */}
+			<View style={styles.footerDivider} />
+			<View style={styles.footerRow}>
+				<Text style={styles.footerText}>
+					{dto.meta.invoiceNumber} · {dto.from.clubName}
+				</Text>
+				<Text
+					render={({ pageNumber, totalPages }) =>
+						`Page ${pageNumber} of ${totalPages} · Generated ${generatedAt}`
+					}
+				/>
+			</View>
 		</View>
 	);
 }

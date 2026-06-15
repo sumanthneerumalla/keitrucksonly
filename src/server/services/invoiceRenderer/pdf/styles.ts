@@ -31,7 +31,11 @@ import { Font, StyleSheet } from "@react-pdf/renderer";
 //
 // react-pdf's Font.register accepts TTF only. `@expo-google-fonts/noto-sans`
 // ships per-weight TTFs at predictable paths under node_modules — load
-// Regular (400) and Bold (700) once at module init. `process.cwd()` is the
+// Regular (400) and Bold (700), plus their italic variants, once at module
+// init. The italic faces are required because some <Text> nodes set
+// `fontStyle: "italic"` (e.g. the per-line revenue-category label); without a
+// registered italic face react-pdf throws "Could not resolve font … fontStyle
+// italic" and the whole document fails to render. `process.cwd()` is the
 // Next.js app root in both `next dev` and `next start`, so this resolves
 // correctly under Docker and on a developer's laptop.
 Font.register({
@@ -43,6 +47,15 @@ Font.register({
 				"node_modules/@expo-google-fonts/noto-sans/400Regular/NotoSans_400Regular.ttf",
 			),
 			fontWeight: 400,
+			fontStyle: "normal",
+		},
+		{
+			src: path.join(
+				process.cwd(),
+				"node_modules/@expo-google-fonts/noto-sans/400Regular_Italic/NotoSans_400Regular_Italic.ttf",
+			),
+			fontWeight: 400,
+			fontStyle: "italic",
 		},
 		{
 			src: path.join(
@@ -50,6 +63,15 @@ Font.register({
 				"node_modules/@expo-google-fonts/noto-sans/700Bold/NotoSans_700Bold.ttf",
 			),
 			fontWeight: 700,
+			fontStyle: "normal",
+		},
+		{
+			src: path.join(
+				process.cwd(),
+				"node_modules/@expo-google-fonts/noto-sans/700Bold_Italic/NotoSans_700Bold_Italic.ttf",
+			),
+			fontWeight: 700,
+			fontStyle: "italic",
 		},
 	],
 });
@@ -287,6 +309,11 @@ export const styles = StyleSheet.create({
 		alignItems: "flex-end",
 	},
 	// ---------- Footer (fixed on every page) ----------
+	// NOTE: the separator is a FILLED divider View (footerDivider), not a
+	// `borderTopWidth`. A border on a `fixed`/absolute element leaks its stroke
+	// state into the page's graphics context in @react-pdf and gets drawn as a
+	// stray line through the first bold text on the page (the invoice number).
+	// A background-filled rect doesn't use the stroke path, so it's leak-safe.
 	footer: {
 		position: "absolute",
 		bottom: 24,
@@ -294,11 +321,15 @@ export const styles = StyleSheet.create({
 		right: 48,
 		fontSize: 8,
 		color: COLORS.faintInk,
+	},
+	footerDivider: {
+		height: 1,
+		backgroundColor: COLORS.border,
+		marginBottom: 6,
+	},
+	footerRow: {
 		flexDirection: "row",
 		justifyContent: "space-between",
-		borderTopWidth: 1,
-		borderTopColor: COLORS.border,
-		paddingTop: 6,
 	},
 	footerText: {},
 	notesBlock: {

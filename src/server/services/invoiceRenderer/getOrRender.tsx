@@ -48,7 +48,7 @@ import type { RenderableInvoice } from "./types";
  * retroactively re-render all cached invoices on next read. The string is
  * free-form; any change to its value invalidates every cached row.
  */
-export const CURRENT_RENDERER_VERSION = "v1.1.0";
+export const CURRENT_RENDERER_VERSION = "v1.2.0";
 
 export type InvoicePdfResult = {
 	/** PDF bytes. Backed by a Node Buffer; safe to pass to NextResponse. */
