@@ -47,7 +47,7 @@
 		"db:studio": "prisma studio",
 		"dev": "next dev --turbo",
 		"postinstall": "prisma generate",
-		"//prepare": "GUARD: `2>/dev/null || true` is required, not cruft. npm runs `prepare` during `npm ci` in the Docker build (Dockerfile), where .git — and usually the git binary — is absent, so an unguarded `git config` would fail and break the image build. The guard makes it a harmless no-op there; locally it activates the committed pre-push gate via core.hooksPath=.githooks. Do not remove the guard.",
+		"//prepare": "GUARD: `2>/dev/null || true` is required, not cruft. npm runs `prepare` during `npm ci` in the Docker build (Dockerfile), where .git \u2014 and usually the git binary \u2014 is absent, so an unguarded `git config` would fail and break the image build. The guard makes it a harmless no-op there; locally it activates the committed pre-push gate via core.hooksPath=.githooks. Do not remove the guard.",
 		"prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
 		"preview": "next build && next start",
 		"start": "next start",
@@ -132,5 +132,8 @@
 	"ct3aMetadata": {
 		"initVersion": "7.39.3"
 	},
-	"packageManager": "npm@10.7.0"
+	"packageManager": "npm@10.7.0",
+	"overrides": {
+		"esbuild": "^0.28.1"
+	}
 }
