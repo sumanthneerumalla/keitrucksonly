@@ -33,26 +33,25 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 
 **Design doc:** TBD (not in current MVP scope)
 
-### 2. Memberships ← COMPLETE (Phase 10a)
-- ✅ Membership types (different tiers per club)
-- ✅ Start date, end date
-- ✅ Freeze/postpone memberships (extend end date)
-- ✅ Membership renewal settings
-- ✅ Link memberships to clients (sell + bill-to, SellMembershipModal)
-- ✅ Visual status at check-in (display only, no enforcement)
+### 2. Memberships ← POST-MVP
+- Membership types (different tiers per club)
+- Start date, end date
+- Freeze/postpone memberships (extend end date)
+- Membership renewal settings
+- Link memberships to clients
 
 **Design doc:** `roadmap/phase10-memberships.md`
-**⚠️ Action required:** Migration `20260528010832` must be applied to production DB before enabling.
+**Note:** First customer is moving away from required memberships. Visual status indicator at check-in only (no enforcement) when built.
 
-### 3. Billing & Revenue ← COMPLETE
-- ✅ Manual package assignment by staff, pay at desk (Phase 8a)
-- ✅ Invoicing & running tab, refunds, void (Phase 9a)
-- ✅ Invoice PDF generation (Phase 9b)
-- ✅ Stripe Connect payments (Phase 12a — replaces Polar)
+### 3. Billing & Revenue
+- **MVP:** Manual package assignment by staff, pay at desk
 - Revenue categories for products/packages (Phase 5c — deferred)
-- Accounts receivable, revenue reports, package sales reports (Phase 14 — not started)
+- Invoicing & running tab (Phase 9 — post-MVP)
+- Earnings reports with date ranges (Phase 14 — post-MVP)
+- Accounts receivable, revenue reports, package sales reports (Phase 14 — post-MVP)
 
 **Design docs:** `roadmap/phase9-invoicing.md`, `roadmap/phase14-reporting.md`
+**Dependencies:** Polar integration (Phase 3 — in progress, pre-MVP)
 
 ### 4. Client Management ← COMPLETE
 - **Phase 4: User Tags** — tagging, filtering, bulk tagging, CSV export ✅
@@ -100,39 +99,71 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 
 ## Phase Status
 
+> **Note:** `designFiles/roadmap/` folder referenced below does not exist yet — docs are TBD.
+
 | Phase | Doc | Status |
 |---|---|---|
-| Phase 1: Platform foundations | — | Complete ✅ |
-| Phase 2: User Management | `phase2-user-management.md` | Complete ✅ |
-| Phase 2.5: Calendar & Public Embed | `progressPhase2_5.md` | Complete ✅ (C1–C5 done; R1/R2 deferred) |
-| Phase 3: Payments (Stripe Connect) | `progressPhase3.md` | Complete ✅ (Phase 12a Stripe replaces Polar) |
-| Phase 4: User Tags | `phase4-user-tags.md` | Complete ✅ |
-| Phase 5a: Products & Categories | — | Complete ✅ (ProductsClient, ProductFormModal) |
-| Phase 6a: Member Check-in | — | Complete ✅ (static QR + self-check-in) |
-| Phase 7a: Admin Check-in | — | Complete ✅ (admin page + sell flows) |
-| Phase 8a: Packages & Credits | — | Complete ✅ (PackagePlan, MemberPackage, credit usage) |
-| Court Rentals CR-a | — | Complete ✅ (rental window events + /rentals grid) |
-| Phase 9a: Invoicing | — | Complete ✅ (running tab, billing, refunds, void) |
-| Phase 9b: Invoice PDF | — | Complete ✅ |
-| Phase 10a: Memberships | — | Complete ✅ — **⚠️ migration 20260528010832 must be applied to prod** |
-| Phase 12a: Stripe Connect | — | Complete ✅ (PaymentProvider, checkout, webhooks) |
-| Drop-in Rotation DI-2/DI-4 | `drop-in/HANDOFF.md` | Complete ✅ (TIMED + MATCH, kiosk, QR, party join) |
-| Multi-facility (F-A through F-E) | `progressPhase2_5.md` | Complete ✅ |
-| Multi-club (M1/M2/M4) | `progressPhase2_5.md` | Complete ✅ (M3 admin invite deferred) |
-| Recurring event reg migration | — | Deferred (R1/R2 — guarded TODOs, low priority) |
-| Phase 13: Communications | — | Not Started |
-| Phase 14: Reporting | — | Not Started |
-| DI-5: GBR stitch | `drop-in/gbr-integration.md` | Not Started (blocked on owner GBR setup) |
+| Phase 1: Platform foundations | — | Complete |
+| Phase 2: User Management | `phase2-user-management.md` | Complete |
+| Phase 2.5: Calendar & Public Embed | `progressPhase2_5.md` | Complete (all C1–C5, F-A–F-E, M1–M4, U1–U5 done) |
+| Phase 3: Polar Payments | `progressPhase3.md` | In progress (P1-P4 remaining — Polar product sync + checkout + capacity + coaching slot) |
+| Phase 4: User Tags | `phase4-user-tags.md` | Complete |
+| Phase 5a: Products & Categories | `roadmap/phase5-products.md` | **Built** — router + admin UI exist (`/admin/products`, `/admin/products/categories`). Needs QA. |
+| Phase 6a: Member Check-in | `roadmap/phase6-member-checkin.md` | **Built** — 760-line router + `/checkin/[clubShortName]/[facilityId]` pages. Needs QA. |
+| Phase 7a: Admin Check-in | `roadmap/phase7-admin-checkin.md` | **Built** — `/admin/checkin` page with SellPackageModal + MemberPackagesCard. Needs QA. |
+| Phase 8a: Packages & Credits | `roadmap/phase8-packages.md` | **Built** — 590-line router + `/admin/packages` UI. Needs QA. |
+| Court Rentals CR-a | `roadmap/court-rentals.md` | **Built** — 1074-line router + `/rentals` + `/admin/rentals` UI. Needs QA. |
+| Drop-In Rotation (DI-2 + DI-4) | `drop-in/HANDOFF.md` | **Built** — Full rotation engine, kiosk/QR mode, party/group join, mobile UI. |
+| Memberships | `roadmap/phase10-memberships.md` | **Built** — 1035-line router + `/admin/memberships` (plans, types, preferences). Post-MVP. Needs QA. |
+| Phase 9+: Post-MVP | `roadmap/MASTER-ROADMAP.md` | Not Started |
 
 ---
 
-## Tech debt / prerequisites (from nextSteps.md)
+## Go-Live Checklist (Priority Order — Updated 2026-06-15)
 
-- ✅ Club landing shortname leak — FIXED (S1/S2 in progressPhase2_5.md)
-- ✅ Input sanitization on user fields — FIXED (firstName/lastName/timezone regex)
-- ✅ Video collection pagination — FIXED (B1)
-- ✅ Coach dashboard cleanup — FIXED (D2)
-- ✅ Sidebar migration to shadcn — FIXED (U1)
+> Focus: fastest path to a demoable, sellable product for a badminton club (club like Fung's). Each item below is one meaningful feature block a club operator would actually use in day one.
+
+### Tier 1 — Must Have Before First Demo
+
+- [ ] **QA: Admin Check-in flow** (`/admin/checkin`) — staff sells packages, marks members checked in. This is the front-desk workflow and the first thing a club will try. Verify SellPackageModal, MemberPackagesCard, and the check-in log work end-to-end.
+- [ ] **QA: Member Self Check-in** (`/checkin/[clubShortName]/[facilityId]`) — member scans QR, checks themselves in. Verify the static QR works and check-in registers correctly.
+- [ ] **QA: Products & Categories CRUD** (`/admin/products`, `/admin/products/categories`) — admin creates a product (e.g. "Drop-In $10"), assigns a category. This is the prerequisite for selling anything.
+- [ ] **QA: Packages & Credits** (`/admin/packages`) — admin creates a package (e.g. "10 Drop-Ins"), sells it via `/admin/checkin`, member's credits decrement. The core revenue loop.
+- [ ] **QA: Court Rentals** (`/rentals`, `/admin/rentals`) — member books a court slot; admin sees it on the board. Club's #2 revenue source.
+- [ ] **Wire payment** — Polar P1+P2: sync products to Polar, checkout redirect for BOOKABLE events and package purchases. Without this, all sales are cash/manual. Can demo without it but need it before go-live.
+
+### Tier 2 — High Value, Ship in Week 2
+
+- [ ] **Drop-In Rotation demo** (`/drop-in` board, kiosk QR) — DI-2 TIMED + DI-4 MATCH are fully built. Run a real drop-in session end-to-end: check-in players, rotate courts, score a match. Very impressive demo moment.
+- [ ] **Onboarding completeness gate** — Gate Drop-In participation (and check-in) on completed profile (gender, name). The handoff doc flagged this as a separate thread. Without it, new users can skip profile completion and end up in a broken state.
+- [ ] **Invoices / running tab** — `/invoices` pages exist. Verify staff can pull up a client's account and see their balance. Even a read-only view is valuable for the front desk.
+- [ ] **Event Calendar** — public club calendar at `/club/[shortName]/calendar`, embeddable widget. Already built; just needs a real club's events loaded and the URL shared with members.
+
+### Tier 3 — Ship Before Month-End
+
+- [ ] **Memberships** (`/admin/memberships`) — router is 1035 lines and admin pages exist. Fung is moving away from required memberships, but a status indicator at check-in (member vs. non-member) is low-effort and adds credibility.
+- [ ] **Polar P3+P4** — capacity enforcement on checkout, auto `isBlocking` for coaching slots.
+- [ ] **Multi-court conflict fix** — the multi-court conflict detection has a known gap (see `drop-in/multi-court-conflict-TODO.md`). Two BOOKABLE events sharing a secondary court won't conflict-detect. Fix before court rental goes live.
+- [ ] **Security: input sanitization** — firstName/lastName regex was added but timezone validation and DB-layer enforcement should be audited. Low-effort hardening.
+
+### Tier 4 — Post-Launch Polish
+
+- [ ] Communications / email campaigns (Phase 13)
+- [ ] Reports / A/R dashboard (Phase 14)
+- [ ] GBR stitch (DI-5) — identity sync + 3 edge functions
+- [ ] CI/CD pipeline, monitoring, Sentry/Datadog
+- [ ] Per-club-profiles and M3 (admin invite flow)
+
+---
+
+## Tech debt / prerequisites (updated 2026-06-15)
+
+- ~~Club landing shortname leak~~ — **Fixed** (S1 + S2 done in Phase 2.5)
+- ~~Sidebar migration to shadcn~~ — **Done** (U1–U2)
+- ~~Input sanitization on user fields~~ — **Partially done** (name regex added; DB-layer enforcement TBD)
+- ~~Video collection pagination~~ — **Done** (B1)
+- Coach dashboard cleanup — still pending (low priority)
+- Multi-court conflict detection gap — see `drop-in/multi-court-conflict-TODO.md`
 
 ---
 
