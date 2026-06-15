@@ -121,7 +121,11 @@ export function UpcomingEventsCard({
 						return (
 							<Link
 								key={`${ev.eventId}-${startDate.toISOString()}`}
-								href={`/events/${ev.eventId}`}
+								href={
+									clubShortName
+										? `/club/${clubShortName}/events/${ev.eventId}`
+										: `/events/${ev.eventId}`
+								}
 								className="flex items-center gap-3 rounded-lg border border-gray-100 p-2.5 transition-colors hover:bg-gray-50 hover:shadow-sm"
 							>
 								<div className="w-20 shrink-0 leading-tight">

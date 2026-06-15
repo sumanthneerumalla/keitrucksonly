@@ -168,6 +168,16 @@ export function matchClubShortUrlPathname(
 		};
 	}
 
+	// /<short>/events/<eventId> (Phase 16 Step 5) — club-chromed public event
+	// page. Single trailing id only; no index (the events live on the landing
+	// page + calendar).
+	if (rest[0] === "events" && rest.length === 2 && rest[1]) {
+		return {
+			shortname: short,
+			rewritePath: `/club/${short}/events/${rest[1]}`,
+		};
+	}
+
 	// Any other deeper path (e.g. /<short>/dashboard) is NOT a club short URL.
 	return null;
 }
