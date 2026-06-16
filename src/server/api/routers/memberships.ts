@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { membershipAddOnsSchema } from "~/lib/membershipAddOns";
 import {
 	clubAdminProcedure,
 	createTRPCRouter,
@@ -12,6 +13,7 @@ import {
 	buildPartyAuditEntries,
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
+import { getMembershipCoverage } from "~/server/utils/membershipCoverage";
 import { sellMembershipInternal } from "~/server/utils/sellMembership";
 
 // ============================================================
@@ -142,9 +144,16 @@ const planFieldsSchema = z.object({
 	billingInterval: z.number().int().min(1).max(1000),
 	billingUnit: billingUnitSchema,
 	billingCycles: z.number().int().min(1).max(1000).nullable(),
-	feePerTermInCents: z.number().int().min(0),
+	// $1M ceilings mirror the add-on / ad-hoc-charge caps and keep base + fees +
+	// add-ons well under the Int4 invoice columns (#94).
+	feePerTermInCents: z.number().int().min(0).max(100_000_000),
 	// One-time registration fee charged at signup (staff-waivable at sale).
-	initiationFeeInCents: z.number().int().min(0).default(0),
+	initiationFeeInCents: z.number().int().min(0).max(100_000_000).default(0),
+	// Phase 10c — covered-people hint (display only; 1 = individual, N>1 = covers
+	// family w/ stated cap N, null = covers family no cap). Never enforced.
+	memberCapacity: z.number().int().min(1).max(1000).nullable().default(1),
+	// Phase 10c — flexible add-on fee menu (checkbox-selected at sale).
+	addOnFees: membershipAddOnsSchema.default([]),
 });
 
 const createPlanSchema = planFieldsSchema;
@@ -173,6 +182,8 @@ const sellSchema = z.object({
 	// Charge the plan's one-time registration fee (modal defaults this from
 	// "member has no prior non-voided membership"; staff can override).
 	chargeInitiationFee: z.boolean().optional(),
+	// Phase 10c — keys of the plan's add-on fee menu rows the staff checked.
+	selectedAddOnKeys: z.array(z.string()).optional(),
 });
 
 const listForMemberSchema = z.object({
@@ -375,6 +386,8 @@ export const membershipsRouter = createTRPCRouter({
 					billingCycles: input.billingCycles,
 					feePerTermInCents: input.feePerTermInCents,
 					initiationFeeInCents: input.initiationFeeInCents,
+					memberCapacity: input.memberCapacity,
+					addOnFees: input.addOnFees,
 				},
 			});
 			return { plan };
@@ -413,6 +426,8 @@ export const membershipsRouter = createTRPCRouter({
 					billingCycles: input.billingCycles,
 					feePerTermInCents: input.feePerTermInCents,
 					initiationFeeInCents: input.initiationFeeInCents,
+					memberCapacity: input.memberCapacity,
+					addOnFees: input.addOnFees,
 					...(input.isActive !== undefined && { isActive: input.isActive }),
 				},
 			});
@@ -509,6 +524,7 @@ export const membershipsRouter = createTRPCRouter({
 				notes: input.notes,
 				billToUserId: input.billToUserId,
 				chargeInitiationFee: input.chargeInitiationFee,
+				selectedAddOnKeys: input.selectedAddOnKeys,
 			},
 		});
 	}),
@@ -554,6 +570,9 @@ export const membershipsRouter = createTRPCRouter({
 					freezeReason: true,
 					suspendReason: true,
 					cancelReason: true,
+					// Phase 10c — lets the card show the coverage hint (Individual /
+					// Covers up to N / Covers family).
+					memberCapacity: true,
 					membershipPlan: {
 						select: {
 							description: true,
@@ -564,6 +583,34 @@ export const membershipsRouter = createTRPCRouter({
 				orderBy: [{ startDate: "desc" }, { createdAt: "desc" }],
 			});
 			return { memberships };
+		}),
+
+	/**
+	 * Phase 10c — active membership COVERAGE for a user (display only). Unlike
+	 * `listForMember` (the user's OWN memberships, with history), this widens to
+	 * include memberships SHARED with the user via their FamilyGroup, each tagged
+	 * `coverageSource: "own" | "family"`. Used by the check-in card so a covered
+	 * family member shows "Covered via «Family Plan»". No access gate.
+	 */
+	coverageForMember: facilityProcedure
+		.input(listForMemberSchema)
+		.query(async ({ ctx, input }) => {
+			const member = await ctx.db.user.findFirst({
+				where: { userId: input.userId, clubShortName: ctx.user.clubShortName },
+				select: { userId: true },
+			});
+			if (!member) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Member not found in this club",
+				});
+			}
+			const coverage = await getMembershipCoverage(
+				ctx.db,
+				input.userId,
+				ctx.user.clubShortName,
+			);
+			return { coverage };
 		}),
 
 	// ------------------------------------------------------------------

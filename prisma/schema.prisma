@@ -1678,6 +1678,22 @@ model MembershipPlan {
   // Per-sale override lives on MemberMembership.autoRenew. See Auto-Renew Toggle §.
   autoRenew            Boolean        @default(false)
   sellOnline           Boolean        @default(false) // (future)
+  // Phase 10c — covered-people HINT (display/comparison only, NEVER enforced):
+  //   1    = individual (covers only the member),
+  //   N>1  = covers the member's FamilyGroup; check-in shows "covers N" and subtly
+  //          highlights when the family is bigger than N,
+  //   null = covers family with no stated cap.
+  // Shareability derives from this (memberCapacity != 1 → shares with family).
+  // Snapshotted onto MemberMembership at sale so later plan edits don't change an
+  // existing membership's coverage.
+  memberCapacity       Int?           @default(1)
+  // Phase 10c — flexible add-on fee MENU. JSON list (matches the
+  // Club.membershipPreferences / ClubFacility.operatingHours JSON-bag precedent).
+  // CONFIG only — selected add-ons snapshot to proper Int-cents FEE invoice lines
+  // at sale. Shape (zod-validated in app code):
+  //   [{ key: string, label: string, amountInCents: int, cadence: "once"|"recurring" }]
+  // `key` is a stable slug so the future 10b generator can match recurring add-ons.
+  addOnFees            Json?
   isActive             Boolean        @default(true)
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
@@ -1712,6 +1728,11 @@ model MemberMembership {
   // STORED lifecycle: "active" | "cancelled" | "suspended" | "frozen" | "voided".
   // "upcoming"/"active"/"expired" are DERIVED from startDate/endDate on read.
   status                  String         @db.VarChar(20)
+  // Phase 10c — snapshot of the plan's memberCapacity at sale. Coverage shareability
+  // + the displayed cap derive from THIS (not the live plan): memberCapacity != 1
+  // covers the primary's FamilyGroup. Display/comparison only — never enforced.
+  // See getMembershipCoverage.
+  memberCapacity          Int?           @default(1)
   startDate               DateTime // today or FUTURE (>= today; future -> derived "upcoming"). Backdating disallowed in 10a.
   endDate                 DateTime? // calendar term end (Feb 15 -> Mar 14); null = indefinite. Expiry computed-on-read (#27).
   nextBillingDate         DateTime? // unused in 10a (no auto-renew); set only when the generator runs (future).

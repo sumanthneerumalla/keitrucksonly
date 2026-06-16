@@ -8,6 +8,7 @@ import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
 import { Select } from "~/app/_components/shared/ui/select";
+import { parseMembershipAddOns } from "~/lib/membershipAddOns";
 import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
 
@@ -53,6 +54,9 @@ type MembershipPlanRow = {
 	billingUnit: string;
 	feePerTermInCents: number;
 	initiationFeeInCents: number;
+	// Phase 10c — coverage hint + add-on fee menu (JSON; parsed defensively).
+	memberCapacity: number | null;
+	addOnFees: unknown;
 	membershipType: { name: string } | null;
 };
 
@@ -181,6 +185,11 @@ export default function SellMembershipModal({
 	// changes — see the effect below the listForMember query.
 	const [chargeInitFee, setChargeInitFee] = useState(false);
 
+	// --- Phase 10c add-on fees — keys of the selected menu rows. ---
+	const [selectedAddOnKeys, setSelectedAddOnKeys] = useState<Set<string>>(
+		new Set(),
+	);
+
 	// --- Bill-to / payer — the shared BillToUserPicker (as SellPackageModal). ---
 	const [billToUser, setBillToUser] = useState<SearchUser | null>(null);
 	const [billToTypedButUnselected, setBillToTypedButUnselected] =
@@ -263,6 +272,24 @@ export default function SellMembershipModal({
 
 	const startInFuture = startDate > today;
 
+	// Phase 10c — the selected plan's add-on fee menu (parsed defensively) + the
+	// running total of the checked add-ons. Selection resets when the plan changes.
+	const planAddOns = useMemo(
+		() => parseMembershipAddOns(selectedPlan?.addOnFees),
+		[selectedPlan],
+	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset selection on plan change only
+	useEffect(() => {
+		setSelectedAddOnKeys(new Set());
+	}, [selectedPlanId]);
+	const selectedAddOnsTotalInCents = planAddOns
+		.filter((a) => selectedAddOnKeys.has(a.key))
+		.reduce((sum, a) => sum + a.amountInCents, 0);
+	const initFeeDue = chargeInitFee ? planInitFeeInCents : 0;
+	const totalDueInCents = selectedPlan
+		? selectedPlan.feePerTermInCents + initFeeDue + selectedAddOnsTotalInCents
+		: 0;
+
 	const sellMutation = api.memberships.sell.useMutation({
 		onSuccess: () => {
 			if (consumerId) {
@@ -310,6 +337,7 @@ export default function SellMembershipModal({
 			startDate,
 			notes: notes.trim() || undefined,
 			chargeInitiationFee: chargeInitFee,
+			selectedAddOnKeys: Array.from(selectedAddOnKeys),
 			// Only send billToUserId when a different payer was explicitly picked.
 			...(billToUser ? { billToUserId: billToUser.userId } : {}),
 		});
@@ -551,13 +579,27 @@ export default function SellMembershipModal({
 										<div className="text-[var(--foreground)]">
 											{formatCents(planInitFeeInCents)}
 										</div>
+									</>
+								)}
+								{planAddOns
+									.filter((a) => selectedAddOnKeys.has(a.key))
+									.map((a) => (
+										<div key={a.key} className="contents">
+											<div className="text-[var(--muted-foreground)]">
+												{a.label}
+											</div>
+											<div className="text-[var(--foreground)]">
+												{formatCents(a.amountInCents)}
+											</div>
+										</div>
+									))}
+								{totalDueInCents !== selectedPlan.feePerTermInCents && (
+									<>
 										<div className="text-[var(--muted-foreground)]">
 											Total due
 										</div>
 										<div className="font-semibold text-[var(--foreground)]">
-											{formatCents(
-												selectedPlan.feePerTermInCents + planInitFeeInCents,
-											)}
+											{formatCents(totalDueInCents)}
 										</div>
 									</>
 								)}
@@ -585,6 +627,37 @@ export default function SellMembershipModal({
 										</span>
 									</span>
 								</label>
+							)}
+							{planAddOns.length > 0 && (
+								<div className="mt-3 space-y-1.5 border-[var(--border)] border-t pt-2">
+									<div className="text-[var(--muted-foreground)] text-xs">
+										Add-on fees
+									</div>
+									{planAddOns.map((a) => (
+										<label
+											key={a.key}
+											className="flex cursor-pointer select-none items-center gap-2 text-sm"
+										>
+											<input
+												type="checkbox"
+												checked={selectedAddOnKeys.has(a.key)}
+												disabled={saving}
+												onChange={(e) =>
+													setSelectedAddOnKeys((prev) => {
+														const next = new Set(prev);
+														if (e.target.checked) next.add(a.key);
+														else next.delete(a.key);
+														return next;
+													})
+												}
+												className="h-4 w-4 rounded border-input accent-[var(--primary)]"
+											/>
+											<span className="text-[var(--foreground)]">
+												{a.label} — {formatCents(a.amountInCents)}
+											</span>
+										</label>
+									))}
+								</div>
 							)}
 							<p className="mt-3 border-[var(--border)] border-t pt-2 text-[var(--muted-foreground)] text-xs">
 								No proration — a full term is charged at sale. Final dates are
