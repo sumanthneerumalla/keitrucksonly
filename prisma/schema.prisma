@@ -2208,3 +2208,44 @@ model PlatformConfig {
 
   @@map("PlatformConfig")
 }
+
+/// Browser-posted CSP violation reports (report-uri / report-to), collected
+/// during the Content-Security-Policy rollout — see src/lib/csp.ts and
+/// src/app/api/csp-report/route.ts. Pure append-only log sink with no relations;
+/// read/triage via the DB console, then prune the table once enforce is stable.
+/// The endpoint is public and the values are browser-supplied, so treat every
+/// column as untrusted input (we only ever store it, never act on it).
+model CspReport {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  // Best-effort attribution. The Clerk session cookie only rides along on
+  // same-origin report-uri POSTs from a logged-in user; it is null for
+  // logged-out visitors (public pages) and for the credential-less Reporting
+  // API. Join to User.clerkUserId to see who hit the violation.
+  clerkUserId String? @db.VarChar(64)
+  // Source IP (Caddy X-Forwarded-For) — for spotting floods during triage.
+  ip          String? @db.VarChar(64)
+  // "report" while in report-only mode, "enforce" once blocking — lets you tell
+  // a would-have-blocked observation from an actually-blocked one in one table.
+  disposition        String?  @db.VarChar(20)
+  documentUri        String?  @db.Text
+  referrer           String?  @db.Text
+  blockedUri         String?  @db.Text
+  effectiveDirective String?  @db.VarChar(255)
+  violatedDirective  String?  @db.VarChar(255)
+  originalPolicy     String?  @db.Text
+  sourceFile         String?  @db.Text
+  lineNumber         Int?
+  columnNumber       Int?
+  scriptSample       String?  @db.Text
+  statusCode         Int?
+  userAgent          String?  @db.Text
+  // Full original payload (one report-uri body or one Reporting-API entry) so
+  // nothing is lost if a field above wasn't mapped.
+  raw Json?
+
+  @@index([createdAt])
+  @@index([effectiveDirective])
+  @@index([clerkUserId])
+  @@map("CspReport")
+}

@@ -23,6 +23,13 @@ export const env = createEnv({
 		STRIPE_WEBHOOK_SECRET_CONNECT: z.string().min(1).optional(),
 		STRIPE_LIVEMODE: z.enum(["true", "false"]).default("false"),
 		STRIPE_PLATFORM_ACCOUNT_NAME: z.string().min(1).optional(),
+		// Content Security Policy rollout stage (see src/lib/csp.ts + middleware).
+		//   report-only → send Content-Security-Policy-Report-Only (logs violations,
+		//                  blocks nothing) — DEFAULT, safe to deploy
+		//   enforce     → send the blocking Content-Security-Policy header; this is
+		//                  what clears the Aikido "CSP header not set" finding
+		//   off         → send no CSP header at all (escape hatch)
+		CSP_MODE: z.enum(["off", "report-only", "enforce"]).default("report-only"),
 	},
 
 	/**
@@ -63,6 +70,7 @@ export const env = createEnv({
 		STRIPE_WEBHOOK_SECRET_CONNECT: process.env.STRIPE_WEBHOOK_SECRET_CONNECT,
 		STRIPE_LIVEMODE: process.env.STRIPE_LIVEMODE,
 		STRIPE_PLATFORM_ACCOUNT_NAME: process.env.STRIPE_PLATFORM_ACCOUNT_NAME,
+		CSP_MODE: process.env.CSP_MODE,
 		NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:
 			process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
 		NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,

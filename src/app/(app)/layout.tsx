@@ -1,5 +1,6 @@
 import { ClerkProvider } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
+import { headers } from "next/headers";
 import { cache } from "react";
 import AuthedLayout from "~/app/_components/client/layouts/AuthedLayout";
 import { Footer } from "~/app/_components/client/public/Footer";
@@ -55,8 +56,12 @@ export default async function AppLayout({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
 	const initialUser = await getLayoutUser();
+	// CSP nonce minted per-request by src/middleware.ts (forwarded as `x-nonce`).
+	// Passing it to ClerkProvider lets Clerk's injected scripts satisfy the
+	// `script-src 'strict-dynamic'` policy once CSP_MODE flips to `enforce`.
+	const nonce = (await headers()).get("x-nonce") ?? undefined;
 	return (
-		<ClerkProvider>
+		<ClerkProvider dynamic nonce={nonce}>
 			<TRPCReactProvider>
 				{/* Global toast stack. Mounted once here so any descendant calling
 				 * useToast() shares one queue. Container renders inside the
