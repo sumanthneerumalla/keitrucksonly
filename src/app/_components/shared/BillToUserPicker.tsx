@@ -2,6 +2,7 @@
 
 import { ChevronsUpDown } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import {
 	Command,
 	CommandEmpty,
@@ -71,15 +72,9 @@ export default function BillToUserPicker({
 }: BillToUserPickerProps) {
 	const pickerId = useId();
 	const [query, setQuery] = useState<string>("");
-	const [debouncedQuery, setDebouncedQuery] = useState<string>("");
+	const debouncedQuery = useDebouncedValue(query, 200);
 	const [showDropdown, setShowDropdown] = useState<boolean>(false);
 	const wrapperRef = useRef<HTMLDivElement>(null);
-
-	// 200ms debounce on the query
-	useEffect(() => {
-		const t = setTimeout(() => setDebouncedQuery(query), 200);
-		return () => clearTimeout(t);
-	}, [query]);
 
 	// Close dropdown on outside click
 	useEffect(() => {

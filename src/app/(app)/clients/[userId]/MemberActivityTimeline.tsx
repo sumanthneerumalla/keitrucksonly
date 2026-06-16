@@ -2,6 +2,7 @@
 
 import { History } from "lucide-react";
 import { Button } from "~/app/_components/shared/Button";
+import { formatPersonName } from "~/lib/invoice/format";
 import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
 
@@ -32,6 +33,10 @@ const ACTION_LABELS: Record<string, string> = {
 	// Phase 9a — additional charge sources
 	"charge.adhoc": "Charge added",
 	"charge.event_registration": "Event charge",
+	// Phase 9c — invoice notes
+	"invoice_note.added": "Invoice note added",
+	"invoice_note.edited": "Invoice note edited",
+	"invoice_note.removed": "Invoice note removed",
 	// Phase 10a — memberships
 	"membership.sold": "Membership sold",
 	"membership.frozen": "Membership frozen",
@@ -59,13 +64,6 @@ function formatTimestamp(d: Date | string): string {
 		hour: "numeric",
 		minute: "2-digit",
 	});
-}
-
-function formatPersonName(p: {
-	firstName: string | null;
-	lastName: string | null;
-}): string {
-	return `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || "(no name)";
 }
 
 // Pull a few common metadata fields out for the row subline. Missing keys

@@ -61,11 +61,20 @@ type MembershipRow = {
 	freezeReason: string | null;
 	suspendReason: string | null;
 	cancelReason: string | null;
+	// Phase 10c — coverage hint (1 = individual, N>1 = cap, null = family/no cap).
+	memberCapacity: number | null;
 	membershipPlan: {
 		description: string;
 		membershipType: { name: string } | null;
 	} | null;
 };
+
+// Phase 10c — coverage label; null for individual plans (no need to clutter).
+function coverageLabel(cap: number | null): string | null {
+	if (cap === null) return "Covers family";
+	if (cap <= 1) return null;
+	return `Covers up to ${cap}`;
+}
 
 // The set of remark-collecting actions. Each opens an AlertDialog with a
 // required textarea.
@@ -152,6 +161,18 @@ export default function MemberMembershipsCard({
 	const { data, isLoading } = api.memberships.listForMember.useQuery(
 		{ userId },
 		{ enabled: !!userId },
+	);
+
+	// Phase 10c — memberships this person is covered by THROUGH their family (a
+	// shareable membership a family member holds). Shown read-only here so the
+	// coverage "belongs" to them on their own profile, even though it's billed to
+	// (and managed from) the primary's profile.
+	const { data: coverageData } = api.memberships.coverageForMember.useQuery(
+		{ userId },
+		{ enabled: !!userId },
+	);
+	const familyShared = (coverageData?.coverage.rows ?? []).filter(
+		(r) => r.coverageSource === "family",
 	);
 
 	const memberships = (data?.memberships ?? []) as MembershipRow[];
@@ -275,6 +296,11 @@ export default function MemberMembershipsCard({
 					<span>
 						{formatDate(row.startDate)} – {formatDate(row.endDate)}
 					</span>
+					{coverageLabel(row.memberCapacity) && (
+						<span className="rounded-full bg-[var(--muted)] px-2 py-0.5">
+							{coverageLabel(row.memberCapacity)}
+						</span>
+					)}
 				</div>
 
 				{/* Reason subtext for paused/terminal rows */}
@@ -430,7 +456,9 @@ export default function MemberMembershipsCard({
 
 				{isLoading ? (
 					<p className="text-[var(--muted-foreground)] text-xs">Loading...</p>
-				) : current.length === 0 && history.length === 0 ? (
+				) : current.length === 0 &&
+					history.length === 0 &&
+					familyShared.length === 0 ? (
 					<p className="text-[var(--muted-foreground)] text-xs">
 						No memberships
 					</p>
@@ -443,6 +471,46 @@ export default function MemberMembershipsCard({
 						) : (
 							current.map((row) => renderRow(row, false))
 						)}
+
+						{/* Phase 10c — memberships covering this person through their
+						    family. Read-only: managed from the primary's profile. */}
+						{familyShared.map((row) => {
+							const display = membershipStatusDisplay({
+								status: row.status,
+								startDate: row.startDate,
+								endDate: row.endDate,
+							});
+							const planName =
+								row.membershipTypeName || row.planDescription || "Membership";
+							return (
+								<div
+									key={row.memberMembershipId}
+									className="rounded border border-[var(--border)] border-dashed p-2"
+								>
+									<div className="flex items-start justify-between gap-2">
+										<div className="min-w-0">
+											<p className="truncate font-medium text-[var(--foreground)] text-sm">
+												{planName}
+											</p>
+											<p className="text-[var(--muted-foreground)] text-xs">
+												Through family
+												{row.sharedByName ? ` · via ${row.sharedByName}` : ""}
+											</p>
+										</div>
+										<span
+											className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium text-xs ${MEMBERSHIP_TONE_BADGE_STYLES[display.tone]}`}
+										>
+											{display.label}
+										</span>
+									</div>
+									{coverageLabel(row.memberCapacity) && (
+										<p className="mt-1 text-[var(--muted-foreground)] text-xs">
+											{coverageLabel(row.memberCapacity)}
+										</p>
+									)}
+								</div>
+							);
+						})}
 
 						{history.length > 0 && (
 							<div className="pt-1">

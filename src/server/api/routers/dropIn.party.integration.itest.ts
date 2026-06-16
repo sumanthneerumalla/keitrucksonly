@@ -10,30 +10,22 @@
  * clerkUserIds so they never collide with real seed data.
  *
  * Covered: T8 B2 snap, T9 C1 reject, T12-T14 disband variants, T15
- * requeueParty filter, T16 PAUSED block, T19 guest GBR suppression, T21
- * addToQueue creates one solo party per userId.
+ * requeueParty filter, T16 PAUSED block, T21 addToQueue creates one solo
+ * party per userId.
  *
  * Not covered here (deferred — they require parallel transactions): T11
- * concurrent formNext+tickTimed claim race, T18 addPartyMember race during
+ * concurrent formNext+rotateExpiredSlots claim race, T18 addPartyMember race during
  * selection.
  */
 
+import { randomUUID } from "node:crypto";
 import {
 	type DropInSessionStatus,
 	PrismaClient,
 	UserType,
 } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
-import { randomUUID } from "node:crypto";
-import {
-	afterAll,
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	it,
-} from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { dropInRouter } from "~/server/api/routers/dropIn";
 import { createCallerFactory } from "~/server/api/trpc";
 
@@ -53,6 +45,7 @@ function caller(clerkUserId: string) {
 		// biome-ignore lint/suspicious/noExplicitAny: synthetic Clerk auth for tests
 		auth: { userId: clerkUserId } as any,
 		headers: new Headers(),
+		loaders: new Map(),
 	});
 }
 
@@ -64,7 +57,7 @@ interface TestUser {
 
 async function createTestUser(
 	firstName: string,
-	overrides: { userType?: UserType; isGuest?: boolean } = {},
+	overrides: { userType?: UserType } = {},
 ): Promise<TestUser> {
 	const clerkUserId = `test_${randomUUID()}`;
 	const u = await db.user.create({
@@ -73,7 +66,6 @@ async function createTestUser(
 			firstName,
 			lastName: "Test",
 			userType: overrides.userType ?? UserType.STUDENT,
-			isGuest: overrides.isGuest ?? false,
 			clubShortName: CLUB_SHORTNAME,
 		},
 		select: { userId: true, clerkUserId: true, firstName: true },
@@ -306,7 +298,9 @@ describe("disbandParty + leaveParty", () => {
 		const live = await db.dropInCheckIn.findMany({
 			where: {
 				partyId: party.partyId,
-				status: { in: ["WAITING", "IDLE", "PLAYING", "AWAITING_RESULT", "DONE"] },
+				status: {
+					in: ["WAITING", "IDLE", "PLAYING", "AWAITING_RESULT", "DONE"],
+				},
 			},
 		});
 		expect(live.length).toBe(0);
@@ -441,79 +435,6 @@ describe("PAUSED session guards", () => {
 });
 
 // =============================================================================
-// T19 — Guests + GBR suppression (covered at the algorithm level by
-// pickNextOccupants tests T10; here we verify createGuest creates the right
-// User row shape and searchGuests finds it).
-// =============================================================================
-
-describe("createGuest + searchGuests", () => {
-	let staff: TestUser;
-	let createdGuestIds: string[] = [];
-
-	beforeAll(async () => {
-		staff = await createTestUser("Staff", { userType: UserType.PLATFORM_ADMIN });
-	});
-	afterAll(async () => {
-		await db.user.deleteMany({ where: { userId: { in: createdGuestIds } } });
-		await db.user.delete({ where: { userId: staff.userId } }).catch(() => {});
-	});
-
-	it("creates a guest with isGuest=true and a synthetic clerkUserId", async () => {
-		const guest = await caller(staff.clerkUserId).createGuest({
-			firstName: `Test${randomUUID().slice(0, 8)}`,
-			lastName: "Guest",
-		});
-		createdGuestIds.push(guest.userId);
-
-		const row = await db.user.findUniqueOrThrow({
-			where: { userId: guest.userId },
-			select: { isGuest: true, clerkUserId: true, guestCreatedBy: true },
-		});
-		expect(row.isGuest).toBe(true);
-		expect(row.clerkUserId.startsWith("guest_")).toBe(true);
-		expect(row.guestCreatedBy).toBe(staff.userId);
-	});
-
-	it("rejects duplicate first+last in same club unless allowDuplicate", async () => {
-		const name = `Dup${randomUUID().slice(0, 8)}`;
-		const first = await caller(staff.clerkUserId).createGuest({
-			firstName: name,
-			lastName: "Test",
-		});
-		createdGuestIds.push(first.userId);
-
-		await expect(
-			caller(staff.clerkUserId).createGuest({
-				firstName: name,
-				lastName: "Test",
-			}),
-		).rejects.toThrow(/already exists/i);
-
-		const dup = await caller(staff.clerkUserId).createGuest({
-			firstName: name,
-			lastName: "Test",
-			allowDuplicate: true,
-		});
-		createdGuestIds.push(dup.userId);
-		expect(dup.userId).not.toBe(first.userId);
-	});
-
-	it("searchGuests finds by name prefix, case-insensitive", async () => {
-		const uniq = `Search${randomUUID().slice(0, 8)}`;
-		const guest = await caller(staff.clerkUserId).createGuest({
-			firstName: uniq,
-			lastName: "Last",
-		});
-		createdGuestIds.push(guest.userId);
-
-		const hits = await caller(staff.clerkUserId).searchGuests({
-			query: uniq.toLowerCase().slice(0, 5),
-		});
-		expect(hits.some((h) => h.userId === guest.userId)).toBe(true);
-	});
-});
-
-// =============================================================================
 // T21 — Staff addToQueue creates one solo party per userId
 // =============================================================================
 
@@ -525,10 +446,10 @@ describe("addToQueue (staff bulk-add)", () => {
 
 	beforeEach(async () => {
 		sessionId = await createTestSession({});
-		staff = await createTestUser("Staff", { userType: UserType.PLATFORM_ADMIN });
-		users = await Promise.all(
-			["A", "B", "C"].map((n) => createTestUser(n)),
-		);
+		staff = await createTestUser("Staff", {
+			userType: UserType.PLATFORM_ADMIN,
+		});
+		users = await Promise.all(["A", "B", "C"].map((n) => createTestUser(n)));
 		allUserIds = [staff.userId, ...users.map((u) => u.userId)];
 	});
 	afterEach(async () => {

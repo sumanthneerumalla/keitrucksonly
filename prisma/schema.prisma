@@ -19,11 +19,30 @@ datasource db {
 
 // Club model - stores club information
 model Club {
-  clubShortName         String   @id
-  clubName              String   @unique
+  clubShortName         String        @id
+  clubName              String        @unique
+  // Phase 16 D2 (2026-06-12): club's canonical public base URL, e.g.
+  // "https://cba.facilitypresence.com" or a customer-owned domain. NULL =
+  // default platform URL https://facilitypresence.com/<clubShortName>.
+  // ALL public URL generation (canonical tags, sitemap, JSON-LD, OG) must go
+  // through getClubBaseUrl() in src/lib/clubPublicUrl.ts — never hardcode.
+  canonicalDomain       String?       @db.VarChar(255)
+  // Phase 16 Step 2 (D3): public branding for the club landing page. All
+  // optional — landing sections render only when data is present.
+  tagline               String?       @db.VarChar(200)
+  description           String?       @db.Text
+  websiteUrl            String?       @db.VarChar(500)
+  // { facebook?, instagram?, x?, youtube?, tiktok? } — app-validated by
+  // socialLinksSchema in src/lib/clubProfile.ts (same Json-bag pattern as
+  // membershipPreferences).
+  socialLinks           Json?
+  logoImageId           String?
+  logoImage             ContentImage? @relation("ContentImageClubLogos", fields: [logoImageId], references: [id])
+  heroImageId           String?
+  heroImage             ContentImage? @relation("ContentImageClubHeroes", fields: [heroImageId], references: [id])
   // Phase 9-EOD (2026-05-02): per-club sequential invoice number counter.
   // Atomically incremented inside the same $transaction as the invoice insert.
-  nextInvoiceNumber     Int      @default(1)
+  nextInvoiceNumber     Int           @default(1)
   // Phase 10a (2026-05-26): club-level membership settings bag (MembershipPreferences).
   // App-validated JSON, NOT DB columns — shape lives in app code (requireRemarkFor*,
   // billingAnchorMode/billingAnchorDay/prorateFirstTerm/cancelRefundStrategy/
@@ -31,8 +50,8 @@ model Club {
   // to its own table only if it grows. See designFiles/roadmap/phase10-memberships.md
   // "Membership Preferences".
   membershipPreferences Json?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   users              User[]
   memberships        UserClub[]
@@ -164,15 +183,6 @@ model User {
   // Gender — set-once (immutable for the user once set), required at onboarding (B1).
   // Feeds GBR's rating category; mapped to GBR's lowercase male/female at provision.
   gender Gender?
-
-  // Guest support — a guest is a User row with no Clerk account (synthetic
-  // clerkUserId = 'guest_<cuid2>'). Used for drop-in walk-ins who don't have
-  // an FP account. Excluded from leaderboard / GBR sync (see
-  // designFiles/drop-in/group-join-feature-plan.md §6).
-  isGuest        Boolean @default(false)
-  guestCreatedBy String?
-  guestCreator   User?   @relation("GuestCreator", fields: [guestCreatedBy], references: [userId], onDelete: SetNull)
-  createdGuests  User[]  @relation("GuestCreator")
 
   // Articles (Facility Presence marketing articles) — author bio shown on article pages, plus authored articles
   authorBio     String?            @db.Text
@@ -546,21 +556,31 @@ model ClubResourceType {
 // ClubFacility — a physical location belonging to a club (e.g., "Downtown Hall", "Suburban Centre")
 // Facilities are soft-deleted via isActive = false, never hard-deleted.
 model ClubFacility {
-  facilityId    String   @id @default(cuid())
-  clubShortName String
-  club          Club     @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
-  name          String   @db.VarChar(200)
-  streetAddress String?  @db.VarChar(500)
-  city          String?  @db.VarChar(100)
-  state         String?  @db.VarChar(100)
-  zipCode       String?  @db.VarChar(20)
-  phone         String?  @db.VarChar(30)
-  email         String?  @db.VarChar(255)
-  timezone      String   @default("America/New_York")
-  isActive      Boolean  @default(true)
-  position      Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  facilityId     String        @id @default(cuid())
+  clubShortName  String
+  club           Club          @relation(fields: [clubShortName], references: [clubShortName], onDelete: Cascade)
+  name           String        @db.VarChar(200)
+  streetAddress  String?       @db.VarChar(500)
+  city           String?       @db.VarChar(100)
+  state          String?       @db.VarChar(100)
+  zipCode        String?       @db.VarChar(20)
+  phone          String?       @db.VarChar(30)
+  email          String?       @db.VarChar(255)
+  timezone       String        @default("America/New_York")
+  isActive       Boolean       @default(true)
+  position       Int           @default(0)
+  // Phase 16 Step 2 (D4): facility-level hours. App-validated JSON, shape =
+  // { [mon..sun]: { open: "HH:mm", close: "HH:mm" } | null } via
+  // operatingHoursSchema in src/lib/clubProfile.ts. Display on landing page +
+  // DEFAULT for resource calendars (ResourceBusinessHours = per-resource
+  // override). null = not configured → landing hides the hours section.
+  operatingHours Json?
+  // Optional per-facility blurb (multi-facility clubs).
+  description    String?       @db.Text
+  heroImageId    String?
+  heroImage      ContentImage? @relation("ContentImageFacilityHeroes", fields: [heroImageId], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   // Relations
   activeUsers       User[] // Users currently viewing this facility
@@ -771,8 +791,8 @@ model DropInCheckIn {
   // Migration adds the column nullable, backfills one party per existing
   // check-in (openToFill = true, matches today's de-facto solo-mix behavior),
   // then SETs NOT NULL.
-  partyId   String
-  party     DropInParty        @relation(fields: [partyId], references: [partyId], onDelete: Restrict)
+  partyId String
+  party   DropInParty @relation(fields: [partyId], references: [partyId], onDelete: Restrict)
 
   // Fairness ordering inputs (queue derived, not a separate table)
   queuedAt     DateTime  @default(now())
@@ -800,16 +820,16 @@ model DropInCheckIn {
 // PLAYING / AWAITING_RESULT / DEFUNCT) is DERIVED at read time from member
 // DropInCheckIn.status — there is no status column on this model.
 model DropInParty {
-  partyId         String        @id @default(cuid())
-  sessionId       String
-  session         DropInSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  partyId          String        @id @default(cuid())
+  sessionId        String
+  session          DropInSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
   // openToFill = true → the party is willing to be combined with other
   // openToFill entries at court-assignment time to fill the court. Solo
   // "Join others" defaults this to true; explicit closed groups default false.
-  openToFill      Boolean       @default(false)
+  openToFill       Boolean       @default(false)
   // Party-level FIFO sort key. Snaps to MIN(party.queuedAt, member.queuedAt)
   // on every member-add (rule B2 in the plan).
-  queuedAt        DateTime      @default(now())
+  queuedAt         DateTime      @default(now())
   // Hard court lock (court-preference feature, designFiles/drop-in/
   // court-preference-feature-plan.md). null = any court (default). When set,
   // this party is ONLY eligible for the named court in pickNextOccupants. Must
@@ -817,9 +837,9 @@ model DropInParty {
   // string, not a relation — mirrors DropInSession.courtIds / Assignment.courtId.
   preferredCourtId String?
   // Audit: who clicked "Create party" (nullable for backfill).
-  createdByUserId String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdByUserId  String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   members DropInCheckIn[]
 
@@ -1321,7 +1341,6 @@ model Invoice {
   // amountPaidInCents is net of refunds: sum(payments.amount) - sum(refunds.amount).
   // Outstanding balance is computed at query time as totalInCents - amountPaidInCents.
   amountPaidInCents Int           @default(0)
-  notes             String?       @db.Text
   createdBy         String // staff userId
   createdByUser     User          @relation("InvoiceCreatedBy", fields: [createdBy], references: [userId])
   createdAt         DateTime      @default(now())
@@ -1363,6 +1382,8 @@ model Invoice {
   creditAppliedToLineItems InvoiceLineItem[] @relation("CreditSource")
   // Phase 9b — cached PDF renders (one row per render, latest version is served).
   invoicePdfs              InvoicePdf[]
+  // Phase 9c — staff-attributed note rows (replaces the dropped `notes` blob).
+  invoiceNotes             InvoiceNote[]
 
   @@unique([clubShortName, invoiceNumber])
   @@index([clubShortName])
@@ -1479,6 +1500,10 @@ model InvoiceLineItem {
   eventRegistrationId String?
   eventRegistration   EventRegistration? @relation(fields: [eventRegistrationId], references: [registrationId], onDelete: SetNull)
 
+  // Phase 9c — notes optionally linked to this specific line (nullable; no
+  // per-line UI yet — see InvoiceNote).
+  invoiceNotes        InvoiceNote[]
+
   @@index([invoiceId])
   @@index([kind])
   @@index([productId])
@@ -1559,6 +1584,40 @@ model InvoiceRefund {
   @@index([refundedBy])
 }
 
+// InvoiceNote — Phase 9c §6. Staff-attributed, timestamped note rows that
+// REPLACE the legacy single `Invoice.notes` text blob (dropped in the same
+// migration). Unlike the blob, each note has an author trail (createdBy /
+// updatedBy), a soft-delete trail (deletedAt / deletedBy — history is preserved,
+// never hard-deleted), and an optional link to a specific line item. The void
+// reason that used to be appended to `Invoice.notes` is now an InvoiceNote
+// (body "[Voided …] {reason}"). All notes are visible to everyone this phase;
+// `showOnInvoice` is a reserved printed-vs-internal switch (always true, no UI /
+// filter yet) so staff-private notes can be added later with NO migration.
+model InvoiceNote {
+  invoiceNoteId String           @id @default(cuid())
+  // Denormalized from the parent invoice so club-wide note queries (e.g. the
+  // listInvoices note search) don't need a join. addInvoiceNote keeps it in sync.
+  clubShortName String
+  invoiceId     String
+  invoice       Invoice          @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  // Optional link to a specific charge (e.g. an ad-hoc fee's "why"). Nullable;
+  // no per-line UI this phase — invoice-level notes only (Phase 9c locked scope).
+  lineItemId    String?
+  lineItem      InvoiceLineItem? @relation(fields: [lineItemId], references: [lineItemId])
+  body          String           @db.Text
+  // Reserved printed-vs-internal switch — always true this phase (no UI / filter).
+  showOnInvoice Boolean          @default(true)
+  createdBy     String // staff userId (audit: who added)
+  updatedBy     String? // staff userId (audit: who last edited)
+  deletedAt     DateTime? // soft delete — preserves history
+  deletedBy     String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([invoiceId])
+  @@index([clubShortName])
+}
+
 // ============================================================
 // MEMBERSHIPS (Phase 10a, 2026-05-26)
 // See designFiles/roadmap/phase10-memberships.md (spec) +
@@ -1613,12 +1672,28 @@ model MembershipPlan {
   billingUnit          String         @db.VarChar(20) // "day" | "week" | "month" | "year"
   billingCycles        Int? // how many times to bill per contract (null = indefinite)
   feePerTermInCents    Int // recurring fee each billing cycle, in cents (#94: Int cents, never Decimal)
-  initiationFeeInCents Int            @default(0) // one-time fee at signup (future)
+  initiationFeeInCents Int            @default(0) // one-time registration fee charged at signup (membership checkout + SellMembershipModal)
   maxVisits            Int? // null = unlimited (future)
   // DEFAULT auto-renew for new sales of this plan. Inert in 10a (no generator).
   // Per-sale override lives on MemberMembership.autoRenew. See Auto-Renew Toggle §.
   autoRenew            Boolean        @default(false)
   sellOnline           Boolean        @default(false) // (future)
+  // Phase 10c — covered-people HINT (display/comparison only, NEVER enforced):
+  //   1    = individual (covers only the member),
+  //   N>1  = covers the member's FamilyGroup; check-in shows "covers N" and subtly
+  //          highlights when the family is bigger than N,
+  //   null = covers family with no stated cap.
+  // Shareability derives from this (memberCapacity != 1 → shares with family).
+  // Snapshotted onto MemberMembership at sale so later plan edits don't change an
+  // existing membership's coverage.
+  memberCapacity       Int?           @default(1)
+  // Phase 10c — flexible add-on fee MENU. JSON list (matches the
+  // Club.membershipPreferences / ClubFacility.operatingHours JSON-bag precedent).
+  // CONFIG only — selected add-ons snapshot to proper Int-cents FEE invoice lines
+  // at sale. Shape (zod-validated in app code):
+  //   [{ key: string, label: string, amountInCents: int, cadence: "once"|"recurring" }]
+  // `key` is a stable slug so the future 10b generator can match recurring add-ons.
+  addOnFees            Json?
   isActive             Boolean        @default(true)
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
@@ -1653,6 +1728,11 @@ model MemberMembership {
   // STORED lifecycle: "active" | "cancelled" | "suspended" | "frozen" | "voided".
   // "upcoming"/"active"/"expired" are DERIVED from startDate/endDate on read.
   status                  String         @db.VarChar(20)
+  // Phase 10c — snapshot of the plan's memberCapacity at sale. Coverage shareability
+  // + the displayed cap derive from THIS (not the live plan): memberCapacity != 1
+  // covers the primary's FamilyGroup. Display/comparison only — never enforced.
+  // See getMembershipCoverage.
+  memberCapacity          Int?           @default(1)
   startDate               DateTime // today or FUTURE (>= today; future -> derived "upcoming"). Backdating disallowed in 10a.
   endDate                 DateTime? // calendar term end (Feb 15 -> Mar 14); null = indefinite. Expiry computed-on-read (#27).
   nextBillingDate         DateTime? // unused in 10a (no auto-renew); set only when the generator runs (future).
@@ -1827,15 +1907,17 @@ model EmailSendRecipient {
 // PDFs (which member-1 saw). Only the LATEST row is exposed to consumers via
 // the /api/invoices/[invoiceId]/pdf route handler.
 //
-// Cache invalidation is read-time:
+// Cache invalidation is read-time + CONTENT-ADDRESSED:
 //   serve cached row IFF
-//     row.invoiceUpdatedAt == invoice.updatedAt
+//     row.contentHash == sha256(the assembled RenderableInvoice DTO)
 //     AND row.rendererVersion == CURRENT_RENDERER_VERSION (constant in code)
 //   else regenerate from src/server/services/invoiceRenderer/assemble.ts
 //
-// The Invoice's @updatedAt already bumps on every meaningful mutation
-// (sellPackage line-item add, recordPayment, closeInvoice, voidInvoice,
-// refund), so no explicit cache-bust calls are needed at write sites.
+// The hash is over the EXACT data the renderer draws (the customer-audience
+// DTO), so any change to anything rendered — invoice, line items, payments,
+// notes, a party's name/phone, the club/facility block — invalidates the cache
+// automatically. No per-field staleness watermark to keep in sync with the
+// renderer (that list drifted twice: invoice notes + the per-club phone move).
 model InvoicePdf {
   invoicePdfId     String   @id @default(cuid())
   invoiceId        String
@@ -1852,10 +1934,11 @@ model InvoicePdf {
   // PDF layout changes meaningfully so cached rows auto-regenerate on next
   // read. Free-form string so the next bump can encode anything (e.g. "v2.0").
   rendererVersion  String   @db.VarChar(30)
-  // Snapshot of Invoice.updatedAt at render time. Compared with the live
-  // invoice.updatedAt on read; mismatch = invoice changed since render =
-  // regenerate.
-  invoiceUpdatedAt DateTime
+  // sha256 (hex) of the assembled RenderableInvoice DTO at render time —
+  // content-addressed cache key. Mismatch vs the live DTO's hash = rendered
+  // content changed = regenerate. Nullable so rows cached before this column
+  // (legacy timestamp-watermark scheme) simply regenerate once on next read.
+  contentHash      String?  @db.VarChar(64)
   // Whoever triggered this render (null = system, e.g. background regen).
   generatedBy      String?
   generatedByUser  User?    @relation("InvoicePdfGeneratedBy", fields: [generatedBy], references: [userId], onDelete: SetNull)
@@ -1879,16 +1962,20 @@ enum ArticleStatus {
 }
 
 model ContentImage {
-  id            String             @id @default(cuid())
-  data          Bytes
-  mimeType      String             @db.VarChar(100)
-  alt           String?            @db.VarChar(300)
-  createdAt     DateTime           @default(now())
+  id             String             @id @default(cuid())
+  data           Bytes
+  mimeType       String             @db.VarChar(100)
+  alt            String?            @db.VarChar(300)
+  createdAt      DateTime           @default(now())
   // Phase 15 Step 6 — both back-relations must be NAMED because there are
   // now two distinct relations to the same model (ContentImage→Article,
   // ContentImage→ClubAnnouncement). Prisma would otherwise be ambiguous.
-  articles      Article[]          @relation("ContentImageArticles")
-  announcements ClubAnnouncement[] @relation("ContentImageAnnouncements")
+  articles       Article[]          @relation("ContentImageArticles")
+  announcements  ClubAnnouncement[] @relation("ContentImageAnnouncements")
+  // Phase 16 Step 2 — club/facility branding images.
+  clubLogos      Club[]             @relation("ContentImageClubLogos")
+  clubHeroes     Club[]             @relation("ContentImageClubHeroes")
+  facilityHeroes ClubFacility[]     @relation("ContentImageFacilityHeroes")
 }
 
 model Article {
@@ -2144,4 +2231,45 @@ model PlatformConfig {
   updatedBy String? // userId or null for system
 
   @@map("PlatformConfig")
+}
+
+/// Browser-posted CSP violation reports (report-uri / report-to), collected
+/// during the Content-Security-Policy rollout — see src/lib/csp.ts and
+/// src/app/api/csp-report/route.ts. Pure append-only log sink with no relations;
+/// read/triage via the DB console, then prune the table once enforce is stable.
+/// The endpoint is public and the values are browser-supplied, so treat every
+/// column as untrusted input (we only ever store it, never act on it).
+model CspReport {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  // Best-effort attribution. The Clerk session cookie only rides along on
+  // same-origin report-uri POSTs from a logged-in user; it is null for
+  // logged-out visitors (public pages) and for the credential-less Reporting
+  // API. Join to User.clerkUserId to see who hit the violation.
+  clerkUserId String? @db.VarChar(64)
+  // Source IP (Caddy X-Forwarded-For) — for spotting floods during triage.
+  ip          String? @db.VarChar(64)
+  // "report" while in report-only mode, "enforce" once blocking — lets you tell
+  // a would-have-blocked observation from an actually-blocked one in one table.
+  disposition        String?  @db.VarChar(20)
+  documentUri        String?  @db.Text
+  referrer           String?  @db.Text
+  blockedUri         String?  @db.Text
+  effectiveDirective String?  @db.VarChar(255)
+  violatedDirective  String?  @db.VarChar(255)
+  originalPolicy     String?  @db.Text
+  sourceFile         String?  @db.Text
+  lineNumber         Int?
+  columnNumber       Int?
+  scriptSample       String?  @db.Text
+  statusCode         Int?
+  userAgent          String?  @db.Text
+  // Full original payload (one report-uri body or one Reporting-API entry) so
+  // nothing is lost if a field above wasn't mapped.
+  raw Json?
+
+  @@index([createdAt])
+  @@index([effectiveDirective])
+  @@index([clerkUserId])
+  @@map("CspReport")
 }

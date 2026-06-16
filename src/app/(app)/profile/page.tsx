@@ -7,6 +7,7 @@ import { Suspense, useEffect, useState } from "react";
 import CoachProfile from "~/app/_components/client/CoachProfile";
 import StudentProfile from "~/app/_components/client/StudentProfile";
 import AdminClubIdSelector from "~/app/_components/client/authed/AdminClubIdSelector";
+import { useReturnTo } from "~/app/_components/hooks/use-return-to";
 import { ErrorBanner } from "~/app/_components/shared/ErrorBanner";
 import { Select } from "~/app/_components/shared/ui/select";
 import { TIMEZONE_OPTIONS } from "~/lib/timezones";
@@ -26,6 +27,9 @@ export default function ProfilePage() {
 
 function ProfilePageContent() {
 	const router = useRouter();
+	// Return-to target threaded from /join for first-time joiners (e.g. resume a
+	// rental/checkout). Falls back to /home.
+	const returnTo = useReturnTo();
 	const [isEditing, setIsEditing] = useState(false);
 
 	// Fetch or create user profile
@@ -116,7 +120,7 @@ function ProfilePageContent() {
 			{
 				onSuccess: () => {
 					if (!wasOnboarded && willBeOnboarded) {
-						router.push("/home");
+						router.push(returnTo ?? "/home");
 						router.refresh();
 					}
 				},

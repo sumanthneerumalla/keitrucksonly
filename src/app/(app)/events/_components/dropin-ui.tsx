@@ -1,7 +1,6 @@
 "use client";
 
 import {
-	Check,
 	LogOut,
 	Trophy,
 	Unlock,
@@ -10,15 +9,11 @@ import {
 	Volume2,
 	X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import { Button } from "~/app/_components/shared/Button";
-import { Input } from "~/app/_components/shared/Input";
+import { MemberSearchCombobox } from "~/app/_components/shared/MemberSearchCombobox";
 import { useToast } from "~/app/_components/shared/Toast";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "~/app/_components/shared/ui/popover";
 import { api } from "~/trpc/react";
 
 /**
@@ -90,13 +85,158 @@ export function Countdown({
 	const ss = String(total % 60).padStart(2, "0");
 	return (
 		<span
-			className={`flex items-center gap-1 font-mono text-xs ${
+			className={`flex items-center gap-1.5 font-mono font-semibold text-base tabular-nums ${
 				expired ? "text-red-600" : "text-[var(--foreground)]"
 			}`}
 		>
-			{expired && <Volume2 size={12} />}
+			{expired && <Volume2 size={15} />}
 			{expired ? "Time!" : `${mm}:${ss}`}
 		</span>
+	);
+}
+
+// =============================================================================
+// CourtCard — the single source of court rendering, shared by the authenticated
+// board (DropInEventDetails, interactive) and the read-only kiosk/TV board
+// (KioskBoard). Styling lives here once; interactivity is injected by props:
+//   - renderPlayer: wrap each name (authed → SwapPlayer; kiosk → plain text)
+//   - controls / extra: action row + panels for the authed view (omit for kiosk)
+//   - emptyControls: what an open court offers (authed → queue/start/remove)
+// The kiosk scales the whole board up via a transform wrapper, so these in-app
+// sizes render large on a TV without any duplicate styling.
+// =============================================================================
+
+export type BoardParticipant = {
+	userId: string;
+	side: "A" | "B" | null;
+	user: { firstName: string | null; lastName: string | null };
+};
+
+export type BoardAssignment = {
+	assignmentId: string;
+	status: string;
+	expiresAt: string | Date | null;
+	reportedScoreA: number | null;
+	reportedScoreB: number | null;
+	participants: BoardParticipant[];
+};
+
+function CourtStatusChip({ status }: { status: string }) {
+	if (status === "PENDING_CONFIRM") {
+		return (
+			<div className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 text-xs">
+				<span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+				Awaiting opponent's confirmation
+			</div>
+		);
+	}
+	if (status === "DISPUTED") {
+		return (
+			<div className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 font-medium text-red-700 text-xs">
+				<span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+				Disputed — staff will resolve
+			</div>
+		);
+	}
+	return (
+		<div className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-2.5 py-1 font-medium text-green-700 text-xs">
+			<span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+			In play
+		</div>
+	);
+}
+
+export function CourtCard({
+	title,
+	assignment,
+	now,
+	isMatch,
+	renderPlayer,
+	emptyControls,
+	controls,
+	extra,
+}: {
+	title: string;
+	assignment?: BoardAssignment;
+	now: number;
+	isMatch: boolean;
+	/** Render one participant's name (without a key — CourtCard wraps with keys). */
+	renderPlayer: (p: BoardParticipant) => ReactNode;
+	/** Actions shown when the court is open (no assignment). */
+	emptyControls?: ReactNode;
+	/** Action row shown under an in-progress court. */
+	controls?: ReactNode;
+	/** Extra panels (score entry, confirm/dispute) below the controls. */
+	extra?: ReactNode;
+}) {
+	const side = (s: "A" | "B") => {
+		const ps = assignment?.participants.filter((p) => p.side === s) ?? [];
+		if (ps.length === 0) {
+			return <span className="text-[var(--muted-foreground)]">Side {s}</span>;
+		}
+		return ps.map((p, i) => (
+			<span key={p.userId} className="inline-flex items-center">
+				{i > 0 && (
+					<span className="mx-1 text-[var(--muted-foreground)]">&</span>
+				)}
+				{renderPlayer(p)}
+			</span>
+		));
+	};
+
+	return (
+		<div className="rounded-lg border border-[var(--border)] p-3">
+			<div className="mb-2 flex items-center justify-between gap-2">
+				<span className="font-medium text-[var(--foreground)] text-sm">
+					{title}
+				</span>
+				{assignment?.expiresAt && (
+					<Countdown expiresAt={assignment.expiresAt} now={now} />
+				)}
+			</div>
+
+			{!assignment ? (
+				<div className="space-y-2">
+					<span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--muted)] px-2.5 py-1 font-medium text-[var(--muted-foreground)] text-xs">
+						<span className="h-1.5 w-1.5 rounded-full bg-[var(--muted-foreground)]" />
+						Open court
+					</span>
+					{emptyControls && (
+						<div className="flex flex-wrap items-center gap-2">
+							{emptyControls}
+						</div>
+					)}
+				</div>
+			) : (
+				<div className="space-y-2">
+					{isMatch ? (
+						<div className="flex items-center justify-between gap-2 text-sm">
+							<span className="flex flex-1 flex-wrap items-center gap-x-1">
+								{side("A")}
+							</span>
+							<span className="shrink-0 text-[var(--muted-foreground)] text-xs">
+								{assignment.reportedScoreA != null
+									? `${assignment.reportedScoreA}–${assignment.reportedScoreB}`
+									: "vs"}
+							</span>
+							<span className="flex flex-1 flex-wrap items-center justify-end gap-x-1">
+								{side("B")}
+							</span>
+						</div>
+					) : (
+						<div className="flex flex-wrap gap-x-4 gap-y-1 font-medium text-[var(--foreground)] text-base">
+							{assignment.participants.map((p) => (
+								<span key={p.userId}>{renderPlayer(p)}</span>
+							))}
+						</div>
+					)}
+
+					<CourtStatusChip status={assignment.status} />
+					{controls}
+					{extra}
+				</div>
+			)}
+		</div>
 	);
 }
 
@@ -127,7 +267,11 @@ export function SwapPlayer({
 	);
 }
 
-/** Single-select club member typeahead in a popover. */
+/** Single-select club member typeahead in a popover. Thin wrapper over the
+ * shared MemberSearchCombobox, bound to the member-facing
+ * `dropIn.searchPartyMembers` API (club-wide; the target's check-in is
+ * created on add). Used by player flows (YourPartyCard) and staff flows
+ * (SwapPlayer). */
 export function MemberSearchPopover({
 	children,
 	sessionId,
@@ -139,66 +283,23 @@ export function MemberSearchPopover({
 }) {
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [debounced, setDebounced] = useState("");
-	useEffect(() => {
-		const t = setTimeout(() => setDebounced(query.trim()), 300);
-		return () => clearTimeout(t);
-	}, [query]);
-	// `searchPartyMembers` is protectedProcedure and scoped to the session's
-	// roster — only people with a live DropInCheckIn for this session are
-	// returned. Works for both player flows (YourPartyCard) and staff flows
-	// (SwapPlayer). Includes guests.
+	const debounced = useDebouncedValue(query.trim(), 300);
 	const search = api.dropIn.searchPartyMembers.useQuery(
 		{ sessionId, query: debounced },
 		{ enabled: open && debounced.length > 0 },
 	);
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>{children}</PopoverTrigger>
-			<PopoverContent className="w-64 p-2" align="start">
-				<Input
-					placeholder="Search members…"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					className="h-8"
-				/>
-				<div className="mt-2 max-h-48 space-y-0.5 overflow-auto">
-					{debounced.length === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Type a name to search.
-						</p>
-					)}
-					{search.data?.map((m) => {
-						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
-						return (
-							<button
-								key={m.userId}
-								type="button"
-								onClick={() => {
-									onPick(m.userId);
-									setOpen(false);
-									setQuery("");
-								}}
-								className="block w-full rounded px-2 py-1 text-left text-[var(--foreground)] text-sm hover:bg-[var(--muted)]"
-							>
-								{name}
-								{m.isGuest && (
-									<span className="ml-1 text-[var(--muted-foreground)]">
-										· guest
-									</span>
-								)}
-							</button>
-						);
-					})}
-					{debounced.length > 0 && (search.data?.length ?? 0) === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							No matches.
-						</p>
-					)}
-				</div>
-			</PopoverContent>
-		</Popover>
+		<MemberSearchCombobox
+			trigger={children}
+			open={open}
+			onOpenChange={setOpen}
+			query={query}
+			onQueryChange={setQuery}
+			results={search.data}
+			isFetching={search.isFetching}
+			mode="single"
+			onPick={(m) => onPick(m.userId)}
+		/>
 	);
 }
 
@@ -292,13 +393,8 @@ export function StaffAddToQueue({
 	const { toast } = useToast();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [debounced, setDebounced] = useState("");
 	const [selected, setSelected] = useState<Set<string>>(new Set());
-
-	useEffect(() => {
-		const t = setTimeout(() => setDebounced(query.trim()), 300);
-		return () => clearTimeout(t);
-	}, [query]);
+	const debounced = useDebouncedValue(query.trim(), 300);
 
 	const search = api.user.searchMembers.useQuery(
 		{ query: debounced },
@@ -326,79 +422,43 @@ export function StaffAddToQueue({
 	const ids = [...selected];
 
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
+		<MemberSearchCombobox
+			trigger={
 				<Button variant="outline" size="sm">
 					<UserPlus size={14} /> Add to queue
 				</Button>
-			</PopoverTrigger>
-			<PopoverContent className="w-72 p-2" align="end">
-				<Input
-					placeholder="Search members…"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					className="h-8"
-				/>
-				<div className="mt-2 max-h-48 space-y-0.5 overflow-auto">
-					{debounced.length === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Type a name to search.
-						</p>
-					)}
-					{debounced.length > 0 && search.isFetching && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Searching…
-						</p>
-					)}
-					{search.data?.members.map((m) => {
-						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() ||
-							m.email ||
-							"Member";
-						const isSel = selected.has(m.userId);
-						return (
-							<button
-								key={m.userId}
-								type="button"
-								onClick={() => toggle(m.userId)}
-								className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${
-									isSel
-										? "bg-[var(--primary)]/10 text-[var(--foreground)]"
-										: "text-[var(--foreground)] hover:bg-[var(--muted)]"
-								}`}
-							>
-								<span>{name}</span>
-								{isSel && <Check size={14} className="text-[var(--primary)]" />}
-							</button>
-						);
-					})}
-					{debounced.length > 0 &&
-						!search.isFetching &&
-						(search.data?.members.length ?? 0) === 0 && (
-							<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-								No matches.
-							</p>
-						)}
-				</div>
-				<Button
-					size="sm"
-					className="mt-2 w-full"
-					disabled={ids.length === 0 || addToQueue.isPending}
-					onClick={() => addToQueue.mutate({ sessionId, userIds: ids })}
-				>
-					{addToQueue.isPending
-						? "Adding…"
-						: ids.length > 0
-							? `Add ${ids.length} to queue`
-							: "Add to queue"}
-				</Button>
-				<p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-					{format === "SINGLES"
-						? "Add players individually."
-						: "Pick 2 (or 4) — they queue together for doubles pairing."}
-				</p>
-			</PopoverContent>
-		</Popover>
+			}
+			open={open}
+			onOpenChange={setOpen}
+			query={query}
+			onQueryChange={setQuery}
+			results={search.data?.members}
+			isFetching={search.isFetching}
+			mode="multi"
+			selected={selected}
+			onToggle={(m) => toggle(m.userId)}
+			footer={
+				<>
+					<Button
+						size="sm"
+						className="mt-2 w-full"
+						disabled={ids.length === 0 || addToQueue.isPending}
+						onClick={() => addToQueue.mutate({ sessionId, userIds: ids })}
+					>
+						{addToQueue.isPending
+							? "Adding…"
+							: ids.length > 0
+								? `Add ${ids.length} to queue`
+								: "Add to queue"}
+					</Button>
+					<p className="mt-1 text-[var(--muted-foreground)] text-xs">
+						{format === "SINGLES"
+							? "Add players individually."
+							: "Pick 2 (or 4) — they queue together for doubles pairing."}
+					</p>
+				</>
+			}
+		/>
 	);
 }
 
@@ -434,16 +494,11 @@ export function JoinPartyPopover({
 	const { toast } = useToast();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [debounced, setDebounced] = useState("");
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [openToFill, setOpenToFill] = useState(false);
+	const debounced = useDebouncedValue(query.trim(), 300);
 
-	useEffect(() => {
-		const t = setTimeout(() => setDebounced(query.trim()), 300);
-		return () => clearTimeout(t);
-	}, [query]);
-
-	// Player-facing search, scoped to this session's checked-in roster.
+	// Player-facing search (club-wide).
 	const search = api.dropIn.searchPartyMembers.useQuery(
 		{ sessionId, query: debounced },
 		{ enabled: open && debounced.length > 0 },
@@ -516,94 +571,55 @@ export function JoinPartyPopover({
 	};
 
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
+		<MemberSearchCombobox
+			trigger={
 				<Button variant="outline" size="sm" disabled={disabled}>
 					<UserPlus size={14} /> Join queue as a group
 				</Button>
-			</PopoverTrigger>
-			<PopoverContent className="w-72 p-2" align="end">
-				<p className="px-1 pb-1 text-[var(--muted-foreground)] text-xs">
-					You + up to {maxAddable} other player
-					{maxAddable === 1 ? "" : "s"} — queues together.
-				</p>
-				<Input
-					placeholder="Search members…"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					className="h-8"
-				/>
-				<div className="mt-2 max-h-44 space-y-0.5 overflow-auto">
-					{debounced.length === 0 && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Type a name to add.
-						</p>
-					)}
-					{debounced.length > 0 && search.isFetching && (
-						<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-							Searching…
-						</p>
-					)}
-					{search.data?.map((m) => {
-						const name =
-							`${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
-						const isSel = selected.has(m.userId);
-						return (
-							<button
-								key={m.userId}
-								type="button"
-								onClick={() => toggle(m.userId)}
-								className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${
-									isSel
-										? "bg-[var(--primary)]/10 text-[var(--foreground)]"
-										: "text-[var(--foreground)] hover:bg-[var(--muted)]"
-								}`}
-							>
-								<span>
-									{name}
-									{m.isGuest && (
-										<span className="ml-1 text-[var(--muted-foreground)]">
-											· guest
-										</span>
-									)}
-								</span>
-								{isSel && <Check size={14} className="text-[var(--primary)]" />}
-							</button>
-						);
-					})}
-					{debounced.length > 0 &&
-						!search.isFetching &&
-						(search.data?.length ?? 0) === 0 && (
-							<p className="px-2 py-1 text-[var(--muted-foreground)] text-xs">
-								No matches.
-							</p>
-						)}
-				</div>
-				<label className="mt-2 flex items-center gap-2 text-[var(--foreground)] text-xs">
-					<input
-						type="checkbox"
-						checked={openToFill}
-						onChange={(e) => setOpenToFill(e.target.checked)}
-						disabled={submitting}
-					/>
-					<span>
-						Open to filling remaining seats with others (e.g. when 3 of 4)
-					</span>
-				</label>
-				<Button
-					size="sm"
-					className="mt-2 w-full"
-					disabled={ids.length === 0 || submitting}
-					onClick={submit}
-				>
-					{submitting
-						? "Creating…"
-						: ids.length > 0
-							? `Create party (you + ${ids.length})`
-							: "Pick at least one"}
-				</Button>
-			</PopoverContent>
-		</Popover>
+			}
+			open={open}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) reset();
+			}}
+			query={query}
+			onQueryChange={setQuery}
+			results={search.data}
+			isFetching={search.isFetching}
+			emptyHint={`You + up to ${maxAddable} other player${
+				maxAddable === 1 ? "" : "s"
+			} — type a name to add.`}
+			mode="multi"
+			selected={selected}
+			onToggle={(m) => toggle(m.userId)}
+			footer={
+				<>
+					<label className="mt-2 flex items-center gap-2 text-[var(--foreground)] text-xs">
+						<input
+							type="checkbox"
+							checked={openToFill}
+							onChange={(e) => setOpenToFill(e.target.checked)}
+							disabled={submitting}
+						/>
+						<span>
+							Open to filling remaining seats with others (e.g. when 3 of 4)
+						</span>
+					</label>
+					<Button
+						size="sm"
+						className="mt-2 w-full"
+						disabled={ids.length === 0 || submitting}
+						onClick={submit}
+					>
+						{submitting
+							? "Creating…"
+							: ids.length > 0
+								? `Create party (you + ${ids.length})`
+								: "Pick at least one"}
+					</Button>
+				</>
+			}
+		/>
 	);
 }
 
@@ -633,14 +649,11 @@ export function YourPartyCard({
 		openToFill: boolean;
 		preferredCourtId: string | null;
 		memberCount: number;
-		hasGuest: boolean;
-		isReady: boolean;
 		derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT";
 		members: Array<{
 			userId: string;
 			firstName: string | null;
 			lastName: string | null;
-			isGuest: boolean;
 			status:
 				| "WAITING"
 				| "IDLE"
@@ -685,7 +698,7 @@ export function YourPartyCard({
 				<span className="font-medium text-[var(--foreground)] text-sm">
 					Your party
 				</span>
-				<span className="text-[11px] text-[var(--muted-foreground)]">
+				<span className="text-[var(--muted-foreground)] text-xs">
 					{stateLabel}
 					{party.preferredCourtId &&
 						` · ${courtName?.(party.preferredCourtId) ?? "Court"} only`}
@@ -707,11 +720,6 @@ export function YourPartyCard({
 						>
 							{name}
 							{isSelf && " (you)"}
-							{m.isGuest && (
-								<span className="ml-1 text-[var(--muted-foreground)]">
-									· guest
-								</span>
-							)}
 							{m.status === "PLAYING" && (
 								<span className="ml-1 text-[var(--muted-foreground)]">
 									· on court
@@ -790,14 +798,11 @@ export type QueueByPartyEntry = {
 	memberCount: number;
 	capacity: number;
 	needsCount: number;
-	hasGuest: boolean;
-	isReady: boolean;
 	derivedState: "WAITING" | "PLAYING" | "AWAITING_RESULT";
 	members: Array<{
 		userId: string;
 		firstName: string | null;
 		lastName: string | null;
-		isGuest: boolean;
 		status:
 			| "WAITING"
 			| "IDLE"
@@ -821,11 +826,11 @@ const PILL_STATUS_LABEL: Record<string, string> = {
 	DONE: "done",
 };
 
-function memberDisplayName(m: {
+export function memberDisplayName(m: {
 	firstName: string | null;
 	lastName: string | null;
 }): string {
-	return `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Member";
+	return `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || "Player";
 }
 
 export function QueueByParty({
@@ -854,6 +859,16 @@ export function QueueByParty({
 		onError: (e) => toast(e.message, "error"),
 	});
 	const joinExistingParty = api.dropIn.joinExistingParty.useMutation({
+		onSuccess: onChange,
+		onError: (e) => toast(e.message, "error"),
+	});
+	// Staff party management — remove a no-show from a group, or disband a
+	// group that's blocking rotation. Server allows club staff on any party.
+	const removePartyMember = api.dropIn.removePartyMember.useMutation({
+		onSuccess: onChange,
+		onError: (e) => toast(e.message, "error"),
+	});
+	const disbandParty = api.dropIn.disbandParty.useMutation({
 		onSuccess: onChange,
 		onError: (e) => toast(e.message, "error"),
 	});
@@ -925,23 +940,23 @@ export function QueueByParty({
 						<div className="flex-1">
 							{/* Header line — only for non-trivial parties */}
 							{!isTrivialSolo && (
-								<div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+								<div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
 									<span className="inline-flex items-center gap-1 font-medium text-[var(--foreground)]">
 										<Users size={12} />
 										{isSolo ? "Solo" : `Group of ${party.memberCount}`}
 									</span>
 									{isClosedIncomplete && (
-										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+										<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-900 text-xs dark:bg-amber-900/40 dark:text-amber-200">
 											Needs {party.needsCount} more — closed group
 										</span>
 									)}
 									{isOpenIncomplete && (
-										<span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200">
+										<span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-emerald-900 text-xs dark:bg-emerald-900/40 dark:text-emerald-200">
 											Needs {party.needsCount} more — open to anyone
 										</span>
 									)}
 									{hasNonReadyMember && (
-										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[var(--muted-foreground)] text-xs">
 											Will play when{" "}
 											{row.nonWaitingLiveMembers
 												.map((m) => memberDisplayName(m))
@@ -951,30 +966,40 @@ export function QueueByParty({
 												: " finish"}
 										</span>
 									)}
-									{party.hasGuest && (
-										<span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
-											Has guest
-										</span>
-									)}
 									{party.preferredCourtId && (
-										<span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-900 dark:bg-indigo-900/40 dark:text-indigo-200">
+										<span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-indigo-900 text-xs dark:bg-indigo-900/40 dark:text-indigo-200">
 											{courtName?.(party.preferredCourtId) ?? "Court"} only
 										</span>
 									)}
-									{showJoinButton && (
-										<button
-											type="button"
-											onClick={() =>
-												joinExistingParty.mutate({
-													partyId: party.partyId,
-												})
-											}
-											disabled={joinExistingParty.isPending}
-											className="ml-auto rounded-full bg-[var(--primary)] px-2 py-0.5 font-medium text-[10px] text-white hover:opacity-90 disabled:opacity-50"
-										>
-											Join this group
-										</button>
-									)}
+									<span className="ml-auto flex items-center gap-1">
+										{showJoinButton && (
+											<button
+												type="button"
+												onClick={() =>
+													joinExistingParty.mutate({
+														partyId: party.partyId,
+													})
+												}
+												disabled={joinExistingParty.isPending}
+												className="rounded-full bg-[var(--primary)] px-2 py-0.5 font-medium text-white text-xs hover:opacity-90 disabled:opacity-50"
+											>
+												Join this group
+											</button>
+										)}
+										{isStaff && (
+											<button
+												type="button"
+												title="Disband this group (everyone leaves the queue)"
+												onClick={() =>
+													disbandParty.mutate({ partyId: party.partyId })
+												}
+												disabled={disbandParty.isPending}
+												className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[var(--muted-foreground)] text-xs hover:border-red-400 hover:text-red-600 disabled:opacity-50"
+											>
+												Disband
+											</button>
+										)}
+									</span>
 								</div>
 							)}
 
@@ -991,11 +1016,6 @@ export function QueueByParty({
 											}
 										>
 											{memberDisplayName(m)}
-											{m.isGuest && (
-												<span className="ml-1 text-[10px] text-[var(--muted-foreground)]">
-													guest
-												</span>
-											)}
 											{isStaff && (
 												<button
 													type="button"
@@ -1028,24 +1048,18 @@ export function QueueByParty({
 											}`}
 										>
 											{memberDisplayName(m)}
-											{m.isGuest && (
-												<span className="text-[10px] text-[var(--muted-foreground)]">
-													guest
-												</span>
-											)}
 											{isStaff && (
 												<button
 													type="button"
-													title="Take out of the queue (stays checked in)"
-													onClick={() => {
-														const checkInId = checkInByUserId.get(m.userId);
-														if (!checkInId) return;
-														setCheckInStatus.mutate({
-															checkInId,
-															status: "IDLE",
-														});
-													}}
-													className="text-[var(--muted-foreground)] hover:text-red-600"
+													title="Remove from this group (leaves the queue)"
+													onClick={() =>
+														removePartyMember.mutate({
+															partyId: party.partyId,
+															targetUserId: m.userId,
+														})
+													}
+													disabled={removePartyMember.isPending}
+													className="text-[var(--muted-foreground)] hover:text-red-600 disabled:opacity-50"
 												>
 													<X size={12} />
 												</button>
@@ -1061,7 +1075,7 @@ export function QueueByParty({
 											title={`Status: ${m.status}`}
 										>
 											{memberDisplayName(m)}
-											<span className="text-[10px]">
+											<span className="text-xs">
 												{PILL_STATUS_LABEL[m.status] ?? m.status.toLowerCase()}
 											</span>
 										</span>

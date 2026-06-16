@@ -3,6 +3,7 @@
 import { Pencil, Search, UserMinus, Users, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
@@ -42,21 +43,12 @@ function MemberTypeahead({
 }) {
 	const [open, setOpen] = useState(false);
 	const [searchInput, setSearchInput] = useState("");
-	const [debouncedQuery, setDebouncedQuery] = useState("");
-
-	// 300ms debounce
-	useEffect(() => {
-		const timer = setTimeout(() => {
-			setDebouncedQuery(searchInput.trim());
-		}, 300);
-		return () => clearTimeout(timer);
-	}, [searchInput]);
+	const debouncedQuery = useDebouncedValue(searchInput.trim(), 300);
 
 	// Reset on close
 	useEffect(() => {
 		if (!open) {
 			setSearchInput("");
-			setDebouncedQuery("");
 		}
 	}, [open]);
 

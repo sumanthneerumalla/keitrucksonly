@@ -9,6 +9,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { RRule } from "rrule";
 import { z } from "zod";
+import { operatingHoursSchema } from "~/lib/clubProfile";
 import {
 	createTRPCRouter,
 	facilityProcedure, // user must be FACILITY or ADMIN
@@ -16,6 +17,7 @@ import {
 	publicProcedure,
 	staffProcedure, // user must be FACILITY, ADMIN, or COACH
 } from "~/server/api/trpc";
+import { revalidateClub } from "~/server/revalidateClub";
 import { validateDateRange } from "~/server/utils/dateUtils";
 import {
 	formatEventTimeInZone,
@@ -134,6 +136,10 @@ const updateFacilitySchema = z.object({
 	// null here would let staff blank out the timezone, which would break date
 	// math elsewhere (consumeCredit, dashboard ranges). Pass a value or omit.
 	timezone: z.string().max(100).trim().optional(),
+	// Phase 16 Step 2 (D4): facility-level hours + public blurb for the club
+	// landing page. null clears (→ landing hides the section).
+	operatingHours: operatingHoursSchema.nullable().optional(),
+	description: z.string().trim().max(2000).nullable().optional(),
 });
 
 const deleteFacilitySchema = z.object({
@@ -548,6 +554,8 @@ export const calendarRouter = createTRPCRouter({
 			phone: f.phone,
 			email: f.email,
 			timezone: f.timezone,
+			operatingHours: f.operatingHours,
+			description: f.description,
 			isActive: f.isActive,
 			position: f.position,
 			resourceCount: f._count.resources,
@@ -574,10 +582,19 @@ export const calendarRouter = createTRPCRouter({
 			requireSameClub(ctx.user, existing.clubShortName);
 
 			try {
+				const { operatingHours, ...rest } = data;
 				const updated = await ctx.db.clubFacility.update({
 					where: { facilityId },
-					data,
+					data: {
+						...rest,
+						// Prisma Json null semantics: DbNull clears the column.
+						...(operatingHours !== undefined
+							? { operatingHours: operatingHours ?? { set: null } }
+							: {}),
+					},
 				});
+				// Hours/blurb/address show on the public club landing page.
+				revalidateClub(existing.clubShortName);
 				return updated;
 			} catch (error) {
 				if (error instanceof Error && error.message.includes("unique")) {
@@ -2115,6 +2132,169 @@ export const calendarRouter = createTRPCRouter({
 			};
 		}),
 
+	// Public "next N upcoming events" for a club (optionally a single facility) —
+	// the home page's UpcomingEventsCard, but for logged-out club landing pages.
+	// Recurrence-aware: expands each series to its next occurrence (honoring
+	// exdates + modified instances), mirroring getMyUpcomingEvents but sourced
+	// from public events rather than the viewer's registrations (so no status).
+	getPublicUpcomingEvents: publicProcedure
+		.input(
+			z.object({
+				clubShortName: z.string(),
+				facilityId: z.string().optional(),
+				limit: z.number().int().min(1).max(20).optional(),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const limit = input.limit ?? 5;
+			const now = new Date();
+
+			const events = await ctx.db.calendarEvent.findMany({
+				where: {
+					clubShortName: input.clubShortName,
+					isDeleted: false,
+					isPublic: true,
+					eventType: { in: [EventType.BOOKABLE, EventType.COACHING_SLOT] },
+					...(input.facilityId ? { facilityId: input.facilityId } : {}),
+					// Base/standalone events only — modified series instances are folded
+					// into their parent below so they don't appear twice.
+					parentEventId: null,
+				},
+				select: {
+					eventId: true,
+					title: true,
+					start: true,
+					end: true,
+					eventType: true,
+					rrule: true,
+					exdates: true,
+					maxParticipants: true,
+					color: true,
+					backgroundColor: true,
+					productId: true,
+					product: { select: { priceInCents: true } },
+					resource: { select: { title: true } },
+					facility: { select: { name: true } },
+					_count: {
+						select: {
+							registrations: {
+								where: {
+									status: {
+										in: [
+											RegistrationStatus.REGISTERED,
+											RegistrationStatus.CHECKED_IN,
+										],
+									},
+								},
+							},
+						},
+					},
+				},
+			});
+
+			type PublicUpcomingEvent = {
+				eventId: string;
+				title: string;
+				eventType: EventType;
+				start: Date;
+				end: Date;
+				maxParticipants: number | null;
+				currentRegistrations: number;
+				priceInCents: number | null;
+				productId: string | null;
+				color: string | null;
+				backgroundColor: string | null;
+				resourceTitle: string | null;
+				facilityName: string | null;
+			};
+
+			const shape = (
+				e: (typeof events)[number],
+				occStart: Date,
+			): PublicUpcomingEvent => {
+				const durationMs = e.end.getTime() - e.start.getTime();
+				return {
+					eventId: e.eventId,
+					title: e.title,
+					eventType: e.eventType,
+					start: occStart,
+					end: new Date(occStart.getTime() + durationMs),
+					maxParticipants: e.maxParticipants,
+					currentRegistrations: e._count.registrations,
+					priceInCents: e.product?.priceInCents ?? null,
+					productId: e.productId,
+					color: e.color,
+					backgroundColor: e.backgroundColor,
+					resourceTitle: e.resource?.title ?? null,
+					facilityName: e.facility?.name ?? null,
+				};
+			};
+
+			// Batch-fetch modified instances for recurring base events (avoid N+1).
+			const recurringIds = events.filter((e) => e.rrule).map((e) => e.eventId);
+			const children = recurringIds.length
+				? await ctx.db.calendarEvent.findMany({
+						where: {
+							parentEventId: { in: recurringIds },
+							isDeleted: false,
+						},
+						select: { parentEventId: true, recurrenceId: true, start: true },
+					})
+				: [];
+			const childrenByParent = new Map<string, typeof children>();
+			for (const child of children) {
+				if (!child.parentEventId) continue;
+				const list = childrenByParent.get(child.parentEventId) ?? [];
+				list.push(child);
+				childrenByParent.set(child.parentEventId, list);
+			}
+
+			const items: PublicUpcomingEvent[] = [];
+			for (const e of events) {
+				if (e.rrule) {
+					const eventChildren = childrenByParent.get(e.eventId) ?? [];
+					const childExdates = eventChildren
+						.map((c) => (c.recurrenceId ? new Date(c.recurrenceId) : null))
+						.filter((d): d is Date => d !== null);
+					let nextRrule: Date | null = null;
+					try {
+						nextRrule = buildRuleSetFromEvent(
+							e.rrule,
+							[...e.exdates, ...childExdates],
+							e.start,
+						).after(now, true);
+					} catch {
+						nextRrule = null;
+					}
+					const futureChildStarts = eventChildren
+						.filter((c) => c.start.getTime() >= now.getTime())
+						.map((c) => c.start);
+					const nextChild =
+						futureChildStarts.length > 0
+							? futureChildStarts.reduce((a, d) => (d < a ? d : a))
+							: null;
+					const candidates = [nextRrule, nextChild].filter(
+						(d): d is Date => d !== null,
+					);
+					if (candidates.length === 0) continue;
+					items.push(
+						shape(
+							e,
+							candidates.reduce((a, d) => (d < a ? d : a)),
+						),
+					);
+				} else {
+					const item = shape(e, e.start);
+					// Keep events that haven't ended yet (in-progress or future).
+					if (item.end.getTime() >= now.getTime()) items.push(item);
+				}
+			}
+
+			items.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+			return { events: items.slice(0, limit) };
+		}),
+
 	getPublicResources: publicProcedure
 		.input(getPublicResourcesSchema)
 		.query(async ({ ctx, input }) => {
@@ -2360,7 +2540,18 @@ export const calendarRouter = createTRPCRouter({
 	// registration state, so the dashboard can render registration-aware badges
 	// (reusing CalendarEventBadge) that link to the event page.
 	getMemberTodayEvents: protectedProcedure
-		.input(z.object({ date: z.date().optional() }).optional())
+		.input(
+			z
+				.object({
+					date: z.date().optional(),
+					// Home events period filter (Today/Tomorrow/This Week/This Month/
+					// Custom): an explicit instant range computed client-side on the
+					// member's local day boundaries. Takes precedence over `date`.
+					rangeStart: z.date().optional(),
+					rangeEnd: z.date().optional(),
+				})
+				.optional(),
+		)
 		.query(async ({ ctx, input }) => {
 			const user = await getCurrentUser(ctx);
 			const facilityId = user.activeFacilityId;
@@ -2382,10 +2573,27 @@ export const calendarRouter = createTRPCRouter({
 
 			// "Today" is the member's local day (their timezone), so the dashboard
 			// matches what they'd consider today regardless of facility/server tz.
-			const { startOfDay, endOfDay } = getDayRangeInZone(
-				user.timeZone,
-				input?.date,
-			);
+			// An explicit rangeStart/rangeEnd (period filter) overrides the single
+			// day; capped at 62 days to bound rrule expansion cost.
+			const MAX_RANGE_MS = 62 * 24 * 60 * 60 * 1000;
+			let startOfDay: Date;
+			let endOfDay: Date;
+			if (input?.rangeStart && input?.rangeEnd) {
+				const spanMs = input.rangeEnd.getTime() - input.rangeStart.getTime();
+				if (spanMs <= 0 || spanMs > MAX_RANGE_MS) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Invalid date range (must be 1–62 days)",
+					});
+				}
+				startOfDay = input.rangeStart;
+				endOfDay = input.rangeEnd;
+			} else {
+				({ startOfDay, endOfDay } = getDayRangeInZone(
+					user.timeZone,
+					input?.date,
+				));
+			}
 
 			const candidates = await ctx.db.calendarEvent.findMany({
 				where: {
@@ -2691,7 +2899,12 @@ export const calendarRouter = createTRPCRouter({
 						(d): d is Date => d !== null,
 					);
 					if (candidates.length === 0) continue;
-					items.push(shape(r, candidates.reduce((a, d) => (d < a ? d : a))));
+					items.push(
+						shape(
+							r,
+							candidates.reduce((a, d) => (d < a ? d : a)),
+						),
+					);
 				} else {
 					const occStart = r.instanceDate ?? r.event.start;
 					const item = shape(r, occStart);

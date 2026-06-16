@@ -2,6 +2,7 @@
 
 import { Search, UserPlus, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -34,24 +35,15 @@ export default function AddStudentPopover({
 	const { toast } = useToast();
 	const [open, setOpen] = useState(false);
 	const [searchInput, setSearchInput] = useState("");
-	const [debouncedQuery, setDebouncedQuery] = useState("");
+	const debouncedQuery = useDebouncedValue(searchInput.trim(), 300);
 	const [selectedMember, setSelectedMember] = useState<SearchMember | null>(
 		null,
 	);
-
-	// Debounce search input (300ms)
-	useEffect(() => {
-		const timer = setTimeout(() => {
-			setDebouncedQuery(searchInput.trim());
-		}, 300);
-		return () => clearTimeout(timer);
-	}, [searchInput]);
 
 	// Reset state when popover closes
 	useEffect(() => {
 		if (!open) {
 			setSearchInput("");
-			setDebouncedQuery("");
 			setSelectedMember(null);
 		}
 	}, [open]);

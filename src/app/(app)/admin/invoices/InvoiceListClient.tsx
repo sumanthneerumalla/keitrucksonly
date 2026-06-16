@@ -19,6 +19,10 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "~/app/_components/shared/ui/popover";
+import {
+	formatInvoiceDate as formatDate,
+	formatPersonName,
+} from "~/lib/invoice/format";
 import { formatCents } from "~/lib/money";
 import { cn } from "~/lib/utils";
 import { type RouterInputs, api } from "~/trpc/react";
@@ -53,22 +57,6 @@ const STATUS_VALUES = STATUS_OPTIONS.map((o) => o.value);
 
 // Calendar date sent by <input type="date"> (and accepted by z.string().date()).
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function formatDate(date: Date | string): string {
-	return new Date(date).toLocaleDateString([], {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
-}
-
-function formatPersonName(p: {
-	firstName: string | null;
-	lastName: string | null;
-}): string {
-	const name = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
-	return name || "(no name)";
-}
 
 export default function InvoiceListClient() {
 	const router = useRouter();

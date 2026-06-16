@@ -523,6 +523,11 @@ async function dispatchCheckoutCompleted(
 					// §7.8: billedToUserId from the two-identity flow overrides
 					// the legacy intent.metadata.billToUserId field.
 					billToUserId: billedToUserId ?? undefined,
+					// Online checkout charges `feePerTermInCents +
+					// initiationFeeInCents` (payments.ts `membership` procedure), so
+					// fulfillment must invoice the registration fee too or the
+					// invoice lands overpaid. No-op for plans with a $0 fee.
+					chargeInitiationFee: true,
 				},
 			});
 			// Precise row-targeted stamp (Round 2 fix): the prior `updateMany`

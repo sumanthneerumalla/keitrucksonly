@@ -13,6 +13,7 @@ import { TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
 
+import { loadCurrentUser } from "~/server/cache";
 import { db } from "~/server/db";
 
 /**
@@ -31,6 +32,10 @@ export const createTRPCContext = async (opts: { headers: Headers }) => {
 	return {
 		db,
 		auth: await auth(),
+		// Per-request memo scratchpad. This object is rebuilt once per request, so
+		// anything stored here is a request-scoped cache — no staleness, no
+		// invalidation, no cross-user leakage. See ~/server/cache (requestCache).
+		loaders: new Map<string, Promise<unknown>>(),
 		...opts,
 	};
 };
@@ -159,15 +164,32 @@ export const protectedProcedure = t.procedure
 	.use(isAuthed)
 	.use(timingMiddleware);
 
+/**
+ * Authenticated procedure that also resolves the local User row as `ctx.user`
+ * (UNAUTHORIZED if the Clerk user has no User row). Use instead of
+ * protectedProcedure whenever the handler needs the caller's User record —
+ * replaces the per-procedure findUnique({ clerkUserId }) boilerplate.
+ */
+export const memberProcedure = t.procedure
+	.use(isAuthed)
+	.use(async ({ ctx, next }) => {
+		const user = await loadCurrentUser(ctx);
+		if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+		return next({ ctx: { ...ctx, user } });
+	})
+	.use(timingMiddleware);
+
 /** Helper: fetch user and check role, throw if unauthorized */
 async function requireRole(
-	ctx: { db: typeof import("~/server/db").db; auth: { userId: string } },
+	ctx: {
+		db: typeof import("~/server/db").db;
+		auth: { userId: string };
+		loaders?: Map<string, Promise<unknown>>;
+	},
 	check: (userType: UserType) => boolean,
 	message: string,
 ) {
-	const user = await ctx.db.user.findUnique({
-		where: { clerkUserId: ctx.auth.userId },
-	});
+	const user = await loadCurrentUser(ctx);
 	if (!user || !check(user.userType)) {
 		throw new TRPCError({ code: "FORBIDDEN", message });
 	}

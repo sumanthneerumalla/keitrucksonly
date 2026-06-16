@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import AnnouncementFeed from "~/app/_components/client/public/announcements/AnnouncementFeed";
 import type { AnnouncementCard } from "~/lib/announcement";
-import { SITE_URL } from "~/lib/marketing";
+import { getClubPublicUrl } from "~/lib/clubPublicUrl";
 import { db } from "~/server/db";
 import { api } from "~/trpc/server";
 
@@ -38,12 +38,14 @@ async function loadFeedData(clubShortName: string): Promise<{
 	}
 }
 
-async function fetchClub(
-	clubShortName: string,
-): Promise<{ clubShortName: string; clubName: string } | null> {
+async function fetchClub(clubShortName: string): Promise<{
+	clubShortName: string;
+	clubName: string;
+	canonicalDomain: string | null;
+} | null> {
 	return db.club.findUnique({
 		where: { clubShortName },
-		select: { clubShortName: true, clubName: true },
+		select: { clubShortName: true, clubName: true, canonicalDomain: true },
 	});
 }
 
@@ -60,7 +62,7 @@ export async function generateMetadata({
 	}
 	const title = `${club.clubName} Announcements`;
 	const description = `Latest announcements and updates from ${club.clubName}.`;
-	const url = `${SITE_URL}/${clubShortName}/announcements`;
+	const url = getClubPublicUrl(club, "/announcements");
 	return {
 		title,
 		description,

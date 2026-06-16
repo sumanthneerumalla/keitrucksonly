@@ -3,18 +3,24 @@
  *
  * Cache layer in front of the @react-pdf/renderer pipeline.
  *
- * Algorithm (read-time):
- *   1. Look up the live invoice + the updatedAt of every related row the
- *      renderer reads (club, facility, both parties + their profiles), and
- *      reduce to a single `sourceUpdatedAt` staleness watermark.
- *   2. Find the latest InvoicePdf row for this invoice.
- *   3. Serve cached IFF
- *        latest.invoiceUpdatedAt == sourceUpdatedAt
+ * Algorithm (read-time, content-addressed):
+ *   1. assembleRenderableInvoice → the customer-audience DTO (we already need
+ *      it every read for the filename + any render).
+ *   2. contentHash = sha256(the DTO) — a fingerprint of EXACTLY what the
+ *      renderer draws.
+ *   3. Find the latest InvoicePdf row for this invoice.
+ *   4. Serve cached IFF
+ *        latest.contentHash == contentHash
  *        AND latest.rendererVersion == CURRENT_RENDERER_VERSION
- *      (so any edit to the invoice OR to a name/phone/address it renders, or
- *      any code-side layout bump, forces a regen on the next request).
- *   4. Otherwise: assembleRenderableInvoice → render → INSERT a new row at
- *      version = latest.version + 1, then return the new buffer.
+ *      (any change to anything rendered changes the hash → regen; any code-side
+ *      layout bump changes the version → regen).
+ *   5. Otherwise: render → INSERT a new row at version = latest.version + 1,
+ *      then return the new buffer.
+ *
+ * Why a hash and not a per-field updatedAt watermark: the watermark had to list
+ * the updatedAt of every row the renderer reads, kept in sync by hand — and it
+ * drifted twice (invoice notes; the per-club phone move). Hashing the assembled
+ * DTO makes the cache key the rendered content itself, so it can't drift.
  *
  * The InvoicePdf table keeps every historical render (audit trail), but
  * only the LATEST is ever served. Older rows are pruned out of band when
@@ -28,6 +34,7 @@
  * erroring. No locking needed.
  */
 
+import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { renderToBuffer } from "@react-pdf/renderer";
 // Explicit React import: this file ships JSX (`<InvoicePdfDocument …/>`)
@@ -48,7 +55,11 @@ import type { RenderableInvoice } from "./types";
  * retroactively re-render all cached invoices on next read. The string is
  * free-form; any change to its value invalidates every cached row.
  */
-export const CURRENT_RENDERER_VERSION = "v1.1.0";
+// v1.4.0 — Phase 9c §6: Notes block now renders staff-attributed InvoiceNote
+// rows (was the single `meta.notes` blob); invalidates cached PDFs.
+// v1.4.1 — invoice-number title fontSize 20 → 18 (size-20 render artifact: a
+// stray strike through the number in @react-pdf output). Layout change → regen.
+export const CURRENT_RENDERER_VERSION = "v1.4.1";
 
 export type InvoicePdfResult = {
 	/** PDF bytes. Backed by a Node Buffer; safe to pass to NextResponse. */
@@ -73,69 +84,28 @@ export async function getOrRenderInvoicePdf(
 	invoiceId: string,
 	generatedByUserId: string | null,
 ): Promise<InvoicePdfResult> {
-	const invoice = await db.invoice.findUnique({
-		where: { invoiceId },
-		select: {
-			updatedAt: true,
-			clubShortName: true,
-			// The rendered PDF pulls in data from related rows that DON'T bump
-			// Invoice.updatedAt when they change: club name, facility contact
-			// block, and each party's name/email (User) + phone
-			// (StudentProfile). Fold their updatedAt into a single staleness
-			// watermark so editing a member's phone or a facility's address
-			// regenerates the PDF on the next read.
-			club: { select: { updatedAt: true } },
-			facility: { select: { updatedAt: true } },
-			user: {
-				select: {
-					updatedAt: true,
-					studentProfile: { select: { updatedAt: true } },
-				},
-			},
-			billedToUser: {
-				select: {
-					updatedAt: true,
-					studentProfile: { select: { updatedAt: true } },
-				},
-			},
-		},
+	// Assemble the DTO first — it's needed every read anyway (filename on a
+	// cache HIT, render on a MISS) and it's the single source of truth for the
+	// cache key. assembleRenderableInvoice throws NOT_FOUND if the invoice is
+	// gone, so no separate existence check is needed.
+	// The PDF is a customer-facing document (members can download it), so
+	// assemble it with the customer audience — staff-only fields
+	// (revenueCategoryLabel, payment/refund/close attribution) are omitted at
+	// the source (phase9c §4.3).
+	const dto = await assembleRenderableInvoice(invoiceId, {
+		audience: "customer",
 	});
-	if (!invoice) {
-		// Caller's authz check should already have caught this, but defend
-		// in depth — never render a missing invoice.
-		throw new Error(`Invoice ${invoiceId} not found`);
-	}
+	const filename = buildInvoiceFilename(dto);
 
-	// Facility-less legacy invoices use a fallback facility (any active
-	// facility in the same club — see assemble.ts). That facility's
-	// updatedAt isn't reachable through `invoice.facility` (which is null
-	// here), so we mirror assemble.ts's fallback query and fold its
-	// updatedAt into the watermark — otherwise edits to that facility's
-	// address would silently keep serving the stale cached PDF.
-	let fallbackFacilityUpdatedAt: Date | null = null;
-	if (invoice.facility == null) {
-		const fb = await db.clubFacility.findFirst({
-			where: { clubShortName: invoice.clubShortName, isActive: true },
-			orderBy: [{ position: "asc" }, { createdAt: "asc" }],
-			select: { updatedAt: true },
-		});
-		fallbackFacilityUpdatedAt = fb?.updatedAt ?? null;
-	}
-
-	// Single staleness signal = newest updatedAt across every row the renderer
-	// reads. Stored in InvoicePdf.invoiceUpdatedAt (the column name predates
-	// this composite use). On the first read after deploy, rows cached against
-	// the old pure-invoice timestamp simply regenerate once.
-	const sourceUpdatedAt = latestDate([
-		invoice.updatedAt,
-		invoice.club.updatedAt,
-		invoice.facility?.updatedAt,
-		fallbackFacilityUpdatedAt,
-		invoice.user.updatedAt,
-		invoice.user.studentProfile?.updatedAt,
-		invoice.billedToUser?.updatedAt,
-		invoice.billedToUser?.studentProfile?.updatedAt,
-	]);
+	// Content-addressed cache key: a sha256 of the assembled DTO fingerprints
+	// EXACTLY what the renderer draws, so any change to anything rendered
+	// invalidates the cache without a hand-maintained per-field watermark.
+	// JSON.stringify is deterministic here — the assembler builds the object the
+	// same way every time (stable key order, Dates → ISO), and array order is
+	// fixed by the query `orderBy`s.
+	const contentHash = createHash("sha256")
+		.update(JSON.stringify(dto))
+		.digest("hex");
 
 	const latest = await db.invoicePdf.findFirst({
 		where: { invoiceId },
@@ -144,24 +114,14 @@ export async function getOrRenderInvoicePdf(
 			version: true,
 			pdfData: true,
 			rendererVersion: true,
-			invoiceUpdatedAt: true,
+			contentHash: true,
 		},
 	});
-
-	// Re-assemble the DTO every time — we need it both for cache HITs (to
-	// compute the filename, which depends on consumer name + invoiceNumber)
-	// AND for cache MISSes (to render). The Prisma query in
-	// assembleRenderableInvoice is small enough that the cost is negligible
-	// vs. the @react-pdf render cost, and this keeps `filename` strictly
-	// derived from CURRENT data (consumer-name edits show up in the filename
-	// of subsequent downloads).
-	const dto = await assembleRenderableInvoice(invoiceId);
-	const filename = buildInvoiceFilename(dto);
 
 	const isFresh =
 		latest != null &&
 		latest.rendererVersion === CURRENT_RENDERER_VERSION &&
-		latest.invoiceUpdatedAt.getTime() === sourceUpdatedAt.getTime();
+		latest.contentHash === contentHash;
 
 	if (isFresh && latest) {
 		return {
@@ -199,7 +159,7 @@ export async function getOrRenderInvoicePdf(
 					pdfData: pdfBytes,
 					byteSize: buffer.length,
 					rendererVersion: CURRENT_RENDERER_VERSION,
-					invoiceUpdatedAt: sourceUpdatedAt,
+					contentHash,
 					generatedBy: generatedByUserId,
 				},
 			});
@@ -265,17 +225,6 @@ function isInvoiceVersionUniqueViolation(
 		return target === "InvoicePdf_invoiceId_version_key";
 	}
 	return false;
-}
-
-/** Newest of a list of dates, ignoring null/undefined. The list always
- * contains at least invoice.updatedAt, so the result is never null. */
-function latestDate(dates: Array<Date | null | undefined>): Date {
-	let max: Date | undefined;
-	for (const d of dates) {
-		if (d && (max === undefined || d.getTime() > max.getTime())) max = d;
-	}
-	// Safe: callers always pass invoice.updatedAt as a non-null first element.
-	return max as Date;
 }
 
 async function renderPdfBuffer(dto: RenderableInvoice): Promise<Buffer> {

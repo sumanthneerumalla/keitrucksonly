@@ -1,10 +1,25 @@
 import { auth } from "@clerk/nextjs/server";
+import type { Metadata } from "next";
 import EventDetailClient from "~/app/(app)/events/[eventId]/EventDetailClient";
+import { EventLocation } from "~/app/(app)/events/[eventId]/EventLocation";
+import {
+	buildEventJsonLd,
+	buildEventMetadata,
+	fetchEventForSeo,
+	shouldEmitEventJsonLd,
+} from "~/lib/eventSeo";
 import { isOnboardedUser } from "~/lib/utils";
 import { db } from "~/server/db";
 
 interface EventDetailPageProps {
 	params: Promise<{ eventId: string }>;
+}
+
+export async function generateMetadata({
+	params,
+}: EventDetailPageProps): Promise<Metadata> {
+	const { eventId } = await params;
+	return buildEventMetadata(eventId, await fetchEventForSeo(eventId));
 }
 
 export default async function EventDetailPage({
@@ -26,11 +41,27 @@ export default async function EventDetailPage({
 		}
 	}
 
+	// SEO structured data — fetched server-side, independent of the client load.
+	const seoEvent = await fetchEventForSeo(eventId);
+	const jsonLd = shouldEmitEventJsonLd(seoEvent)
+		? buildEventJsonLd(eventId, seoEvent)
+		: null;
+
 	return (
-		<EventDetailClient
-			eventId={eventId}
-			userType={userType ?? ""}
-			userId={userId ?? ""}
-		/>
+		<>
+			{jsonLd ? (
+				<script
+					type="application/ld+json"
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: JSON.stringify of static structured-data object — no raw user input is injected as HTML
+					dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+				/>
+			) : null}
+			<EventDetailClient
+				eventId={eventId}
+				userType={userType ?? ""}
+				userId={userId ?? ""}
+			/>
+			<EventLocation facility={seoEvent?.facility ?? null} />
+		</>
 	);
 }

@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import MobileAuthedHeader from "~/app/_components/client/authed/MobileAuthedHeader";
 import SideNavigation from "~/app/_components/client/authed/SideNavigation";
+import { ClubFooter } from "~/app/_components/client/public/ClubFooter";
+import { ClubNavBar } from "~/app/_components/client/public/ClubNavBar";
 import { NavBar } from "~/app/_components/client/public/NavBar";
 import { Strip } from "~/app/_components/client/public/Strip";
 import { SidebarProvider } from "~/app/_components/shared/ui/sidebar";
@@ -29,11 +31,15 @@ interface AuthedLayoutProps {
 	// fallback so the sidebar/public chrome decision is correct before the
 	// client tRPC query resolves — eliminates the post-hydration flicker.
 	initialUser: { userType: UserType; clubShortName: string } | null;
+	// Marketing footer element, threaded from the server layout so this layout
+	// can swap it for ClubFooter on logged-out club pages (Phase 16).
+	marketingFooter: ReactNode;
 }
 
 export default function AuthedLayout({
 	children,
 	initialUser,
+	marketingFooter,
 }: AuthedLayoutProps) {
 	const pathname = usePathname();
 	const { isSignedIn, isLoaded } = useAuth();
@@ -75,26 +81,13 @@ export default function AuthedLayout({
 	const isEventsPage = pathname.startsWith("/events/");
 	const eventSidebarUser =
 		!!user && EVENT_PAGE_SIDEBAR_TYPES.includes(user.userType);
-	const isPublicPage =
-		pathname === "/" ||
-		pathname === "/features" ||
-		pathname === "/pricing" ||
-		pathname.startsWith("/resources") ||
-		isClubPage ||
-		(isEventsPage && !eventSidebarUser) ||
-		(isRentalsPage && !isSignedIn);
 
-	// Extract clubShortName from pathname for club landing pages.
-	// This is passed to NavBar so its SignIn/SignUp buttons can include
-	// forceRedirectUrl="/join?clubShortName={clubShortName}" so signups land in
-	// the club-onboarding funnel (pick facility → profile) after Clerk auth.
-	//
-	// Note: This extraction duplicates logic in /club/[clubShortName]/page.tsx
-	// because Next.js layouts cannot pass props to page children directly.
-	// The layout handles NavBar, while the page handles Hero/CTA components.
+	// Extract clubShortName from the pathname for club pages. Used both for the
+	// club-branded chrome and for NavBar's /join?clubShortName= signup redirect.
+	// (Duplicates logic in /club/[clubShortName]/page.tsx because Next.js layouts
+	// cannot pass props to page children directly.)
 	let clubShortName: string | undefined;
 	if (pathname.startsWith("/club/")) {
-		// /club/[clubShortName] or /club/[clubShortName]/... format
 		const match = pathname.match(/^\/club\/([^/]+)/);
 		clubShortName = match?.[1];
 	} else {
@@ -102,14 +95,43 @@ export default function AuthedLayout({
 		clubShortName = clubShortMatch?.shortname;
 	}
 
+	// Phase 16 — a LOGGED-OUT visitor on a club page gets fully club-branded
+	// chrome (ClubNavBar + ClubFooter, no sidebar): the public, crawlable SEO
+	// surface, with NO Facility Presence marketing chrome. A LOGGED-IN member
+	// falls through to the normal authed layout below, because member navigation
+	// lives in the sidebar — there is no separate logged-in club chrome to build.
+	const showClubChrome = isClubPage && !user;
+	if (showClubChrome && clubShortName) {
+		return (
+			<>
+				<ClubNavBar clubShortName={clubShortName} />
+				<div className="min-h-screen">{children}</div>
+				<ClubFooter clubShortName={clubShortName} />
+			</>
+		);
+	}
+
+	// Decide page chrome (public/no-sidebar vs. authed/sidebar) for everything
+	// that isn't a logged-out club page (handled above).
+	//
+	// /rentals is public for unauthenticated visitors (no sidebar) but
+	// authenticated users see the sidebar so they can navigate elsewhere after
+	// booking. /events/* has the same dual treatment: public-style for students
+	// and unauthenticated visitors (the page is shareable), sidebar for
+	// admin-like roles (COACH, FACILITY, CLUB_ADMIN, PLATFORM_ADMIN).
+	const isPublicPage =
+		pathname === "/" ||
+		pathname === "/features" ||
+		pathname === "/pricing" ||
+		pathname.startsWith("/resources") ||
+		(isEventsPage && !eventSidebarUser) ||
+		(isRentalsPage && !isSignedIn);
+
 	// Marketing pages render the announcement strip above the NavBar so it lives
 	// in document flow (not behind a fixed header). NavBar uses sticky positioning
 	// so it pins after the user scrolls past the strip.
 	const isMarketingPage =
-		pathname === "/" ||
-		pathname === "/features" ||
-		pathname === "/pricing" ||
-		isClubPage;
+		pathname === "/" || pathname === "/features" || pathname === "/pricing";
 
 	return (
 		<>
@@ -152,6 +174,7 @@ export default function AuthedLayout({
 					</div>
 				</SidebarProvider>
 			)}
+			{marketingFooter}
 		</>
 	);
 }

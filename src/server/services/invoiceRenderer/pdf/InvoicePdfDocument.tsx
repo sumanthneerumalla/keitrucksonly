@@ -29,41 +29,21 @@ import { Document, Page, Text, View } from "@react-pdf/renderer";
 // React.createElement at runtime, so the import has to be visible at the
 // module's top scope.
 import React from "react";
+import {
+	formatInvoiceDate,
+	formatInvoiceDateTime,
+	signedCents,
+} from "~/lib/invoice/format";
 import { formatCents } from "~/lib/money";
 import type { RenderableInvoice } from "../types";
 import { COLORS, statusPillColor, styles } from "./styles";
 
-// ---------- formatting helpers (local; same rules as InvoiceDetail.tsx) ----------
-
-function formatDate(d: Date): string {
-	// Locale pinned to en-US so server-rendered PDFs read identically
-	// regardless of the Node host's default locale (Docker images and
-	// developers' laptops drift here).
-	return new Date(d).toLocaleDateString("en-US", {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
-}
-
-function formatDateTime(d: Date): string {
-	return new Date(d).toLocaleString("en-US", {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-		hour: "numeric",
-		minute: "2-digit",
-	});
-}
-
-function signedCents(cents: number): string {
-	// Render a negative as "−$X" (Unicode minus) — same convention as the
-	// web view (InvoiceDetail.tsx) so the on-screen and PDF copies of a
-	// credit line read identically.
-	return cents < 0
-		? `\u2212${formatCents(Math.abs(cents))}`
-		: formatCents(cents);
-}
+// ---------- formatting helpers ----------
+// Dates are pinned to en-US so server-rendered PDFs read identically regardless
+// of the Node host's default locale (Docker images vs laptops). The date option
+// shapes + signedCents are shared with the web view via ~/lib/invoice/format.
+const formatDate = (d: Date): string => formatInvoiceDate(d, "en-US");
+const formatDateTime = (d: Date): string => formatInvoiceDateTime(d, "en-US");
 
 function formatAddressLine(from: RenderableInvoice["from"]): string | null {
 	const cityState = [from.city, from.state].filter((p) => p).join(", ");
@@ -218,11 +198,10 @@ function LineItemsTable({ dto }: { dto: RenderableInvoice }) {
 											: ""}
 									</Text>
 								)}
-								{line.revenueCategoryLabel != null && (
-									<Text style={[styles.descSubtle, { fontStyle: "italic" }]}>
-										{line.revenueCategoryLabel}
-									</Text>
-								)}
+								{/* revenueCategoryLabel is intentionally NOT rendered on the
+								    PDF: it's internal bookkeeping and this document is
+								    downloadable by members. It stays staff-only on the web
+								    invoice view. (Phase 9c §4.3) */}
 							</View>
 							<Text style={styles.colQty}>{line.quantity}</Text>
 							<Text style={[styles.colUnit, styles.mono]}>
@@ -334,13 +313,26 @@ function PaymentsBlock({ dto }: { dto: RenderableInvoice }) {
 }
 
 function NotesBlock({ dto }: { dto: RenderableInvoice }) {
-	// Whitespace-only notes ("   \n  ") would render an empty bordered box;
-	// trim before deciding whether to draw the section at all.
-	if (!dto.meta.notes?.trim()) return null;
+	// Phase 9c — render all (non-deleted) notes (the assembler already excludes
+	// soft-deleted ones). Whitespace-only bodies are skipped so an empty note
+	// never draws a blank bordered box. The PDF is the "customer" audience, so
+	// note bodies render but staff author attribution is absent from the DTO.
+	const notes = dto.notes.filter((n) => n.body.trim());
+	if (notes.length === 0) return null;
 	return (
 		<View style={styles.notesBlock} wrap={false}>
 			<Text style={[styles.sectionTitle, { marginTop: 0 }]}>Notes</Text>
-			<Text style={styles.notesText}>{dto.meta.notes}</Text>
+			{notes.map((n, i) => (
+				<Text
+					key={n.invoiceNoteId}
+					style={[
+						styles.notesText,
+						i < notes.length - 1 ? { marginBottom: 3 } : {},
+					]}
+				>
+					{n.body}
+				</Text>
+			))}
 		</View>
 	);
 }
@@ -353,14 +345,20 @@ function PageFooter({ dto }: { dto: RenderableInvoice }) {
 	});
 	return (
 		<View style={styles.footer} fixed>
-			<Text style={styles.footerText}>
-				{dto.meta.invoiceNumber} · {dto.from.clubName}
-			</Text>
-			<Text
-				render={({ pageNumber, totalPages }) =>
-					`Page ${pageNumber} of ${totalPages} · Generated ${generatedAt}`
-				}
-			/>
+			{/* Filled divider instead of borderTop — see styles.footer note
+			    (a border on this fixed element leaks a stroke through the
+			    invoice number in the header). */}
+			<View style={styles.footerDivider} />
+			<View style={styles.footerRow}>
+				<Text style={styles.footerText}>
+					{dto.meta.invoiceNumber} · {dto.from.clubName}
+				</Text>
+				<Text
+					render={({ pageNumber, totalPages }) =>
+						`Page ${pageNumber} of ${totalPages} · Generated ${generatedAt}`
+					}
+				/>
+			</View>
 		</View>
 	);
 }

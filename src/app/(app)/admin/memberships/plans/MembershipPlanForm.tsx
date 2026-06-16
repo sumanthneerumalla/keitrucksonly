@@ -1,14 +1,32 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatBilling } from "~/app/(app)/admin/memberships/plans/billingFormat";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
 import { Select } from "~/app/_components/shared/ui/select";
+import {
+	type AddOnCadence,
+	addOnKeyFromLabel,
+	parseMembershipAddOns,
+} from "~/lib/membershipAddOns";
 import { isAnyAdmin } from "~/lib/utils";
 import { api } from "~/trpc/react";
+
+// Phase 10c — coverage mode maps to MembershipPlan.memberCapacity:
+//   individual -> 1, capped -> N (>=2), family -> null (no cap).
+type CoverageMode = "individual" | "capped" | "family";
+
+// Editable add-on row (stable localId for React keys; the persisted `key` slug
+// is derived from the label at submit).
+interface AddOnRow {
+	localId: number;
+	label: string;
+	amountInCents: number;
+	cadence: AddOnCadence;
+}
 
 // ---------------------------------------------------------------------------
 // Membership Plan create/edit form (Phase 10a — phase10-memberships.md "Admin
@@ -61,6 +79,12 @@ export default function MembershipPlanForm({
 	const [hasCycleLimit, setHasCycleLimit] = useState(false);
 	const [billingCycles, setBillingCycles] = useState<number>(12);
 	const [feePerTermInCents, setFeePerTermInCents] = useState<number>(0);
+	const [initiationFeeInCents, setInitiationFeeInCents] = useState<number>(0);
+	// Phase 10c — coverage (display-only capacity hint) + flexible add-on menu.
+	const [coverageMode, setCoverageMode] = useState<CoverageMode>("individual");
+	const [capacityN, setCapacityN] = useState<number>(2);
+	const [addOns, setAddOns] = useState<AddOnRow[]>([]);
+	const nextLocalId = useRef(1);
 	const [isActive, setIsActive] = useState(true);
 	const [saving, setSaving] = useState(false);
 
@@ -98,6 +122,25 @@ export default function MembershipPlanForm({
 			setHasCycleLimit(false);
 		}
 		setFeePerTermInCents(plan.feePerTermInCents);
+		setInitiationFeeInCents(plan.initiationFeeInCents);
+		// Phase 10c — hydrate coverage + add-on menu.
+		const cap = plan.memberCapacity;
+		if (cap === null) {
+			setCoverageMode("family");
+		} else if (cap <= 1) {
+			setCoverageMode("individual");
+		} else {
+			setCoverageMode("capped");
+			setCapacityN(cap);
+		}
+		setAddOns(
+			parseMembershipAddOns(plan.addOnFees).map((a) => ({
+				localId: nextLocalId.current++,
+				label: a.label,
+				amountInCents: a.amountInCents,
+				cadence: a.cadence,
+			})),
+		);
 		setIsActive(plan.isActive);
 	}, [editPlanData, mode, membershipPlanId]);
 
@@ -131,7 +174,18 @@ export default function MembershipPlanForm({
 		}
 	};
 
+	const handleInitiationFeeChange = (
+		e: React.ChangeEvent<HTMLInputElement>,
+	) => {
+		const value = e.target.value;
+		if (value === "" || /^\d*\.?\d{0,2}$/.test(value)) {
+			const dollars = Number.parseFloat(value || "0");
+			setInitiationFeeInCents(Math.round(dollars * 100));
+		}
+	};
+
 	const feeInDollars = (feePerTermInCents / 100).toFixed(2);
+	const initiationFeeInDollars = (initiationFeeInCents / 100).toFixed(2);
 
 	const types = useMemo(() => typesData?.types ?? [], [typesData]);
 
@@ -158,6 +212,41 @@ export default function MembershipPlanForm({
 			toast("Number of billing cycles must be at least 1", "error");
 			return;
 		}
+		if (coverageMode === "capped" && capacityN < 2) {
+			toast("A capped plan must cover at least 2 people", "error");
+			return;
+		}
+		if (addOns.some((a) => a.label.trim() === "")) {
+			toast("Every add-on fee needs a label", "error");
+			return;
+		}
+
+		// Phase 10c — coverage hint + add-on menu. memberCapacity: individual -> 1,
+		// capped -> N, family -> null (no cap). Derive a unique slug per add-on.
+		const memberCapacity =
+			coverageMode === "individual"
+				? 1
+				: coverageMode === "family"
+					? null
+					: capacityN;
+		const usedKeys = new Set<string>();
+		const addOnFees = addOns
+			.filter((a) => a.label.trim() !== "")
+			.map((a) => {
+				const base = addOnKeyFromLabel(a.label);
+				let key = base;
+				let i = 2;
+				while (usedKeys.has(key)) {
+					key = `${base}-${i++}`;
+				}
+				usedKeys.add(key);
+				return {
+					key,
+					label: a.label.trim(),
+					amountInCents: a.amountInCents,
+					cadence: a.cadence,
+				};
+			});
 
 		setSaving(true);
 
@@ -169,6 +258,9 @@ export default function MembershipPlanForm({
 			billingUnit,
 			billingCycles: hasCycleLimit ? billingCycles : null,
 			feePerTermInCents,
+			initiationFeeInCents,
+			memberCapacity,
+			addOnFees,
 		};
 
 		if (mode === "create") {
@@ -414,6 +506,235 @@ export default function MembershipPlanForm({
 							Charged {billingPreview}.
 						</p>
 					</div>
+
+					<div className="space-y-1">
+						<label
+							htmlFor="plan-initiation-fee"
+							className="font-medium text-[var(--foreground)] text-sm"
+						>
+							Registration fee (one-time, USD)
+						</label>
+						<div className="relative">
+							<span className="-translate-y-1/2 absolute top-1/2 left-3 text-[var(--muted-foreground)] text-sm">
+								$
+							</span>
+							<Input
+								id="plan-initiation-fee"
+								type="text"
+								value={initiationFeeInDollars}
+								onChange={handleInitiationFeeChange}
+								placeholder="0.00"
+								disabled={saving}
+								className="pl-7"
+							/>
+						</div>
+						<p className="text-[var(--muted-foreground)] text-xs">
+							Charged once at signup, on top of the first term's fee. At sale it
+							defaults on for first-time members and staff can waive it. Leave
+							$0.00 for no registration fee.
+						</p>
+					</div>
+				</section>
+
+				{/* Coverage (Phase 10c) — display-only capacity hint. */}
+				<section className="space-y-3">
+					<h2 className="font-semibold text-[var(--foreground)] text-lg">
+						Coverage
+					</h2>
+					<p className="text-[var(--muted-foreground)] text-xs">
+						Who a membership on this plan covers. This is a guide for the front
+						desk — at check-in we show the plan’s capacity next to the member’s
+						family size. It is <strong>not enforced</strong>.
+					</p>
+					<label className="flex cursor-pointer items-start gap-2 text-sm">
+						<input
+							type="radio"
+							name="coverage"
+							checked={coverageMode === "individual"}
+							onChange={() => setCoverageMode("individual")}
+							className="mt-0.5"
+							disabled={saving}
+						/>
+						<span className="text-[var(--foreground)]">
+							Individual — covers one person
+						</span>
+					</label>
+					<label className="flex cursor-pointer items-start gap-2 text-sm">
+						<input
+							type="radio"
+							name="coverage"
+							checked={coverageMode === "capped"}
+							onChange={() => setCoverageMode("capped")}
+							className="mt-0.5"
+							disabled={saving}
+						/>
+						<span className="text-[var(--foreground)]">
+							Covers a family, up to a set number of people
+						</span>
+					</label>
+					{coverageMode === "capped" && (
+						<div className="flex items-center gap-2 pl-6">
+							<Input
+								type="number"
+								min={2}
+								max={1000}
+								value={capacityN}
+								onChange={(e) =>
+									setCapacityN(Number.parseInt(e.target.value, 10) || 0)
+								}
+								disabled={saving}
+								className="w-24"
+							/>
+							<span className="text-[var(--muted-foreground)] text-sm">
+								people
+							</span>
+						</div>
+					)}
+					<label className="flex cursor-pointer items-start gap-2 text-sm">
+						<input
+							type="radio"
+							name="coverage"
+							checked={coverageMode === "family"}
+							onChange={() => setCoverageMode("family")}
+							className="mt-0.5"
+							disabled={saving}
+						/>
+						<span className="text-[var(--foreground)]">
+							Covers a family — no set limit
+						</span>
+					</label>
+				</section>
+
+				{/* Add-on fees (Phase 10c) — flexible optional fees, checkbox-selected
+				    at sale and added to the invoice. */}
+				<section className="space-y-3">
+					<h2 className="font-semibold text-[var(--foreground)] text-lg">
+						Add-on fees
+					</h2>
+					<p className="text-[var(--muted-foreground)] text-xs">
+						Optional fees staff can add at sale (e.g. an extra family member, a
+						locker, equipment). Each one selected at sale is added to the
+						invoice. “Recurring” is a tag for future automatic billing — for now
+						everything is charged once at sale.
+					</p>
+					{addOns.length > 0 && (
+						<div className="space-y-2">
+							{addOns.map((row) => (
+								<div key={row.localId} className="flex items-end gap-2">
+									<div className="flex-1 space-y-1">
+										<span className="block text-[var(--muted-foreground)] text-xs">
+											Label
+										</span>
+										<Input
+											type="text"
+											value={row.label}
+											placeholder="e.g. Additional family member"
+											maxLength={80}
+											disabled={saving}
+											onChange={(e) =>
+												setAddOns((prev) =>
+													prev.map((r) =>
+														r.localId === row.localId
+															? { ...r, label: e.target.value }
+															: r,
+													),
+												)
+											}
+										/>
+									</div>
+									<div className="w-28 space-y-1">
+										<span className="block text-[var(--muted-foreground)] text-xs">
+											Amount
+										</span>
+										<div className="relative">
+											<span className="-translate-y-1/2 absolute top-1/2 left-3 text-[var(--muted-foreground)] text-sm">
+												$
+											</span>
+											<Input
+												type="text"
+												value={(row.amountInCents / 100).toFixed(2)}
+												disabled={saving}
+												className="pl-7"
+												onChange={(e) => {
+													const v = e.target.value;
+													if (v === "" || /^\d*\.?\d{0,2}$/.test(v)) {
+														const cents = Math.round(
+															Number.parseFloat(v || "0") * 100,
+														);
+														setAddOns((prev) =>
+															prev.map((r) =>
+																r.localId === row.localId
+																	? { ...r, amountInCents: cents }
+																	: r,
+															),
+														);
+													}
+												}}
+											/>
+										</div>
+									</div>
+									<div className="w-32 space-y-1">
+										<span className="block text-[var(--muted-foreground)] text-xs">
+											Cadence
+										</span>
+										<Select
+											value={row.cadence}
+											disabled={saving}
+											className="h-9"
+											onChange={(e) =>
+												setAddOns((prev) =>
+													prev.map((r) =>
+														r.localId === row.localId
+															? {
+																	...r,
+																	cadence: e.target.value as AddOnCadence,
+																}
+															: r,
+													),
+												)
+											}
+										>
+											<option value="once">One-time</option>
+											<option value="recurring">Recurring</option>
+										</Select>
+									</div>
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										disabled={saving}
+										className="text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+										onClick={() =>
+											setAddOns((prev) =>
+												prev.filter((r) => r.localId !== row.localId),
+											)
+										}
+									>
+										Remove
+									</Button>
+								</div>
+							))}
+						</div>
+					)}
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						disabled={saving}
+						onClick={() =>
+							setAddOns((prev) => [
+								...prev,
+								{
+									localId: nextLocalId.current++,
+									label: "",
+									amountInCents: 0,
+									cadence: "once",
+								},
+							])
+						}
+					>
+						+ Add fee
+					</Button>
 				</section>
 
 				{/* Auto-Renew — schema shipped, inert in 10a (Auto-Renew Toggle §). */}

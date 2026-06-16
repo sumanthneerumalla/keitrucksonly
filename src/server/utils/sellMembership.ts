@@ -33,6 +33,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import dayjs from "~/lib/dayjs-config";
+import { parseMembershipAddOns } from "~/lib/membershipAddOns";
 import {
 	AUDIT_ACTIONS,
 	type AuditSource,
@@ -94,6 +95,21 @@ export interface SellMembershipInternalInput {
 	startDate: string;
 	notes?: string;
 	billToUserId?: string;
+	/**
+	 * When true AND the plan has a nonzero `initiationFeeInCents`, a one-time
+	 * "Registration fee" FEE line is appended alongside the MEMBERSHIP_FEE
+	 * line (same revenue category as the membership). Staff sales default
+	 * this from "member has no prior non-voided membership" (waivable in the
+	 * modal); the Stripe webhook always passes true because online checkout
+	 * charged `feePerTermInCents + initiationFeeInCents`.
+	 */
+	chargeInitiationFee?: boolean;
+	/**
+	 * Phase 10c — keys of the plan's add-on fee menu rows the staff selected.
+	 * Each resolves against `plan.addOnFees` and appends a snapshotted FEE line.
+	 * Unknown keys (stale menu) throw rather than silently undercharge.
+	 */
+	selectedAddOnKeys?: string[];
 }
 
 export interface SellMembershipInternalArgs {
@@ -177,6 +193,31 @@ export async function sellMembershipInternal(args: SellMembershipInternalArgs) {
 	// Snapshot the full-term fee at sale time.
 	const unitPriceInCents = plan.feePerTermInCents;
 	const lineTotalInCents = unitPriceInCents;
+	// One-time registration fee — charged only when the caller opted in AND
+	// the plan defines one. Snapshotted here like the term fee.
+	const initiationFeeInCents = input.chargeInitiationFee
+		? plan.initiationFeeInCents
+		: 0;
+
+	// Phase 10c — resolve the selected add-on fee keys against the plan's menu.
+	// Dedupe (a key selected twice must not double-charge); preserve menu order
+	// for stable line sortOrder. A selected key missing from the menu (stale
+	// client) throws rather than silently dropping a charge.
+	const addOnMenu = parseMembershipAddOns(plan.addOnFees);
+	const selectedKeys = new Set(input.selectedAddOnKeys ?? []);
+	const selectedAddOns = addOnMenu.filter((a) => selectedKeys.has(a.key));
+	for (const key of selectedKeys) {
+		if (!addOnMenu.some((a) => a.key === key)) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "A selected add-on is no longer available on this plan",
+			});
+		}
+	}
+	const addOnsTotalInCents = selectedAddOns.reduce(
+		(sum, a) => sum + a.amountInCents,
+		0,
+	);
 
 	// ----- Audited transaction (the helper OWNS the wrapper) ---------------
 	return await writeAuditedMutation(
@@ -245,6 +286,8 @@ export async function sellMembershipInternal(args: SellMembershipInternalArgs) {
 					membershipPlanId: plan.membershipPlanId,
 					facilityId: member.activeFacilityId,
 					status: "active",
+					// Phase 10c — snapshot the coverage hint from the plan at sale time.
+					memberCapacity: plan.memberCapacity,
 					startDate: periodStart,
 					endDate: periodEnd,
 					soldBy: soldByUserId,
@@ -275,8 +318,77 @@ export async function sellMembershipInternal(args: SellMembershipInternalArgs) {
 				},
 			});
 
-			const newSubtotal = invoice.subtotalInCents + unitPriceInCents;
-			const newTotal = invoice.totalInCents + lineTotalInCents;
+			// One-time registration fee line. Kind=FEE (not MEMBERSHIP_FEE — that
+			// kind means "recurring term charge" and carries period dates), but it
+			// keeps the membership FK for provenance. Registration fees report
+			// under the same revenue category as the membership itself.
+			if (initiationFeeInCents > 0) {
+				assertLineItemKindConsistency({
+					kind: "FEE",
+					memberMembershipId: membership.memberMembershipId,
+				});
+				await tx.invoiceLineItem.create({
+					data: {
+						invoiceId: invoice.invoiceId,
+						kind: "FEE",
+						memberMembershipId: membership.memberMembershipId,
+						revenueCategoryId: plan.membershipType?.revenueCategoryId ?? null,
+						description: `Registration fee — ${
+							plan.membershipType?.name ?? plan.description
+						}`,
+						quantity: 1,
+						unitPriceInCents: initiationFeeInCents,
+						discountInCents: 0,
+						taxRateBps: 0,
+						taxAmountInCents: 0,
+						totalInCents: initiationFeeInCents,
+						sortOrder: existingLineCount + 1,
+					},
+				});
+			}
+
+			// Phase 10c — selected add-on fee lines. Kind=FEE with the membership FK
+			// for provenance (same pattern as the registration fee); label + amount
+			// are snapshotted from the plan menu. Sorted after the membership +
+			// (optional) registration-fee lines. `cadence` is NOT persisted per line
+			// in Phase 1 — recurring re-billing is a 10b concern (it reads the plan
+			// menu); here we charge each selected add-on exactly once.
+			let nextSortOrder =
+				existingLineCount + (initiationFeeInCents > 0 ? 2 : 1);
+			for (const addOn of selectedAddOns) {
+				assertLineItemKindConsistency({
+					kind: "FEE",
+					memberMembershipId: membership.memberMembershipId,
+				});
+				await tx.invoiceLineItem.create({
+					data: {
+						invoiceId: invoice.invoiceId,
+						kind: "FEE",
+						memberMembershipId: membership.memberMembershipId,
+						revenueCategoryId: plan.membershipType?.revenueCategoryId ?? null,
+						description: addOn.label,
+						quantity: 1,
+						unitPriceInCents: addOn.amountInCents,
+						discountInCents: 0,
+						taxRateBps: 0,
+						taxAmountInCents: 0,
+						totalInCents: addOn.amountInCents,
+						sortOrder: nextSortOrder,
+					},
+				});
+				nextSortOrder += 1;
+			}
+
+			const newSubtotal =
+				invoice.subtotalInCents +
+				unitPriceInCents +
+				initiationFeeInCents +
+				addOnsTotalInCents;
+			const newTotal =
+				invoice.totalInCents +
+				lineTotalInCents +
+				initiationFeeInCents +
+				addOnsTotalInCents;
 			const amountPaid = invoice.amountPaidInCents;
 			let newStatus: string;
 			if (amountPaid >= newTotal) {
@@ -313,7 +425,15 @@ export async function sellMembershipInternal(args: SellMembershipInternalArgs) {
 					metadata: {
 						membershipPlanId: plan.membershipPlanId,
 						invoiceId: updatedInvoice.invoiceId,
-						amountInCents: lineTotalInCents,
+						amountInCents:
+							lineTotalInCents + initiationFeeInCents + addOnsTotalInCents,
+						...(initiationFeeInCents > 0 ? { initiationFeeInCents } : {}),
+						...(selectedAddOns.length > 0
+							? {
+									addOnKeys: selectedAddOns.map((a) => a.key),
+									addOnsTotalInCents,
+								}
+							: {}),
 					},
 				}),
 			};

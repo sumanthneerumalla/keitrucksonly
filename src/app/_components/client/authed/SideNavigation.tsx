@@ -305,12 +305,23 @@ export const navItems: NavItem[] = [
 				// Phase 12a Stream 5 — Settings is admin-only (CLUB_ADMIN /
 				// PLATFORM_ADMIN). FACILITY-level staff see the rest of the
 				// Admin tree but not billing-infrastructure settings.
-				// Today the only subsection is Payments, so the nav entry jumps
-				// straight there (no intermediate landing page). Future tiles
-				// can reintroduce a /admin/settings index when there are >1.
+				// The parent points at Payments (no intermediate landing page yet);
+				// the chevron reveals the subsections.
 				label: "Settings",
 				href: "/admin/settings/payments",
 				userTypes: [UserType.PLATFORM_ADMIN, UserType.CLUB_ADMIN],
+				children: [
+					{
+						label: "Payments",
+						href: "/admin/settings/payments",
+						userTypes: [UserType.PLATFORM_ADMIN, UserType.CLUB_ADMIN],
+					},
+					{
+						label: "Club Branding",
+						href: "/admin/settings/club",
+						userTypes: [UserType.PLATFORM_ADMIN, UserType.CLUB_ADMIN],
+					},
+				],
 			},
 		],
 		userTypes: [

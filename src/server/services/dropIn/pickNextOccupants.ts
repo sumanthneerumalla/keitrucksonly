@@ -27,7 +27,7 @@
  *
  * Atomicity: this function is PURE. The caller takes a snapshot inside a
  * transaction, runs this selector, and re-claims via `updateMany WHERE
- * status=WAITING` (the existing pattern in formNext/tickTimed). A race guard
+ * status=WAITING` (the existing pattern in formNext/rotateExpiredSlots). A race guard
  * after the claim catches `addPartyMember` landings between snapshot and
  * claim — see plan §3.
  */
@@ -41,8 +41,6 @@ export interface PartySummary {
 	memberUserIds: string[];
 	/** Status snapshot per member at the moment we read the pool. */
 	memberStatuses: Record<string, DropInPlayerStatus>;
-	/** True if any member has `isGuest = true` (suppresses GBR sync). */
-	hasGuest: boolean;
 	/**
 	 * Hard court lock (court-preference feature). null/undefined = any court.
 	 * When set, the party is only eligible for that court — see the `courtId`
@@ -54,9 +52,6 @@ export interface PartySummary {
 export interface Pick {
 	partyIds: string[];
 	userIds: string[];
-	/** False if any chosen party contained a guest — caller MUST set
-	 * `DropInAssignment.ratingWeight = null` in that case. */
-	ratingEligible: boolean;
 }
 
 /**
@@ -66,7 +61,7 @@ export interface Pick {
  *   - At least one member is currently `WAITING` — i.e. the party is *in*
  *     the queue this round. Members at IDLE/DONE/LEFT/CANCELLED don't count
  *     toward the party's effective size; they must explicitly re-queue
- *     (rejoin / requeueParty) to be considered.
+ *     (requeueParty) to be considered.
  *
  * Returns `ready: false` for either failure mode so callers don't need to
  * distinguish them at the algorithm level. The waiting count is the party's
@@ -139,7 +134,6 @@ export function pickNextOccupants(
 				return {
 					partyIds: [head.partyId],
 					userIds: waitingMembersOf(head),
-					ratingEligible: !head.hasGuest,
 				};
 			}
 			continue;
@@ -149,7 +143,7 @@ export function pickNextOccupants(
 		// make this unreachable. If we see corrupt data, don't stall — log
 		// and try the next head so one bad row doesn't freeze rotation.
 		if (headStatus.waitingCount > capacity) {
-			reportInvariantViolation("party larger than court capacity", {
+			console.error("[pickNextOccupants] party larger than court capacity", {
 				partyId: head.partyId,
 				waitingCount: headStatus.waitingCount,
 				capacity,
@@ -179,7 +173,6 @@ export function pickNextOccupants(
 			return {
 				partyIds: chosen.map((p) => p.partyId),
 				userIds: chosen.flatMap((p) => waitingMembersOf(p)),
-				ratingEligible: chosen.every((p) => !p.hasGuest),
 			};
 		}
 
@@ -191,17 +184,4 @@ export function pickNextOccupants(
 	}
 
 	return null;
-}
-
-/**
- * Hook for surfacing data-corruption signals during the selection. Kept as a
- * thin indirection so callers (and tests) can swap in a Sentry breadcrumb
- * later without changing this file. Default behavior: console.error.
- */
-function reportInvariantViolation(
-	message: string,
-	context: Record<string, unknown>,
-): void {
-	// eslint-disable-next-line no-console
-	console.error("[pickNextOccupants] invariant violation:", message, context);
 }

@@ -168,6 +168,26 @@ export function matchClubShortUrlPathname(
 		};
 	}
 
+	// /<short>/calendar (Phase 16) — the public club calendar (the "Book a
+	// Court" / "View Calendar" destination). Query params (view/mode/
+	// orientation) ride along via the preserved nextUrl search string.
+	if (rest[0] === "calendar" && rest.length === 1) {
+		return {
+			shortname: short,
+			rewritePath: `/club/${short}/calendar`,
+		};
+	}
+
+	// /<short>/events/<eventId> (Phase 16 Step 5) — club-chromed public event
+	// page. Single trailing id only; no index (the events live on the landing
+	// page + calendar).
+	if (rest[0] === "events" && rest.length === 2 && rest[1]) {
+		return {
+			shortname: short,
+			rewritePath: `/club/${short}/events/${rest[1]}`,
+		};
+	}
+
 	// Any other deeper path (e.g. /<short>/dashboard) is NOT a club short URL.
 	return null;
 }

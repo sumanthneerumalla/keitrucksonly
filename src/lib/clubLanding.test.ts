@@ -46,6 +46,25 @@ describe("matchClubShortUrlPathname", () => {
 		});
 	});
 
+	it("rewrites the public calendar", () => {
+		expect(matchClubShortUrlPathname("/cba/calendar")).toEqual({
+			shortname: "cba",
+			rewritePath: "/club/cba/calendar",
+		});
+		// No deeper calendar paths.
+		expect(matchClubShortUrlPathname("/cba/calendar/week")).toBeNull();
+	});
+
+	it("rewrites a club-chromed event page", () => {
+		expect(matchClubShortUrlPathname("/cba/events/evt_123")).toEqual({
+			shortname: "cba",
+			rewritePath: "/club/cba/events/evt_123",
+		});
+		// No events index, and no deeper paths.
+		expect(matchClubShortUrlPathname("/cba/events")).toBeNull();
+		expect(matchClubShortUrlPathname("/cba/events/evt_123/edit")).toBeNull();
+	});
+
 	it("optimistically rewrites an unknown (not-yet-validated) shortname", () => {
 		// The club may or may not exist — the /club/<short> page's
 		// db.club.findUnique → notFound() is the source of truth, not this matcher.

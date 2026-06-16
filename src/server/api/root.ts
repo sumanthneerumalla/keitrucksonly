@@ -4,6 +4,7 @@ import { billingRouter } from "~/server/api/routers/billing";
 import { calendarRouter } from "~/server/api/routers/calendar";
 import { categoriesRouter } from "~/server/api/routers/categories";
 import { checkinRouter } from "~/server/api/routers/checkin";
+import { clubSettingsRouter } from "~/server/api/routers/clubSettings";
 import { clubsRouter } from "~/server/api/routers/clubs";
 import { coachesRouter } from "~/server/api/routers/coaches";
 import { coachingNotesRouter } from "~/server/api/routers/coachingNotes";
@@ -37,6 +38,7 @@ export const appRouter = createTRPCRouter({
 	categories: categoriesRouter,
 	checkin: checkinRouter,
 	clubs: clubsRouter,
+	clubSettings: clubSettingsRouter,
 	memberships: membershipsRouter,
 	packages: packagesRouter,
 	payments: paymentsRouter,

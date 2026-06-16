@@ -1,4 +1,10 @@
-import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
+import {
+	createTRPCRouter,
+	memberProcedure,
+	publicProcedure,
+} from "~/server/api/trpc";
 
 /**
  * Phase 15 Stage 2 — clubs router.
@@ -15,4 +21,68 @@ export const clubsRouter = createTRPCRouter({
 			orderBy: { clubName: "asc" },
 		});
 	}),
+
+	/**
+	 * Phase 16 — public branding for club landing-page chrome (navbar + footer).
+	 * Public because logged-out visitors render the club-branded chrome. Returns
+	 * only non-sensitive branding + the club's ACTIVE facilities' NAP/hours
+	 * (local-SEO signal). Throws NOT_FOUND when the club does not exist.
+	 */
+	getPublicBranding: publicProcedure
+		.input(z.object({ clubShortName: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const club = await ctx.db.club.findUnique({
+				where: { clubShortName: input.clubShortName },
+				select: {
+					clubShortName: true,
+					clubName: true,
+					tagline: true,
+					description: true,
+					websiteUrl: true,
+					socialLinks: true,
+					logoImageId: true,
+					canonicalDomain: true,
+					facilities: {
+						where: { isActive: true },
+						orderBy: { position: "asc" },
+						select: {
+							facilityId: true,
+							name: true,
+							streetAddress: true,
+							city: true,
+							state: true,
+							zipCode: true,
+							phone: true,
+							email: true,
+							operatingHours: true,
+						},
+					},
+				},
+			});
+
+			if (!club) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: `Club "${input.clubShortName}" not found`,
+				});
+			}
+
+			const { facilities, ...clubFields } = club;
+			return { club: clubFields, facilities };
+		}),
+
+	/**
+	 * Phase 16 — does the caller already belong to this club? Used by the club
+	 * landing page to hide the "Join Our Club" CTA for existing members. Returns
+	 * false-y for non-members; the UI defaults to SHOWING Join when this is
+	 * unavailable (logged out / not onboarded).
+	 */
+	amIMember: memberProcedure
+		.input(z.object({ clubShortName: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const count = await ctx.db.userClub.count({
+				where: { userId: ctx.user.userId, clubShortName: input.clubShortName },
+			});
+			return { isMember: count > 0 };
+		}),
 });

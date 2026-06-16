@@ -12,6 +12,7 @@ import {
 	Users,
 	X,
 } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import MemberPackagesCard from "~/app/(app)/admin/checkin/MemberPackagesCard";
 import { Button } from "~/app/_components/shared/Button";
@@ -111,19 +112,20 @@ type RecentCheckin = {
 	event: { eventId: string; title: string } | null;
 };
 
-// Phase 10a (WP6) — display-only membership row for the check-in card. Mirror
-// of a `MemberMembership` (with plan/type joined) from
-// `api.memberships.listForMember`; declared locally so the card stays typed
-// before the membership router resolves. Matches prisma/schema.prisma.
+// Phase 10c — display-only coverage row for the check-in card, from
+// `api.memberships.coverageForMember` (own + family-shared, with the capacity
+// hint + who shares it). Declared locally so the card stays typed; matches
+// `MembershipCoverageRow` in src/server/utils/membershipCoverage.ts.
 type CheckinMembership = {
 	memberMembershipId: string;
 	status: string;
 	startDate: Date | string;
 	endDate: Date | string | null;
-	membershipPlan: {
-		description: string;
-		membershipType: { name: string } | null;
-	} | null;
+	memberCapacity: number | null;
+	planDescription: string;
+	membershipTypeName: string;
+	coverageSource: "own" | "family";
+	sharedByName: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -195,10 +197,11 @@ export default function AdminCheckinClient() {
 			{ enabled: !!selectedUserId && !!facilityId },
 		);
 
-	// Phase 10a (WP6) — membership-aware check-in DISPLAY. Fetch the member's
-	// memberships so we can show a status badge per active/upcoming row. This is
-	// display-only: no access enforcement at check-in in 10a.
-	const { data: membershipData } = api.memberships.listForMember.useQuery(
+	// Phase 10c — membership-aware check-in DISPLAY. Fetch the member's COVERAGE
+	// (own memberships + ones shared via their family) plus the family size, so we
+	// can show a badge per active/upcoming row and let staff sanity-check a plan's
+	// stated capacity against the family. Display-only: no access enforcement.
+	const { data: membershipData } = api.memberships.coverageForMember.useQuery(
 		// `enabled` gates this on a non-null id; `?? ""` keeps the input typed as
 		// string without a non-null assertion (lint-clean) and is never queried
 		// when null.
@@ -402,7 +405,8 @@ export default function AdminCheckinClient() {
 	// the desk (decision: 10a check-in is display-only). Expired/cancelled/etc.
 	// stay out of the check-in view; staff see those under the profile tab.
 	const allMemberships: CheckinMembership[] =
-		(membershipData?.memberships as CheckinMembership[]) ?? [];
+		(membershipData?.coverage.rows as CheckinMembership[]) ?? [];
+	const familySize = membershipData?.coverage.familySize ?? 0;
 	const displayMemberships = allMemberships.filter((m) => {
 		const d = membershipStatusDisplay({
 			status: m.status,
@@ -652,9 +656,14 @@ export default function AdminCheckinClient() {
 						</div>
 					) : member ? (
 						<div className="divide-y divide-[var(--border)]">
-							{/* Member header */}
+							{/* Member header — name + avatar link through to the full
+							    client profile (/clients/[userId]). */}
 							<div className="flex items-start gap-4 p-4">
-								<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-semibold text-[var(--foreground)] text-lg">
+								<Link
+									href={`/clients/${member.userId}`}
+									className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-semibold text-[var(--foreground)] text-lg transition-opacity hover:opacity-80"
+									aria-label={`View ${memberFullName}'s profile`}
+								>
 									{member.profileImage ? (
 										<img
 											src={member.profileImage}
@@ -667,10 +676,15 @@ export default function AdminCheckinClient() {
 											{(member.lastName?.[0] ?? "").toUpperCase()}
 										</>
 									)}
-								</div>
+								</Link>
 								<div className="min-w-0 flex-1">
 									<h3 className="font-semibold text-[var(--foreground)] text-lg">
-										{memberFullName}
+										<Link
+											href={`/clients/${member.userId}`}
+											className="underline-offset-2 hover:underline"
+										>
+											{memberFullName}
+										</Link>
 									</h3>
 									<p className="text-[var(--muted-foreground)] text-sm">
 										{member.email}
@@ -721,10 +735,16 @@ export default function AdminCheckinClient() {
 												startDate: m.startDate,
 												endDate: m.endDate,
 											});
-											const typeName =
-												m.membershipPlan?.membershipType?.name ?? null;
-											const planName =
-												m.membershipPlan?.description ?? "Membership";
+											const typeName = m.membershipTypeName || null;
+											const planName = m.planDescription || "Membership";
+											// Phase 10c — shareable plan (capacity null or >1) → show
+											// "covers N · family has M" and subtly highlight a family
+											// bigger than the stated cap. Capacity is NOT enforced.
+											const isShareable =
+												m.memberCapacity === null || m.memberCapacity > 1;
+											const overCapacity =
+												m.memberCapacity !== null &&
+												familySize > m.memberCapacity;
 											return (
 												<div
 													key={m.memberMembershipId}
@@ -739,6 +759,31 @@ export default function AdminCheckinClient() {
 																{planName}
 															</p>
 														) : null}
+														{m.coverageSource === "family" && m.sharedByName ? (
+															<p className="truncate text-[var(--muted-foreground)] text-xs">
+																via {m.sharedByName}’s family
+															</p>
+														) : null}
+														{isShareable && (
+															<p className="text-xs">
+																<span className="text-[var(--muted-foreground)]">
+																	{m.memberCapacity === null
+																		? "Covers family"
+																		: `Covers ${m.memberCapacity}`}{" "}
+																	·{" "}
+																</span>
+																<span
+																	className={
+																		overCapacity
+																			? "font-medium text-amber-600 dark:text-amber-400"
+																			: "text-[var(--muted-foreground)]"
+																	}
+																>
+																	family has {familySize}
+																	{overCapacity ? " ⚠" : ""}
+																</span>
+															</p>
+														)}
 													</div>
 													<span
 														className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 font-medium text-xs ${MEMBERSHIP_TONE_BADGE_STYLES[display.tone]}`}

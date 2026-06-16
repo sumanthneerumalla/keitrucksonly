@@ -3,6 +3,7 @@ import {
 	FileVideo,
 	Megaphone,
 	Newspaper,
+	Palette,
 	Receipt,
 	Search,
 } from "lucide-react";
@@ -147,6 +148,27 @@ export default async function AdminPage() {
 					);
 				})}
 			</div>
+
+			{/* Settings Section — admin-only (CLUB_ADMIN / PLATFORM_ADMIN). */}
+			{isAnyAdmin(user) && (
+				<section id="settings" className="mb-10 scroll-mt-20">
+					<div className="mb-4 flex items-center gap-2">
+						<Palette size={20} className="text-[var(--muted-foreground)]" />
+						<h2 className="font-medium text-[var(--foreground)] text-lg">
+							Settings
+						</h2>
+					</div>
+					<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+						<SectionCard
+							id="club-branding"
+							title="Club Settings"
+							description="Edit your club's public landing-page branding — logo, hero photo, tagline, and links."
+							icon={Palette}
+							href="/admin/settings/club"
+						/>
+					</div>
+				</section>
+			)}
 
 			{/* Billing Section */}
 			<section id="billing" className="mb-10 scroll-mt-20">

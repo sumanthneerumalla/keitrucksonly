@@ -3,32 +3,29 @@ import type { Prisma, PrismaClient, User } from "@prisma/client";
 import { UserType } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { isOnboardedUser } from "~/lib/utils";
+import {
+	type RequestCacheContext,
+	loadCurrentUser,
+} from "~/server/cache/requestCache";
 import { db } from "~/server/db";
 
-// Define a simplified context type for our helper functions
-export type ContextWithAuth = {
-	db: {
-		user: {
-			findUnique: (args: {
-				where: { clerkUserId: string };
-			}) => Promise<User | null>;
-		};
-	};
-	auth: {
-		userId: string;
-	};
-};
+/**
+ * Context shape the user helpers need (db.user.findUnique + auth + the optional
+ * per-request `loaders` memo). Aliased to the canonical type that now lives with
+ * the caching code in `~/server/cache`.
+ */
+export type ContextWithAuth = RequestCacheContext;
 
 /**
- * Helper function to get the current user or throw an error
+ * Helper function to get the current user or throw an error.
+ * Memoized per request via `loadCurrentUser` (see ~/server/cache) — call it as
+ * often as you like within a request; it issues at most one query.
  * @param ctx The tRPC context with auth and database access
  * @returns The current user object
  * @throws TRPCError if user is not found
  */
 export async function getCurrentUser(ctx: ContextWithAuth): Promise<User> {
-	const user = await ctx.db.user.findUnique({
-		where: { clerkUserId: ctx.auth.userId },
-	});
+	const user = await loadCurrentUser(ctx);
 
 	if (!user) {
 		throw new TRPCError({

@@ -2,10 +2,13 @@
 
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
+import BillToUserPicker from "~/app/_components/shared/BillToUserPicker";
 import { Button } from "~/app/_components/shared/Button";
 import { Input } from "~/app/_components/shared/Input";
 import { useToast } from "~/app/_components/shared/Toast";
 import { Select } from "~/app/_components/shared/ui/select";
+import { parseMembershipAddOns } from "~/lib/membershipAddOns";
 import { formatCents } from "~/lib/money";
 import { api } from "~/trpc/react";
 
@@ -50,6 +53,10 @@ type MembershipPlanRow = {
 	billingInterval: number;
 	billingUnit: string;
 	feePerTermInCents: number;
+	initiationFeeInCents: number;
+	// Phase 10c — coverage hint + add-on fee menu (JSON; parsed defensively).
+	memberCapacity: number | null;
+	addOnFees: unknown;
 	membershipType: { name: string } | null;
 };
 
@@ -162,7 +169,6 @@ export default function SellMembershipModal({
 
 	// --- Member picker (only when not launched from a profile) ---
 	const [memberQuery, setMemberQuery] = useState("");
-	const [debouncedMemberQuery, setDebouncedMemberQuery] = useState("");
 	const [selectedMember, setSelectedMember] = useState<SearchUser | null>(null);
 	const [showMemberDropdown, setShowMemberDropdown] = useState(true);
 	const memberWrapperRef = useRef<HTMLDivElement>(null);
@@ -173,12 +179,21 @@ export default function SellMembershipModal({
 	const [notes, setNotes] = useState("");
 	const [saving, setSaving] = useState(false);
 
-	// --- Bill-to / payer typeahead (reused from SellPackageModal) ---
-	const [billToQuery, setBillToQuery] = useState("");
-	const [debouncedBillToQuery, setDebouncedBillToQuery] = useState("");
+	// --- One-time registration fee (plan.initiationFeeInCents) ---
+	// Defaults ON for first-time members (no prior non-voided membership in the
+	// club); staff can override either way. Recomputed when the plan or member
+	// changes — see the effect below the listForMember query.
+	const [chargeInitFee, setChargeInitFee] = useState(false);
+
+	// --- Phase 10c add-on fees — keys of the selected menu rows. ---
+	const [selectedAddOnKeys, setSelectedAddOnKeys] = useState<Set<string>>(
+		new Set(),
+	);
+
+	// --- Bill-to / payer — the shared BillToUserPicker (as SellPackageModal). ---
 	const [billToUser, setBillToUser] = useState<SearchUser | null>(null);
-	const [showBillToDropdown, setShowBillToDropdown] = useState(true);
-	const billToWrapperRef = useRef<HTMLDivElement>(null);
+	const [billToTypedButUnselected, setBillToTypedButUnselected] =
+		useState(false);
 
 	const today = todayISO();
 
@@ -190,17 +205,10 @@ export default function SellMembershipModal({
 			? formatUserName(selectedMember)
 			: "this member";
 
-	// Debounce both typeaheads (200ms) — matches SellPackageModal.
-	useEffect(() => {
-		const t = setTimeout(() => setDebouncedMemberQuery(memberQuery), 200);
-		return () => clearTimeout(t);
-	}, [memberQuery]);
-	useEffect(() => {
-		const t = setTimeout(() => setDebouncedBillToQuery(billToQuery), 200);
-		return () => clearTimeout(t);
-	}, [billToQuery]);
+	// Debounce the member typeahead (200ms) — matches SellPackageModal.
+	const debouncedMemberQuery = useDebouncedValue(memberQuery, 200);
 
-	// Outside-click dismissal for both dropdowns (mirrors SellPackageModal Fix E).
+	// Outside-click dismissal for the member dropdown (mirrors SellPackageModal Fix E).
 	useEffect(() => {
 		function handleClickOutside(e: MouseEvent) {
 			if (
@@ -208,12 +216,6 @@ export default function SellMembershipModal({
 				!memberWrapperRef.current.contains(e.target as Node)
 			) {
 				setShowMemberDropdown(false);
-			}
-			if (
-				billToWrapperRef.current &&
-				!billToWrapperRef.current.contains(e.target as Node)
-			) {
-				setShowBillToDropdown(false);
 			}
 		}
 		document.addEventListener("mousedown", handleClickOutside);
@@ -225,6 +227,25 @@ export default function SellMembershipModal({
 		api.memberships.listPlans.useQuery({ isActive: true });
 	const plans = (plansData?.plans ?? []) as MembershipPlanRow[];
 	const selectedPlan = plans.find((p) => p.membershipPlanId === selectedPlanId);
+
+	// Prior memberships for the consumer — drives the registration-fee default
+	// ("new member" = zero non-voided memberships; cancelled/expired count as
+	// returning). listForMember already excludes voided rows.
+	const { data: priorMemberships } = api.memberships.listForMember.useQuery(
+		{ userId: consumerId ?? "" },
+		{ enabled: !!consumerId },
+	);
+	const historyLoaded = !!consumerId && priorMemberships !== undefined;
+	const isNewMember =
+		historyLoaded && priorMemberships.memberships.length === 0;
+	const planInitFeeInCents = selectedPlan?.initiationFeeInCents ?? 0;
+
+	// Re-default the toggle whenever the plan or member (or their history)
+	// changes; staff can still flip it afterwards.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-defaults on plan/member change only
+	useEffect(() => {
+		setChargeInitFee(planInitFeeInCents > 0 && isNewMember);
+	}, [selectedPlanId, consumerId, planInitFeeInCents, isNewMember]);
 
 	// Member search query (only when picker is shown + 4+ chars typed).
 	const trimmedMemberQuery = memberQuery.trim();
@@ -239,21 +260,6 @@ export default function SellMembershipModal({
 	);
 	const memberResults = memberSearch.data?.members ?? [];
 
-	// Bill-to search — gated on 4 chars + debounce, consumer filtered out.
-	const trimmedBillToQuery = billToQuery.trim();
-	const trimmedDebouncedBillToQuery = debouncedBillToQuery.trim();
-	const billToSearchEnabled =
-		billToUser === null && trimmedDebouncedBillToQuery.length >= 4;
-	const billToSearch = api.user.searchMembers.useQuery(
-		{ query: trimmedDebouncedBillToQuery },
-		{ enabled: billToSearchEnabled },
-	);
-	const billToResults = (billToSearch.data?.members ?? []).filter(
-		(r) => r.userId !== consumerId,
-	);
-	const billToTypedButUnselected =
-		trimmedBillToQuery.length > 0 && billToUser === null;
-
 	// Full-term fee + term-end preview (no proration).
 	const termEndPreview = useMemo(() => {
 		if (!selectedPlan || !startDate) return null;
@@ -265,6 +271,24 @@ export default function SellMembershipModal({
 	}, [selectedPlan, startDate]);
 
 	const startInFuture = startDate > today;
+
+	// Phase 10c — the selected plan's add-on fee menu (parsed defensively) + the
+	// running total of the checked add-ons. Selection resets when the plan changes.
+	const planAddOns = useMemo(
+		() => parseMembershipAddOns(selectedPlan?.addOnFees),
+		[selectedPlan],
+	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset selection on plan change only
+	useEffect(() => {
+		setSelectedAddOnKeys(new Set());
+	}, [selectedPlanId]);
+	const selectedAddOnsTotalInCents = planAddOns
+		.filter((a) => selectedAddOnKeys.has(a.key))
+		.reduce((sum, a) => sum + a.amountInCents, 0);
+	const initFeeDue = chargeInitFee ? planInitFeeInCents : 0;
+	const totalDueInCents = selectedPlan
+		? selectedPlan.feePerTermInCents + initFeeDue + selectedAddOnsTotalInCents
+		: 0;
 
 	const sellMutation = api.memberships.sell.useMutation({
 		onSuccess: () => {
@@ -312,6 +336,8 @@ export default function SellMembershipModal({
 			// yyyy-mm-dd; the server interprets it in the member's facility tz.
 			startDate,
 			notes: notes.trim() || undefined,
+			chargeInitiationFee: chargeInitFee,
+			selectedAddOnKeys: Array.from(selectedAddOnKeys),
 			// Only send billToUserId when a different payer was explicitly picked.
 			...(billToUser ? { billToUserId: billToUser.userId } : {}),
 		});
@@ -545,7 +571,94 @@ export default function SellMembershipModal({
 								<div className="font-semibold text-[var(--foreground)]">
 									{formatCents(selectedPlan.feePerTermInCents)}
 								</div>
+								{chargeInitFee && planInitFeeInCents > 0 && (
+									<>
+										<div className="text-[var(--muted-foreground)]">
+											Registration fee
+										</div>
+										<div className="text-[var(--foreground)]">
+											{formatCents(planInitFeeInCents)}
+										</div>
+									</>
+								)}
+								{planAddOns
+									.filter((a) => selectedAddOnKeys.has(a.key))
+									.map((a) => (
+										<div key={a.key} className="contents">
+											<div className="text-[var(--muted-foreground)]">
+												{a.label}
+											</div>
+											<div className="text-[var(--foreground)]">
+												{formatCents(a.amountInCents)}
+											</div>
+										</div>
+									))}
+								{totalDueInCents !== selectedPlan.feePerTermInCents && (
+									<>
+										<div className="text-[var(--muted-foreground)]">
+											Total due
+										</div>
+										<div className="font-semibold text-[var(--foreground)]">
+											{formatCents(totalDueInCents)}
+										</div>
+									</>
+								)}
 							</div>
+							{planInitFeeInCents > 0 && (
+								<label className="mt-3 flex cursor-pointer select-none items-start gap-2 border-[var(--border)] border-t pt-2 text-sm">
+									<input
+										type="checkbox"
+										checked={chargeInitFee}
+										onChange={(e) => setChargeInitFee(e.target.checked)}
+										disabled={saving}
+										className="mt-0.5 h-4 w-4 rounded border-input accent-[var(--primary)]"
+									/>
+									<span className="text-[var(--foreground)]">
+										Charge {formatCents(planInitFeeInCents)} one-time
+										registration fee
+										<span className="block text-[var(--muted-foreground)] text-xs">
+											{!consumerId
+												? "Select a member to set the default automatically."
+												: !historyLoaded
+													? "Checking membership history..."
+													: isNewMember
+														? "Defaulted on — no prior membership on file."
+														: "Defaulted off — this member has a prior membership."}
+										</span>
+									</span>
+								</label>
+							)}
+							{planAddOns.length > 0 && (
+								<div className="mt-3 space-y-1.5 border-[var(--border)] border-t pt-2">
+									<div className="text-[var(--muted-foreground)] text-xs">
+										Add-on fees
+									</div>
+									{planAddOns.map((a) => (
+										<label
+											key={a.key}
+											className="flex cursor-pointer select-none items-center gap-2 text-sm"
+										>
+											<input
+												type="checkbox"
+												checked={selectedAddOnKeys.has(a.key)}
+												disabled={saving}
+												onChange={(e) =>
+													setSelectedAddOnKeys((prev) => {
+														const next = new Set(prev);
+														if (e.target.checked) next.add(a.key);
+														else next.delete(a.key);
+														return next;
+													})
+												}
+												className="h-4 w-4 rounded border-input accent-[var(--primary)]"
+											/>
+											<span className="text-[var(--foreground)]">
+												{a.label} — {formatCents(a.amountInCents)}
+											</span>
+										</label>
+									))}
+								</div>
+							)}
 							<p className="mt-3 border-[var(--border)] border-t pt-2 text-[var(--muted-foreground)] text-xs">
 								No proration — a full term is charged at sale. Final dates are
 								confirmed when the sale is recorded.
@@ -573,115 +686,16 @@ export default function SellMembershipModal({
 						/>
 					</div>
 
-					{/* Bill to (optional) — reused from SellPackageModal */}
-					<div className="space-y-1">
-						<label
-							htmlFor="sell-membership-bill-to"
-							className="font-medium text-[var(--foreground)] text-sm"
-						>
-							Bill to{" "}
-							<span className="font-normal text-[var(--muted-foreground)]">
-								(optional)
-							</span>
-						</label>
-
-						{billToUser ? (
-							<div className="flex flex-wrap items-center gap-2">
-								<span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--muted)] px-3 py-1 text-[var(--foreground)] text-sm">
-									<span className="font-medium">
-										{formatUserName(billToUser)}
-									</span>
-									{billToUser.email ? (
-										<span className="text-[var(--muted-foreground)] text-xs">
-											({billToUser.email})
-										</span>
-									) : null}
-									<button
-										type="button"
-										onClick={() => {
-											setBillToUser(null);
-											setBillToQuery("");
-										}}
-										disabled={saving}
-										aria-label="Clear bill-to user"
-										className="ml-1 rounded-full p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--background)] hover:text-[var(--foreground)] disabled:opacity-50"
-									>
-										<X size={12} />
-									</button>
-								</span>
-							</div>
-						) : (
-							<div ref={billToWrapperRef} className="relative">
-								<Input
-									id="sell-membership-bill-to"
-									value={billToQuery}
-									onChange={(e) => {
-										setBillToQuery(e.target.value);
-										setShowBillToDropdown(true);
-									}}
-									onFocus={() => setShowBillToDropdown(true)}
-									placeholder="Search by name or email..."
-									disabled={saving}
-									autoComplete="off"
-									maxLength={100}
-									className="h-9"
-								/>
-								{trimmedBillToQuery.length > 0 && showBillToDropdown && (
-									<div className="absolute top-full right-0 left-0 z-10 mt-1 max-h-64 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--card)] shadow-md">
-										{trimmedBillToQuery.length < 4 ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												Type at least 4 characters to search.
-											</p>
-										) : billToSearch.isLoading ||
-											trimmedBillToQuery !== trimmedDebouncedBillToQuery ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												Searching...
-											</p>
-										) : billToResults.length === 0 ? (
-											<p className="px-3 py-2 text-[var(--muted-foreground)] text-xs">
-												No matches found.
-											</p>
-										) : (
-											<ul className="py-1">
-												{billToResults.map((r) => (
-													<li key={r.userId}>
-														<button
-															type="button"
-															onClick={() => {
-																setBillToUser(r);
-																setBillToQuery("");
-															}}
-															className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--muted)]"
-														>
-															<span className="text-[var(--foreground)]">
-																{formatUserName(r)}
-															</span>
-															{r.email ? (
-																<span className="text-[var(--muted-foreground)] text-xs">
-																	{r.email}
-																</span>
-															) : null}
-														</button>
-													</li>
-												))}
-											</ul>
-										)}
-									</div>
-								)}
-							</div>
-						)}
-
-						{billToTypedButUnselected ? (
-							<p className="text-amber-600 text-xs dark:text-amber-400">
-								Pick someone from the dropdown, or clear the search to bill{" "}
-								{consumerName} directly.
-							</p>
-						) : (
-							<p className="text-[var(--muted-foreground)] text-xs">
-								Leave blank to bill {consumerName} directly.
-							</p>
-						)}
-					</div>
+					{/* Bill to (optional) — shared picker, same as SellPackageModal */}
+					<BillToUserPicker
+						consumerId={consumerId ?? ""}
+						value={billToUser}
+						onChange={setBillToUser}
+						disabled={saving}
+						label="Bill to (optional)"
+						helperText={`Leave blank to bill ${consumerName} directly.`}
+						onTypedButUnselectedChange={setBillToTypedButUnselected}
+					/>
 				</div>
 
 				{/* Footer */}

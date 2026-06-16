@@ -12,7 +12,12 @@ import {
 	getFromAddress,
 	getResendClient,
 } from "~/server/services/email/resend";
+import {
+	assembleRenderableInvoice,
+	computeViewerCapabilities,
+} from "~/server/services/invoiceRenderer/assemble";
 import { getOrRenderInvoicePdf } from "~/server/services/invoiceRenderer/getOrRender";
+import type { InvoiceView } from "~/server/services/invoiceRenderer/types";
 import {
 	AUDIT_ACTIONS,
 	AUDIT_SOURCES,
@@ -318,10 +323,11 @@ export const billingRouter = createTRPCRouter({
 	 * endpoint never confirms an invoice's existence to someone who can't see it.
 	 *
 	 * Returns the header, signed money (balance < 0 = account credit), the
-	 * invoice-level staff `notes` comment, line items (with `kind`, the
-	 * snapshot revenue category, and the resolved "Credit from <person>" source
-	 * for CREDIT lines), payments (each with its refunded + net total), and the
-	 * invoice's refunds. See designFiles/roadmap/phase9-invoicing.md (#10/#14).
+	 * staff-attributed invoice notes (Phase 9c `notes: RenderableInvoiceNote[]`),
+	 * line items (with `kind`, the snapshot revenue category, and the resolved
+	 * "Credit from <person>" source for CREDIT lines), payments (each with its
+	 * refunded + net total), and the invoice's refunds. See
+	 * designFiles/roadmap/phase9-invoicing.md (#10/#14).
 	 */
 	getInvoice: protectedProcedure
 		.input(z.object({ invoiceId: z.string() }))
@@ -333,79 +339,20 @@ export const billingRouter = createTRPCRouter({
 			// authorization can live here and be reused by the future member view.
 			const viewer = await getCurrentUser(ctx);
 
+			// Light auth query: only the fields needed to authorize + derive viewer
+			// capabilities; the full render shape comes from the shared assembler.
 			const invoice = await ctx.db.invoice.findUnique({
 				where: { invoiceId: input.invoiceId },
-				include: {
-					user: {
-						select: {
-							userId: true,
-							firstName: true,
-							lastName: true,
-							email: true,
-							// Phase 9b — surface phone on the invoice detail view + PDF
-							// "Bill to / For" blocks. Phone is now per-club on
-							// MemberClubProfile (per-club-profiles.md); picked for the
-							// invoice's club via phoneForClub() below.
-							memberClubProfiles: {
-								select: { clubShortName: true, phone: true },
-							},
-						},
-					},
-					billedToUser: {
-						select: {
-							userId: true,
-							firstName: true,
-							lastName: true,
-							email: true,
-							memberClubProfiles: {
-								select: { clubShortName: true, phone: true },
-							},
-						},
-					},
-					closedByUser: {
-						select: { userId: true, firstName: true, lastName: true },
-					},
-					createdByUser: {
-						select: { userId: true, firstName: true, lastName: true },
-					},
-					lineItems: {
-						orderBy: { sortOrder: "asc" },
-						include: {
-							revenueCategory: {
-								select: { revenueCategoryId: true, label: true },
-							},
-							creditFromUser: {
-								select: { userId: true, firstName: true, lastName: true },
-							},
-							creditFromInvoice: {
-								select: { invoiceId: true, invoiceNumber: true },
-							},
-						},
-					},
-					payments: {
-						// Newest first; paymentId tiebreaker stabilizes equal-millisecond
-						// rows (matches getMemberBilling).
-						orderBy: [{ receivedAt: "desc" }, { paymentId: "asc" }],
-						include: {
-							receivedByUser: {
-								select: { userId: true, firstName: true, lastName: true },
-							},
-							refunds: true,
-						},
-					},
-					refunds: {
-						orderBy: [{ refundedAt: "desc" }, { refundId: "asc" }],
-						include: {
-							refundedByUser: {
-								select: { userId: true, firstName: true, lastName: true },
-							},
-						},
-					},
+				select: {
+					userId: true,
+					billedToUserId: true,
+					clubShortName: true,
+					creditConsumedInCents: true,
+					creditConsumedAt: true,
 				},
 			});
 
-			// A missing invoice and an invoice the viewer may not see BOTH return
-			// NOT_FOUND, so an unauthorized viewer can't probe for invoice ids.
+			// Missing invoice and unauthorized BOTH return NOT_FOUND (no id probing).
 			if (!invoice) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
@@ -413,171 +360,24 @@ export const billingRouter = createTRPCRouter({
 				});
 			}
 
-			// Reuse the shared role/club helpers rather than re-deriving userType
-			// comparisons. `isFacilityOrAbove` already includes PLATFORM_ADMIN; the
-			// explicit `isPlatformAdmin` disjunct is what lets a platform admin read
-			// ACROSS clubs, while facility/club admins are scoped to the invoice's
-			// club via `isSameClub`.
+			const viewerCaps = computeViewerCapabilities(viewer, invoice);
 			const isConsumer = invoice.userId === viewer.userId;
 			const isPayer = invoice.billedToUserId === viewer.userId;
-			const isStaffViewer =
-				isPlatformAdmin(viewer) ||
-				(isFacilityOrAbove(viewer) && isSameClub(viewer, invoice));
-			if (!(isConsumer || isPayer || isStaffViewer)) {
+			if (!(isConsumer || isPayer || viewerCaps.isStaff)) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
 					message: "Invoice not found",
 				});
 			}
 
-			// Whether THIS viewer may void the invoice: a club admin or platform
-			// admin, AND in the invoice's own club. The same-club gate applies even
-			// to platform admins because `voidInvoice` (clubAdminProcedure) scopes
-			// its lookup to the caller's own clubShortName — so the button must only
-			// appear where the void will actually succeed, not on another club's
-			// invoice where the mutation would 404. (Cross-club platform operations
-			// would be a separate, broader change.) FACILITY staff are excluded.
-			// Button-visibility gate only — the mutation re-checks authoritatively.
-			const viewerIsClubAdmin =
-				(isPlatformAdmin(viewer) || viewer.userType === UserType.CLUB_ADMIN) &&
-				isSameClub(viewer, invoice);
-
-			// UI gate for the per-payment Refund button — refunds are blocked when
-			// this invoice's overpayment credit was applied elsewhere (D1).
-			const hasConsumedCredit =
-				invoice.creditConsumedInCents > 0 || invoice.creditConsumedAt !== null;
-
-			const balanceInCents = invoice.totalInCents - invoice.amountPaidInCents;
-
+			// Audience is ALWAYS derived server-side from the authenticated viewer,
+			// NEVER a client input (phase9c security linchpin): a member must not be
+			// able to request the staff DTO. Staff -> "staff"; else "customer".
+			const audience = viewerCaps.isStaff ? "staff" : "customer";
 			return {
-				invoiceId: invoice.invoiceId,
-				invoiceNumber: invoice.invoiceNumber,
-				// Phase 12a — surfaced so the member-facing pay-now button can
-				// resolve the right ClubStripeAccount via `getProviderForClub`
-				// (Stream 2 + Stream 6). Already part of the row; pure select add.
-				clubShortName: invoice.clubShortName,
-				status: invoice.status,
-				// UI gate for the Void button (see above) — NOT security; the
-				// voidInvoice mutation re-checks via clubAdminProcedure.
-				viewerIsClubAdmin,
-				// UI gate for the per-payment Refund button (D1 — refunds blocked
-				// once this invoice's credit was consumed elsewhere).
-				hasConsumedCredit,
-				issueDate: invoice.issueDate,
-				dueDate: invoice.dueDate,
-				closedAt: invoice.closedAt,
-				createdAt: invoice.createdAt,
-				subtotalInCents: invoice.subtotalInCents,
-				taxTotalInCents: invoice.taxTotalInCents,
-				totalInCents: invoice.totalInCents,
-				amountPaidInCents: invoice.amountPaidInCents,
-				// Signed: negative = account credit (Version A overpayment, #104).
-				balanceInCents,
-				// Invoice-level staff comment; renders on the PDF later (Phase 13).
-				notes: invoice.notes,
-				consumer: {
-					userId: invoice.user.userId,
-					firstName: invoice.user.firstName,
-					lastName: invoice.user.lastName,
-					email: invoice.user.email,
-					// Phase 9b — phone for THIS invoice's club (per-club-profiles.md).
-					phone: phoneForClub(
-						invoice.user.memberClubProfiles,
-						invoice.clubShortName,
-					),
-				},
-				billedTo: invoice.billedToUser
-					? {
-							userId: invoice.billedToUser.userId,
-							firstName: invoice.billedToUser.firstName,
-							lastName: invoice.billedToUser.lastName,
-							email: invoice.billedToUser.email,
-							phone: phoneForClub(
-								invoice.billedToUser.memberClubProfiles,
-								invoice.clubShortName,
-							),
-						}
-					: null,
-				closedBy: invoice.closedByUser
-					? {
-							userId: invoice.closedByUser.userId,
-							firstName: invoice.closedByUser.firstName,
-							lastName: invoice.closedByUser.lastName,
-						}
-					: null,
-				createdBy: {
-					userId: invoice.createdByUser.userId,
-					firstName: invoice.createdByUser.firstName,
-					lastName: invoice.createdByUser.lastName,
-				},
-				lineItems: invoice.lineItems.map((li) => ({
-					lineItemId: li.lineItemId,
-					kind: li.kind,
-					description: li.description,
-					quantity: li.quantity,
-					unitPriceInCents: li.unitPriceInCents,
-					discountInCents: li.discountInCents,
-					taxAmountInCents: li.taxAmountInCents,
-					// Signed: negative on CREDIT lines.
-					totalInCents: li.totalInCents,
-					revenueCategory: li.revenueCategory
-						? {
-								revenueCategoryId: li.revenueCategory.revenueCategoryId,
-								label: li.revenueCategory.label,
-							}
-						: null,
-					// CREDIT lines name their source person + invoice (hardening #115).
-					creditFrom: li.creditFromUser
-						? {
-								userId: li.creditFromUser.userId,
-								firstName: li.creditFromUser.firstName,
-								lastName: li.creditFromUser.lastName,
-							}
-						: null,
-					creditFromInvoice: li.creditFromInvoice
-						? {
-								invoiceId: li.creditFromInvoice.invoiceId,
-								invoiceNumber: li.creditFromInvoice.invoiceNumber,
-							}
-						: null,
-				})),
-				payments: invoice.payments.map((p) => {
-					const refundedTotalInCents = p.refunds.reduce(
-						(sum, r) => sum + r.amountInCents,
-						0,
-					);
-					return {
-						paymentId: p.paymentId,
-						amountInCents: p.amountInCents,
-						paymentMethod: p.paymentMethod,
-						status: p.status,
-						processor: p.processor,
-						processorTransactionId: p.processorTransactionId,
-						reference: p.reference,
-						receivedAt: p.receivedAt,
-						receivedBy: {
-							userId: p.receivedByUser.userId,
-							firstName: p.receivedByUser.firstName,
-							lastName: p.receivedByUser.lastName,
-						},
-						refundedTotalInCents,
-						netInCents: p.amountInCents - refundedTotalInCents,
-					};
-				}),
-				refunds: invoice.refunds.map((r) => ({
-					refundId: r.refundId,
-					paymentId: r.paymentId,
-					amountInCents: r.amountInCents,
-					reason: r.reason,
-					processor: r.processor,
-					refundedAt: r.refundedAt,
-					refundedBy: {
-						userId: r.refundedByUser.userId,
-						firstName: r.refundedByUser.firstName,
-						lastName: r.refundedByUser.lastName,
-					},
-				})),
-			};
+				invoice: await assembleRenderableInvoice(input.invoiceId, { audience }),
+				viewer: viewerCaps,
+			} satisfies InvoiceView;
 		}),
 
 	/**
@@ -676,8 +476,19 @@ export const billingRouter = createTRPCRouter({
 											},
 										},
 									},
-									// The invoice-level staff comment.
-									{ notes: { contains: search, mode: "insensitive" as const } },
+									// Staff-attributed invoice notes (phase9c — replaces the
+									// dropped `notes` blob). Match any non-deleted note's body.
+									{
+										invoiceNotes: {
+											some: {
+												body: {
+													contains: search,
+													mode: "insensitive" as const,
+												},
+												deletedAt: null,
+											},
+										},
+									},
 									// Payment reference — the human-entered check # / free-text
 									// reference field. NOT the opaque processor transaction id
 									// (staff never type that; it'd only add noise).
@@ -1403,7 +1214,7 @@ export const billingRouter = createTRPCRouter({
 					// between the pre-lock read and acquiring the lock.
 					const locked = await tx.invoice.findUniqueOrThrow({
 						where: { invoiceId: input.invoiceId },
-						select: { status: true, notes: true, amountPaidInCents: true },
+						select: { status: true, amountPaidInCents: true },
 					});
 					if (locked.status === "void") {
 						throw new TRPCError({
@@ -1429,24 +1240,29 @@ export const billingRouter = createTRPCRouter({
 						});
 					}
 
-					// Decision: the void reason lives in the invoice `notes` (no separate
-					// column). Stamp the time in the acting staff's timezone.
-					const stamp = dayjs()
-						.tz(ctx.user.timeZone || "America/New_York")
-						.format("YYYY-MM-DD HH:mm");
-					const voidNote = `[Voided ${stamp}] ${reason}`;
-					const newNotes = locked.notes
-						? `${locked.notes}\n${voidNote}`
-						: voidNote;
-
 					const updated = await tx.invoice.update({
 						where: { invoiceId: input.invoiceId },
-						data: { status: "void", notes: newNotes },
+						data: { status: "void" },
 						select: {
 							invoiceId: true,
 							invoiceNumber: true,
 							status: true,
-							notes: true,
+						},
+					});
+
+					// Phase 9c — the void reason is now a staff-attributed InvoiceNote
+					// (replaces the appended `Invoice.notes` blob). Stamp the time in the
+					// acting staff's timezone; createdBy attributes it to the voider. The
+					// invoice is pinned to ctx.user's club by the cross-tenant guard above.
+					const stamp = dayjs()
+						.tz(ctx.user.timeZone || "America/New_York")
+						.format("YYYY-MM-DD HH:mm");
+					await tx.invoiceNote.create({
+						data: {
+							clubShortName: ctx.user.clubShortName,
+							invoiceId: updated.invoiceId,
+							body: `[Voided ${stamp}] ${reason}`,
+							createdBy: ctx.user.userId,
 						},
 					});
 					return {
@@ -1458,6 +1274,214 @@ export const billingRouter = createTRPCRouter({
 							entityType: "Invoice",
 							entityId: invoice.invoiceId,
 							metadata: { invoiceId: invoice.invoiceId, reason },
+						}),
+					};
+				},
+			);
+		}),
+
+	/**
+	 * Phase 9c §6 — staff-attributed invoice notes (add / edit / soft-remove).
+	 * Replaces the legacy single `Invoice.notes` blob with audited rows that
+	 * render on every invoice surface (web staff CRUD, member read-only, PDF).
+	 *
+	 * Authorization: `facilityProcedure` (facility-and-above staff, scoped to the
+	 * caller's club). Each mutation cross-tenant-guards the invoice/note against
+	 * `ctx.user.clubShortName`, returning NOT_FOUND otherwise. Every write is
+	 * audited via `writeAuditedMutation` + `buildPartyAuditEntries`: the note is on
+	 * ONE invoice both the consumer and the bill-to payer can see, so the action
+	 * lands on BOTH parties' Activity timelines (self-pay → a single row).
+	 *
+	 * SCOPE (phase9c locked): invoice-LEVEL notes only — `lineItemId` is accepted
+	 * + validated against the invoice, but there is no per-line UI this phase, and
+	 * `showOnInvoice` is forced true (no internal/printed toggle yet).
+	 */
+	addInvoiceNote: facilityProcedure
+		.input(
+			z.object({
+				invoiceId: z.string().min(1),
+				body: z.string().trim().min(1, "A note is required").max(2000),
+				lineItemId: z.string().min(1).optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const body = input.body.trim();
+
+			// Cross-tenant guard: the invoice must live in the caller's club.
+			const invoice = await ctx.db.invoice.findFirst({
+				where: {
+					invoiceId: input.invoiceId,
+					clubShortName: ctx.user.clubShortName,
+				},
+				select: { invoiceId: true, userId: true, billedToUserId: true },
+			});
+			if (!invoice) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Invoice not found in this club",
+				});
+			}
+
+			// If a line link is supplied, it must belong to THIS invoice.
+			if (input.lineItemId) {
+				const line = await ctx.db.invoiceLineItem.findFirst({
+					where: { lineItemId: input.lineItemId, invoiceId: invoice.invoiceId },
+					select: { lineItemId: true },
+				});
+				if (!line) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Line item not found on this invoice",
+					});
+				}
+			}
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					const note = await tx.invoiceNote.create({
+						data: {
+							clubShortName: ctx.user.clubShortName,
+							invoiceId: invoice.invoiceId,
+							lineItemId: input.lineItemId ?? null,
+							body,
+							createdBy: ctx.user.userId,
+							// showOnInvoice defaults true; no toggle this phase.
+						},
+						select: { invoiceNoteId: true },
+					});
+					return {
+						result: { invoiceNoteId: note.invoiceNoteId },
+						// A note is on ONE invoice that both the consumer and the bill-to
+						// payer can see, so it lands on BOTH parties' activity timelines
+						// (party-pair audit, mirroring void/charge). Self-pay → one row.
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.INVOICE_NOTE_ADDED,
+							consumerUserId: invoice.userId,
+							payerUserId: invoice.billedToUserId,
+							entityType: "InvoiceNote",
+							entityId: note.invoiceNoteId,
+							metadata: {
+								invoiceId: invoice.invoiceId,
+								lineItemId: input.lineItemId ?? null,
+							},
+						}),
+					};
+				},
+			);
+		}),
+
+	editInvoiceNote: facilityProcedure
+		.input(
+			z.object({
+				invoiceNoteId: z.string().min(1),
+				body: z.string().trim().min(1, "A note is required").max(2000),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const body = input.body.trim();
+
+			// Cross-tenant guard + not-deleted check. `clubShortName` is denormalized
+			// on the note, so no join is needed to scope to the caller's club.
+			const note = await ctx.db.invoiceNote.findFirst({
+				where: {
+					invoiceNoteId: input.invoiceNoteId,
+					clubShortName: ctx.user.clubShortName,
+					deletedAt: null,
+				},
+				select: {
+					invoiceNoteId: true,
+					invoiceId: true,
+					invoice: { select: { userId: true, billedToUserId: true } },
+				},
+			});
+			if (!note) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Note not found in this club",
+				});
+			}
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					await tx.invoiceNote.update({
+						where: { invoiceNoteId: note.invoiceNoteId },
+						data: { body, updatedBy: ctx.user.userId },
+					});
+					return {
+						result: { invoiceNoteId: note.invoiceNoteId },
+						// Both invoice parties see the note → both timelines (§ party-pair).
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.INVOICE_NOTE_EDITED,
+							consumerUserId: note.invoice.userId,
+							payerUserId: note.invoice.billedToUserId,
+							entityType: "InvoiceNote",
+							entityId: note.invoiceNoteId,
+							metadata: { invoiceId: note.invoiceId },
+						}),
+					};
+				},
+			);
+		}),
+
+	removeInvoiceNote: facilityProcedure
+		.input(z.object({ invoiceNoteId: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			// Cross-tenant guard + idempotency (already-removed → NOT_FOUND).
+			const note = await ctx.db.invoiceNote.findFirst({
+				where: {
+					invoiceNoteId: input.invoiceNoteId,
+					clubShortName: ctx.user.clubShortName,
+					deletedAt: null,
+				},
+				select: {
+					invoiceNoteId: true,
+					invoiceId: true,
+					invoice: { select: { userId: true, billedToUserId: true } },
+				},
+			});
+			if (!note) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Note not found in this club",
+				});
+			}
+
+			return await writeAuditedMutation(
+				{
+					db: ctx.db,
+					actorUserId: ctx.user.userId,
+					clubShortName: ctx.user.clubShortName,
+					source: AUDIT_SOURCES.ADMIN_DASHBOARD,
+				},
+				async (tx) => {
+					// Soft delete — preserves history (deletedAt filters it out of the
+					// assembler + the note search).
+					await tx.invoiceNote.update({
+						where: { invoiceNoteId: note.invoiceNoteId },
+						data: { deletedAt: new Date(), deletedBy: ctx.user.userId },
+					});
+					return {
+						result: { invoiceNoteId: note.invoiceNoteId },
+						// Both invoice parties see the note → both timelines (§ party-pair).
+						audit: buildPartyAuditEntries({
+							action: AUDIT_ACTIONS.INVOICE_NOTE_REMOVED,
+							consumerUserId: note.invoice.userId,
+							payerUserId: note.invoice.billedToUserId,
+							entityType: "InvoiceNote",
+							entityId: note.invoiceNoteId,
+							metadata: { invoiceId: note.invoiceId },
 						}),
 					};
 				},
@@ -1836,9 +1860,14 @@ export const billingRouter = createTRPCRouter({
 				// (price × qty) has its own cap in the handler below to stay within
 				// the Int32 column range on Invoice/InvoiceLineItem.
 				unitPriceInCents: z.number().int().positive().max(100_000_000),
+				// Phase 9c §6.5 — optional "why" note. Captured as a line-linked
+				// InvoiceNote so the reason for a custom charge travels with the
+				// invoice and is staff-attributed.
+				note: z.string().trim().max(2000).optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
+			const note = input.note?.trim();
 			const member = await ctx.db.user.findFirst({
 				where: { userId: input.userId, clubShortName: ctx.user.clubShortName },
 				select: { userId: true, activeFacilityId: true },
@@ -1943,7 +1972,7 @@ export const billingRouter = createTRPCRouter({
 					const sortOrder = (lastLine?.sortOrder ?? -1) + 1;
 
 					assertLineItemKindConsistency({ kind, productId: input.productId });
-					await tx.invoiceLineItem.create({
+					const createdLine = await tx.invoiceLineItem.create({
 						data: {
 							invoiceId: invoice.invoiceId,
 							kind,
@@ -1958,7 +1987,22 @@ export const billingRouter = createTRPCRouter({
 							revenueCategoryId,
 							sortOrder,
 						},
+						select: { lineItemId: true },
 					});
+
+					// Phase 9c §6.5 — attach the optional "why" note, linked to the line
+					// just created so it carries the charge's context + a staff author.
+					if (note) {
+						await tx.invoiceNote.create({
+							data: {
+								clubShortName: ctx.user.clubShortName,
+								invoiceId: invoice.invoiceId,
+								lineItemId: createdLine.lineItemId,
+								body: note,
+								createdBy: ctx.user.userId,
+							},
+						});
+					}
 
 					// Recompute subtotal/total + status (mirrors sellPackage). On a fresh
 					// tab `totalCreditPulledCents` is 0 (auto-apply off) → "old + charge".

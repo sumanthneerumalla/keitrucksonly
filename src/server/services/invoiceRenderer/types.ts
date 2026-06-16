@@ -29,41 +29,24 @@
 import type { InvoiceLineItemKind } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
-// Shared label maps — SINGLE source of truth for both renderers.
+// Shared label maps — now defined in ~/lib/invoice/labels.ts (client-safe so
+// InvoiceDetail.tsx can import them too) and re-exported here for back-compat
+// with existing importers (assemble.ts, etc.).
 // ---------------------------------------------------------------------------
 
-/**
- * InvoiceLineItem.kind → short label printed in the line-items table.
- * Record<string, …> (not the enum type) so an unmapped future enum value
- * still renders via the `?? kind` fallback rather than throwing.
- */
-export const KIND_LABELS: Record<string, string> = {
-	PACKAGE_SALE: "Package",
-	CREDIT: "Credit",
-	PRODUCT_SALE: "Product",
-	FEE: "Fee",
-	EVENT_REGISTRATION: "Event",
-	RENTAL: "Rental",
-	MEMBERSHIP_FEE: "Membership",
-};
-
-/**
- * InvoicePayment.paymentMethod → display label. Mirrors the legacy map in
- * InvoiceDetail.tsx so the on-screen and PDF copies match.
- */
-export const PAYMENT_METHOD_LABELS: Record<string, string> = {
-	cash: "Cash",
-	check: "Check",
-	credit_card: "Credit card",
-	pos_transaction: "POS transaction",
-	stripe: "Stripe",
-	paysafe: "Paysafe",
-	other: "Other",
-};
+export { KIND_LABELS, PAYMENT_METHOD_LABELS } from "~/lib/invoice/labels";
 
 // ---------------------------------------------------------------------------
 // RenderableInvoice — the DTO.
 // ---------------------------------------------------------------------------
+
+/**
+ * A reference to a person, reusable across invoice surfaces + future reports.
+ * `userId` null = display-only (no link); set = a renderer MAY deep-link to
+ * /clients/{userId}. Staff-attribution refs (closedBy/receivedBy/refundedBy)
+ * are OMITTED (null) by the assembler for `audience: "customer"` (phase9c §4.3).
+ */
+export type RenderablePersonRef = { userId: string | null; fullName: string };
 
 export type RenderableInvoiceMeta = {
 	invoiceId: string;
@@ -76,7 +59,8 @@ export type RenderableInvoiceMeta = {
 	issueDate: Date;
 	dueDate: Date | null;
 	closedAt: Date | null;
-	notes: string | null;
+	/** Staff who marked the invoice due ("closed"). Staff-only → null for customer audience. */
+	closedBy: RenderablePersonRef | null;
 };
 
 export type RenderableInvoiceFrom = {
@@ -136,6 +120,23 @@ export type RenderableInvoicePaymentRefund = {
 	/** Positive number; renderers should display it as negative. */
 	amountInCents: number;
 	reason: string | null;
+	/** Staff who issued the refund. Staff-only → null for customer audience. */
+	refundedBy: RenderablePersonRef | null;
+};
+
+/**
+ * A refund flattened to the invoice level for a dedicated Refunds section.
+ * Built FROM the nested payment refunds in one assembler pass (phase9c §4.3) —
+ * amounts are never omitted; only `refundedBy` attribution is omitted for
+ * customers.
+ */
+export type RenderableInvoiceRefund = {
+	refundId: string;
+	paymentId: string;
+	refundedAt: Date;
+	amountInCents: number;
+	reason: string | null;
+	refundedBy: RenderablePersonRef | null;
 };
 
 export type RenderableInvoicePayment = {
@@ -148,11 +149,30 @@ export type RenderableInvoicePayment = {
 	refundedTotalInCents: number;
 	netInCents: number;
 	refunds: RenderableInvoicePaymentRefund[];
+	/** Staff who recorded the payment. Staff-only → null for customer audience. */
+	receivedBy: RenderablePersonRef | null;
 };
 
 export type RenderableInvoiceFooter = {
 	/** Future: Club.invoiceFooterText. Always null in v1 (branding deferred). */
 	text: string | null;
+};
+
+/**
+ * One staff-attributed invoice note (phase9c §6). Replaces the legacy
+ * single `meta.notes` blob. All (non-deleted) notes render on every surface
+ * this phase (`showOnInvoice` is reserved/unused — always true). `author` is
+ * staff attribution → OMITTED (null) by the assembler for `audience: "customer"`,
+ * exactly like closedBy/receivedBy/refundedBy (§4.3). `lineItemId` is carried
+ * for a future per-line UI; there is no per-line rendering this phase.
+ */
+export type RenderableInvoiceNote = {
+	invoiceNoteId: string;
+	body: string;
+	showOnInvoice: boolean;
+	lineItemId: string | null;
+	author: RenderablePersonRef | null;
+	createdAt: Date;
 };
 
 /**
@@ -173,5 +193,32 @@ export type RenderableInvoice = {
 	lines: RenderableInvoiceLine[];
 	totals: RenderableInvoiceTotals;
 	payments: RenderableInvoicePayment[];
+	/** Flattened refunds for a dedicated Refunds section (mirror of payments[].refunds). */
+	refunds: RenderableInvoiceRefund[];
+	/** Staff-attributed notes (phase9c §6); replaces the legacy `meta.notes` blob. */
+	notes: RenderableInvoiceNote[];
 	footer: RenderableInvoiceFooter;
+};
+
+// ---------------------------------------------------------------------------
+// ViewerCapabilities + InvoiceView — the WEB-only wrapper (phase9c §4.2).
+//
+// The PDF consumes only `RenderableInvoice`. The web tRPC `getInvoice` returns
+// `InvoiceView`. Capabilities carry ONLY what's cheaply derivable from the
+// already-loaded invoice + viewer (no new queries). `canPayNow` is NOT here —
+// it needs the club's Stripe-Connect health, resolved as a page prop.
+// ---------------------------------------------------------------------------
+
+export type ViewerCapabilities = {
+	/** consumer/payer = false; facility-and-above / platform admin = true. */
+	isStaff: boolean;
+	/** Gates Void; club admin or platform admin in the invoice's club. */
+	isClubAdmin: boolean;
+	/** This invoice's overpayment credit was consumed elsewhere → refund blocked. */
+	hasConsumedCredit: boolean;
+};
+
+export type InvoiceView = {
+	invoice: RenderableInvoice;
+	viewer: ViewerCapabilities;
 };
