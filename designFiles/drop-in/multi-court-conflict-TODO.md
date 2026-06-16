@@ -1,18 +1,27 @@
-# TODO — Multi-court conflict detection is INCOMPLETE (quick version shipped)
+# ⚠️ OPEN — Multi-court conflict detection is UNIMPLEMENTED (needs a comprehensive fix)
 
-**Status:** ⚠️ Known limitation, shipped intentionally (owner OK'd the quick version 2026-06-05). Revisit before multi-court Bookable events are used at scale.
+**Status:** **NOT DONE.** A quick `OR`-filter shortcut was tried (`9bf086f`) and then **reverted on 2026-06-15**
+because it was a half-measure that masked the real problem (it only patched the non-recurring branch, left the
+recurring path single-court, and shipped with no tests). `src/server/utils/resourceConflicts.ts` is back to its
+original single-`resourceId` matching. **Do not re-apply the shortcut.** This gap is closed only by the
+comprehensive fix described below.
+
+> History: `9bf086f` added `OR: [{ resourceId }, { resourceIds: { has: resourceId } }]` to `checkResourceConflicts`
+> and an earlier pass marked this file "✅ DONE". That was wrong on two counts — the recurring-path checker
+> (`checkRecurringEventConflicts`) was never converted, and there were no regression tests. Reverted so the
+> codebase doesn't carry a misleading partial implementation.
 
 ## Context
 
-Casual drop-in / "open play" is modeled as a **normal `BOOKABLE` `CalendarEvent` that reserves multiple courts** (primary `resourceId` + additional `resourceIds`) — see the drop-in decision in [README.md](./README.md) / [HANDOFF.md](./HANDOFF.md). Bookable events are **blocking** (`isBlocking = true`), so reserving N courts should prevent anyone else from booking those courts in the same window.
+Casual drop-in / "open play" is modeled as a **normal `BOOKABLE` `CalendarEvent` that reserves multiple courts**
+(primary `resourceId` + additional `resourceIds`) — see the drop-in decision in [README.md](./README.md) /
+[HANDOFF.md](./HANDOFF.md). Bookable events are **blocking** (`isBlocking = true`), so reserving N courts should
+prevent anyone else from booking those courts in the same window.
 
-## What was shipped (the quick version)
+## The gap (current behavior)
 
-`createEvent` and `updateEvent` (`src/server/api/routers/calendar.ts`) now **loop the existing conflict check over every court** the event holds (`[resourceId, ...resourceIds]`, deduped) instead of only the primary `resourceId`. The modal (`EventFormModal.tsx`) shows the existing multi-court picker for BOOKABLE as optional "Additional courts."
-
-## The gap
-
-`checkResourceConflicts` (and `checkRecurringEventConflicts`) in `src/server/utils/resourceConflicts.ts` find **existing** events by matching their **single `resourceId` column only**:
+`checkResourceConflicts` (and `checkRecurringEventConflicts`) in `src/server/utils/resourceConflicts.ts` find
+**existing** events by matching their **single `resourceId` column only**:
 
 ```ts
 where: { resourceId, isBlocking: true, ... }
@@ -21,33 +30,54 @@ where: { resourceId, isBlocking: true, ... }
 They do **not** match events that hold a court via their `resourceIds[]` array. Consequence:
 
 - ✅ A new multi-court event **is** checked against any event whose **primary** court overlaps.
-- ❌ A new multi-court event is **NOT** checked against another event's **additional** (`resourceIds`) courts. So **two multi-court Bookable events that share an *extra* court can be double-booked** without a conflict error.
+- ❌ A new multi-court event is **NOT** checked against another event's **additional** (`resourceIds`) courts.
+  So **two multi-court Bookable events that share an *extra* court can be double-booked** without a conflict error.
 
-(This is why Rental Window — the original multi-court feature — sidesteps `createEvent`'s guard entirely and runs its own booking-time conflict logic; it leaves the primary `resourceId` null.)
+(This is why Rental Window — the original multi-court feature — sidesteps `createEvent`'s guard entirely and runs
+its own booking-time conflict logic; it leaves the primary `resourceId` null.)
 
-## The proper fix (when prioritized)
+## Why the shortcut was not enough
 
-Extend `checkResourceConflicts` + `checkRecurringEventConflicts` to match a court on **either** side:
+The `OR`-filter on `checkResourceConflicts` alone is not a real fix because:
 
-```ts
-where: {
-  OR: [{ resourceId: court }, { resourceIds: { has: court } }],
-  isBlocking: true,
-  ...
-}
-```
+1. **The recurring path is separate.** `checkRecurringEventConflicts` (~line 315) accepts a single `resourceId`
+   and calls `checkResourceConflicts` per occurrence. It was never widened for multi-court, so recurring
+   multi-court events still double-book on extra courts.
+2. **No tests.** The module is hardened and widely used (CR-c); a change with no regression coverage is unsafe.
+3. **The data model is the root cause.** As long as courts live in two fields (`resourceId` + `resourceIds[]`),
+   every reader/filter/conflict-check has to remember to handle both — the bug will keep recurring. The real
+   fix unifies storage (see below).
 
-…and audit every caller / the recurring-occurrence expansion logic (Tier B) for the same single-court assumption. This touches a hardened, widely-used module (CR-c), so it needs careful tests for: single-court vs multi-court, recurring vs non-recurring, and existing-event-holds-court-as-extra cases.
+## The comprehensive fix (do this, not the shortcut)
 
-## Acceptance for closing this TODO
+1. **Unify event→court storage first** (the "Future" section below): add a `CalendarEventResource(eventId, resourceId)`
+   join table with real FKs + cascade, backfill from `resourceId ∪ resourceIds`, migrate reads/queries/filters, then
+   drop `resourceId` + `resourceIds`. One source of truth removes the whole class of "forgot to check resourceIds" bugs.
+2. **Rewrite both conflict checkers** (`checkResourceConflicts` and `checkRecurringEventConflicts`) against the join
+   table so any court an event holds participates in conflict detection, recurring and non-recurring alike.
+3. **Audit every caller** (createEvent, updateEvent, rentals, drop-in) + the recurring-occurrence expansion for the
+   old single-court assumption.
+4. **Add regression tests** covering all four quadrants (single/multi × recurring/non-recurring) plus the
+   "existing event holds the court as an *extra*" case.
 
-- Creating/editing a multi-court event conflicts correctly against another event's **additional** courts (not just its primary).
-- Existing single-court behavior unchanged (regression-tested).
+## Acceptance for closing this TODO (none met yet)
+
+- [ ] Court storage unified behind a single FK-backed source of truth (join table).
+- [ ] Non-recurring multi-court event conflicts against another event's additional courts.
+- [ ] **Recurring** multi-court event conflicts against another event's additional courts.
+- [ ] Existing single-court behavior unchanged — **regression-tested**.
+- [ ] Tests cover single/multi × recurring/non-recurring + extra-court-on-existing-event.
 
 ---
 
-## Future: unify event→court storage (deferred 2026-06-07, owner)
+## Future: unify event→court storage (deferred 2026-06-07, owner) — now a PREREQUISITE for the fix above
 
-Today an event holds courts in **two** fields: `resourceId` (FK-backed primary, indexed, `resource` relation) + `resourceIds` (`String[]`, additional). We'd like one source of truth, but **not** a bare `resourceIds[]` — a `String[]` has no foreign key, so dropping `resourceId` loses referential integrity (dangling IDs when a court is deleted) and breaks the ~20 `include: { resource }` sites + ~15 `where: { resourceId }` filters.
+Today an event holds courts in **two** fields: `resourceId` (FK-backed primary, indexed, `resource` relation) +
+`resourceIds` (`String[]`, additional). We'd like one source of truth, but **not** a bare `resourceIds[]` — a
+`String[]` has no foreign key, so dropping `resourceId` loses referential integrity (dangling IDs when a court is
+deleted) and breaks the ~20 `include: { resource }` sites + ~15 `where: { resourceId }` filters.
 
-**Preferred path:** add a `CalendarEventResource(eventId, resourceId)` **join table** (real FKs + cascade, many-to-many); backfill from `resourceId` ∪ `resourceIds`; migrate reads/queries/conflict-checks + move facility filters to `event.facilityId`; then drop `resourceId` + `resourceIds`. Deferred — touches ~10 files and is integrity-sensitive; do as its own project. (The conflict-detection fix above is independent and can land first.)
+**Preferred path:** add a `CalendarEventResource(eventId, resourceId)` **join table** (real FKs + cascade,
+many-to-many); backfill from `resourceId` ∪ `resourceIds`; migrate reads/queries/conflict-checks + move facility
+filters to `event.facilityId`; then drop `resourceId` + `resourceIds`. Touches ~10 files and is integrity-sensitive;
+do as its own project. The conflict-detection fix should be built on top of this, not bolted onto the dual-field model.
