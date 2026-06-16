@@ -43,5 +43,5 @@ export function clubOgImageUrl(club: {
 	const id = club.heroImageId ?? club.logoImageId;
 	return id
 		? `${SITE_URL}/api/content-image/${id}`
-		: `${SITE_URL}/og-default.svg`;
+		: `${SITE_URL}/og-default.png`;
 }

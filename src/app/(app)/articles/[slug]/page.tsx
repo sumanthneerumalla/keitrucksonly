@@ -198,7 +198,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
 			name: "Facility Presence",
 			logo: {
 				"@type": "ImageObject",
-				url: `${SITE_URL}/fp-logo.svg`,
+				url: `${SITE_URL}/fp-logo.png`,
 			},
 		},
 		mainEntityOfPage: {

@@ -212,7 +212,7 @@ export default async function ClubArticlePage({
 			name: club.clubName,
 			logo: {
 				"@type": "ImageObject",
-				url: `${SITE_URL}/fp-logo.svg`,
+				url: `${SITE_URL}/fp-logo.png`,
 			},
 		},
 		mainEntityOfPage: {
