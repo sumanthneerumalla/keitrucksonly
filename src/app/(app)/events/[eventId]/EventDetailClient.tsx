@@ -19,6 +19,7 @@ import GuestRegisterModal from "~/app/(app)/events/[eventId]/GuestRegisterModal"
 import BookableEventDetails from "~/app/(app)/events/_components/BookableEventDetails";
 import DropInEventDetails from "~/app/(app)/events/_components/DropInEventDetails";
 import KioskBoard from "~/app/(app)/events/_components/KioskBoard";
+import { useStashJoinIntent } from "~/app/_components/hooks/use-stash-join-intent";
 import { useToast } from "~/app/_components/shared/Toast";
 import { isFacilityOrAbove } from "~/lib/utils";
 import { api } from "~/trpc/react";
@@ -75,6 +76,14 @@ export default function EventDetailClient({
 		(isCoach && event != null && event.createdByUserId === userId);
 
 	const utils = api.useUtils();
+
+	// Hand this event's club + facility to the sign-in funnel for logged-out
+	// viewers, so ANY sign-in button (the global nav included) onboards them to
+	// the right place and returns here. No-ops until the event loads / if signed in.
+	useStashJoinIntent({
+		clubShortName: event?.clubShortName,
+		facilityId: event?.facilityId ?? null,
+	});
 
 	// My current confirmed registration for this event (students only)
 	const { data: myRegistrationsData } =
@@ -163,8 +172,6 @@ export default function EventDetailClient({
 						eventId={eventId}
 						eventStart={event.start}
 						eventTitle={event.title}
-						clubShortName={event.clubShortName}
-						facilityId={event.facilityId ?? null}
 					/>
 				</div>
 			);
@@ -202,14 +209,6 @@ export default function EventDetailClient({
 			</div>
 		);
 	}
-
-	// When a logged-out viewer signs in from this event, send them to /join with
-	// this event's club (and facility, when the event has one) prefilled. /join
-	// auto-joins and forwards through onboarding to /home — so they end up a member
-	// of the right place seeing today's events, instead of bouncing back here.
-	const joinRedirectUrl = `/join?clubShortName=${encodeURIComponent(
-		event.clubShortName,
-	)}${event.facilityId ? `&facilityId=${encodeURIComponent(event.facilityId)}` : ""}`;
 
 	return (
 		<div className="h-[calc(100vh-5rem)] overflow-auto p-6">
@@ -351,9 +350,9 @@ export default function EventDetailClient({
 									 */}
 									<SignInButton
 										mode="modal"
+										forceRedirectUrl="/join"
+										signUpForceRedirectUrl="/join"
 										initialValues={{ emailAddress: guestRegisteredEmail }}
-										forceRedirectUrl={joinRedirectUrl}
-										signUpForceRedirectUrl={joinRedirectUrl}
 									>
 										<button
 											type="button"
@@ -467,8 +466,8 @@ export default function EventDetailClient({
 									<p className="text-[var(--muted-foreground)] text-sm">
 										<SignInButton
 											mode="modal"
-											forceRedirectUrl={joinRedirectUrl}
-											signUpForceRedirectUrl={joinRedirectUrl}
+											forceRedirectUrl="/join"
+											signUpForceRedirectUrl="/join"
 										>
 											<button
 												type="button"

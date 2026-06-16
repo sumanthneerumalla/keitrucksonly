@@ -4,6 +4,7 @@ import { SignInButton, useAuth } from "@clerk/nextjs";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { formatTime } from "~/app/(app)/rentals/utils";
+import { useStashJoinIntent } from "~/app/_components/hooks/use-stash-join-intent";
 import { AlertDialog } from "~/app/_components/shared/AlertDialog";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
@@ -65,6 +66,14 @@ export default function RentalBookingForm({
 		const params = searchParams.toString();
 		return params ? `${pathname}?${params}` : pathname;
 	}, [pathname, searchParams]);
+
+	// Hand this club/facility to the sign-in funnel for logged-out viewers, and
+	// return them to this exact rentals page (with its query) afterwards.
+	useStashJoinIntent({
+		clubShortName,
+		facilityId: searchParams.get("facility")?.trim() || null,
+		next: currentUrl,
+	});
 
 	// Get slots for the selected court
 	const courtAvailability = useMemo(() => {
@@ -240,10 +249,7 @@ export default function RentalBookingForm({
 						{bookMutation.isPending ? "Booking..." : "Book"}
 					</Button>
 				) : (
-					<SignInButton
-						forceRedirectUrl={currentUrl}
-						signUpForceRedirectUrl={currentUrl}
-					>
+					<SignInButton forceRedirectUrl="/join" signUpForceRedirectUrl="/join">
 						<Button>Sign in to Book</Button>
 					</SignInButton>
 				)}

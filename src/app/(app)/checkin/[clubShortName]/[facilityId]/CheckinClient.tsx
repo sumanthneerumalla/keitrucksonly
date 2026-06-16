@@ -1,9 +1,10 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
+import { SignInButton, useAuth } from "@clerk/nextjs";
 import { CheckCircle, Clock, LogIn } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useState } from "react";
+import { useStashJoinIntent } from "~/app/_components/hooks/use-stash-join-intent";
 import { Button } from "~/app/_components/shared/Button";
 import { useToast } from "~/app/_components/shared/Toast";
 import { api } from "~/trpc/react";
@@ -62,7 +63,7 @@ function hasEventEnded(eventEnd: Date): boolean {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function SignInPrompt({ redirectUrl }: { redirectUrl: string }) {
+function SignInPrompt() {
 	return (
 		<div className="flex min-h-dvh flex-col items-center justify-center gap-6 px-4">
 			<LogIn size={48} className="text-[var(--muted-foreground)]" />
@@ -72,12 +73,18 @@ function SignInPrompt({ redirectUrl }: { redirectUrl: string }) {
 			<p className="text-center text-[var(--muted-foreground)] text-sm">
 				Please sign in to view your events and check in.
 			</p>
-			<a href={`/sign-in?redirect_url=${encodeURIComponent(redirectUrl)}`}>
+			{/* Clerk hosted/modal sign-in → /join. There is no local /sign-in route,
+			    and CheckinClient has already stashed this club/facility for the funnel. */}
+			<SignInButton
+				mode="modal"
+				forceRedirectUrl="/join"
+				signUpForceRedirectUrl="/join"
+			>
 				<Button className="min-h-[44px] min-w-[200px]">
 					<LogIn size={18} />
 					Sign In
 				</Button>
-			</a>
+			</SignInButton>
 		</div>
 	);
 }
@@ -205,6 +212,10 @@ export default function CheckinClient({
 
 	const currentPath = `/checkin/${clubShortName}/${facilityId}`;
 
+	// Hand this club/facility to the sign-in funnel for logged-out viewers, so any
+	// sign-in button onboards them to this club and returns to this checkin page.
+	useStashJoinIntent({ clubShortName, facilityId, next: currentPath });
+
 	// QR code sizing — 60% of viewport width, capped at 280px
 	const [qrSize, setQrSize] = useState(220);
 	useEffect(() => {
@@ -216,6 +227,7 @@ export default function CheckinClient({
 	}, []);
 
 	// Data query (only when signed in)
+	// TODO(kiosk-checkin): if the member belongs to `clubShortName` but their active club differs, auto-switch them here (switchFacility) so the QR check-in authorizes instead of 403'ing.
 	const {
 		data,
 		isLoading: isDashboardLoading,
@@ -266,9 +278,11 @@ export default function CheckinClient({
 		);
 	}
 
-	// Not signed in
+	// Not signed in — funnel through /join (auto-join this club/facility), then
+	// return to this checkin page so a brand-new user isn't stranded on a
+	// "not a member" error.
 	if (!isSignedIn) {
-		return <SignInPrompt redirectUrl={currentPath} />;
+		return <SignInPrompt />;
 	}
 
 	// Dashboard loading

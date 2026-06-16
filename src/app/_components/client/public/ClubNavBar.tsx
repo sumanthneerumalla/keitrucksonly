@@ -10,6 +10,7 @@ import {
 import { Menu } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useStashJoinIntent } from "~/app/_components/hooks/use-stash-join-intent";
 import {
 	NavigationMenu,
 	NavigationMenuItem,
@@ -24,7 +25,6 @@ import {
 	SheetTitle,
 } from "~/app/_components/shared/ui/sheet";
 import { CONTENT_IMAGE_URL } from "~/lib/article";
-import { buildJoinUrl } from "~/lib/onboardingUrl";
 import { api } from "~/trpc/react";
 
 interface ClubNavBarProps {
@@ -32,8 +32,10 @@ interface ClubNavBarProps {
 }
 
 export function ClubNavBar({ clubShortName }: ClubNavBarProps) {
-	// Club pages pre-target their club in the /join funnel after auth.
-	const redirectUrl = buildJoinUrl({ clubShortName });
+	// Hand this club to the sign-in funnel for logged-out viewers, so a new user
+	// lands on /join with it pre-searched. Buttons just point at /join.
+	useStashJoinIntent({ clubShortName });
+	const redirectUrl = "/join";
 	const [mounted, setMounted] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);
 	useEffect(() => setMounted(true), []);

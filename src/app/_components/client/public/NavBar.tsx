@@ -12,6 +12,7 @@ import { BookOpen, Home, Menu } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useStashJoinIntent } from "~/app/_components/hooks/use-stash-join-intent";
 import AnimatedLogo from "~/app/_components/shared/AnimatedLogo";
 import {
 	NavigationMenu,
@@ -39,11 +40,11 @@ interface NavBarProps {
 }
 
 export function NavBar({ clubShortName }: NavBarProps) {
-	// Build redirect URL so signups from a club landing page land in the /join
-	// funnel pre-targeted at that club (then pick a facility → profile → app).
-	const redirectUrl = clubShortName
-		? `/join?clubShortName=${encodeURIComponent(clubShortName)}`
-		: undefined;
+	// On a club page, hand its club to the sign-in funnel (logged-out only) so a
+	// new user lands on /join with that club pre-searched. Every sign-in/up button
+	// just points at /join, which forwards returning members and onboards new ones.
+	useStashJoinIntent({ clubShortName });
+	const redirectUrl = "/join";
 	const [isScrolled, setIsScrolled] = useState(false);
 	const [mounted, setMounted] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);

@@ -30,20 +30,12 @@ export default function KioskBoard({
 	eventId,
 	eventStart,
 	eventTitle,
-	clubShortName,
-	facilityId,
 }: {
 	eventId: string;
 	eventStart: string | Date;
 	eventTitle: string;
-	clubShortName: string;
-	facilityId: string | null;
 }) {
 	const { toast } = useToast();
-
-	const signInJoinUrl = `/join?clubShortName=${encodeURIComponent(
-		clubShortName,
-	)}${facilityId ? `&facilityId=${encodeURIComponent(facilityId)}` : ""}`;
 
 	const occurrenceDate = useMemo(() => new Date(eventStart), [eventStart]);
 
@@ -166,7 +158,7 @@ export default function KioskBoard({
 					here once staff open it.
 				</p>
 				<div className="w-full max-w-sm">
-					<SignInToJoin url={signInJoinUrl} />
+					<SignInToJoin />
 				</div>
 				{kioskMode && <JoinQueueQR url={joinUrl} />}
 			</div>
@@ -240,7 +232,7 @@ export default function KioskBoard({
 
 				{/* Sign-in CTA — logged-out viewers join via /join (club+facility prefilled). */}
 				<div className="mx-auto w-full max-w-md">
-					<SignInToJoin url={signInJoinUrl} />
+					<SignInToJoin />
 				</div>
 
 				{isPaused && (
@@ -298,16 +290,17 @@ export default function KioskBoard({
 }
 
 /**
- * "Sign in to join the queue" CTA for logged-out kiosk viewers. Opens Clerk in a
- * modal and redirects to `url` (/join with the event's club + facility prefilled)
- * so a new player flows through onboarding and can queue.
+ * "Sign in to join the queue" CTA for logged-out kiosk viewers. Plain Clerk
+ * sign-in → /join. The event page (EventDetailClient) has already stashed this
+ * event's club/facility for the funnel, so /join onboards them to the right
+ * place and returns here.
  */
-function SignInToJoin({ url }: { url: string }) {
+function SignInToJoin() {
 	return (
 		<SignInButton
 			mode="modal"
-			forceRedirectUrl={url}
-			signUpForceRedirectUrl={url}
+			forceRedirectUrl="/join"
+			signUpForceRedirectUrl="/join"
 		>
 			<button
 				type="button"
