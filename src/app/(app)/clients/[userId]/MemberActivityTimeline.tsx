@@ -33,6 +33,10 @@ const ACTION_LABELS: Record<string, string> = {
 	// Phase 9a — additional charge sources
 	"charge.adhoc": "Charge added",
 	"charge.event_registration": "Event charge",
+	// Phase 9c — invoice notes
+	"invoice_note.added": "Invoice note added",
+	"invoice_note.edited": "Invoice note edited",
+	"invoice_note.removed": "Invoice note removed",
 	// Phase 10a — memberships
 	"membership.sold": "Membership sold",
 	"membership.frozen": "Membership frozen",

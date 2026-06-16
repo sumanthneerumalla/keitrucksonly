@@ -61,7 +61,6 @@ export type RenderableInvoiceMeta = {
 	closedAt: Date | null;
 	/** Staff who marked the invoice due ("closed"). Staff-only → null for customer audience. */
 	closedBy: RenderablePersonRef | null;
-	notes: string | null;
 };
 
 export type RenderableInvoiceFrom = {
@@ -160,6 +159,23 @@ export type RenderableInvoiceFooter = {
 };
 
 /**
+ * One staff-attributed invoice note (phase9c §6). Replaces the legacy
+ * single `meta.notes` blob. All (non-deleted) notes render on every surface
+ * this phase (`showOnInvoice` is reserved/unused — always true). `author` is
+ * staff attribution → OMITTED (null) by the assembler for `audience: "customer"`,
+ * exactly like closedBy/receivedBy/refundedBy (§4.3). `lineItemId` is carried
+ * for a future per-line UI; there is no per-line rendering this phase.
+ */
+export type RenderableInvoiceNote = {
+	invoiceNoteId: string;
+	body: string;
+	showOnInvoice: boolean;
+	lineItemId: string | null;
+	author: RenderablePersonRef | null;
+	createdAt: Date;
+};
+
+/**
  * Fully resolved view of one invoice, ready to be drawn to any surface.
  *
  * Returned from `assembleRenderableInvoice` with a TOP-LEVEL shallow
@@ -179,6 +195,8 @@ export type RenderableInvoice = {
 	payments: RenderableInvoicePayment[];
 	/** Flattened refunds for a dedicated Refunds section (mirror of payments[].refunds). */
 	refunds: RenderableInvoiceRefund[];
+	/** Staff-attributed notes (phase9c §6); replaces the legacy `meta.notes` blob. */
+	notes: RenderableInvoiceNote[];
 	footer: RenderableInvoiceFooter;
 };
 

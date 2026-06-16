@@ -180,6 +180,21 @@ export async function assembleRenderableInvoice(
 					},
 				},
 			},
+			// Phase 9c — staff-attributed notes (replaces the dropped `notes` blob).
+			// Soft-deleted notes are excluded at the source; oldest-first so the
+			// thread reads top-to-bottom on every surface.
+			invoiceNotes: {
+				where: { deletedAt: null },
+				orderBy: { createdAt: "asc" },
+				select: {
+					invoiceNoteId: true,
+					body: true,
+					showOnInvoice: true,
+					lineItemId: true,
+					createdBy: true,
+					createdAt: true,
+				},
+			},
 		},
 	});
 
@@ -330,6 +345,37 @@ export async function assembleRenderableInvoice(
 		refundedBy: staffRef(r.refundedByUser),
 	}));
 
+	// Phase 9c — notes. The note BODY + timestamp render on every surface; the
+	// staff AUTHOR is omitted for customer audience (same staff-attribution rule
+	// as closedBy/receivedBy/refundedBy, §4.3). InvoiceNote.createdBy has no User
+	// relation by design (keeps the audit field FK-free and User uncluttered), so
+	// author names are resolved here with ONE targeted lookup — and only when a
+	// staff viewer will actually see them (skipped entirely for customers).
+	const authorById = new Map<string, RenderablePersonRef>();
+	if (!isCustomer && invoice.invoiceNotes.length > 0) {
+		const authorIds = [
+			...new Set(invoice.invoiceNotes.map((n) => n.createdBy)),
+		];
+		const authors = await db.user.findMany({
+			where: { userId: { in: authorIds } },
+			select: { userId: true, firstName: true, lastName: true },
+		});
+		for (const a of authors) {
+			authorById.set(a.userId, {
+				userId: a.userId,
+				fullName: formatPersonName(a),
+			});
+		}
+	}
+	const notes = invoice.invoiceNotes.map((n) => ({
+		invoiceNoteId: n.invoiceNoteId,
+		body: n.body,
+		showOnInvoice: n.showOnInvoice,
+		lineItemId: n.lineItemId,
+		author: isCustomer ? null : (authorById.get(n.createdBy) ?? null),
+		createdAt: n.createdAt,
+	}));
+
 	const dto: RenderableInvoice = {
 		meta: {
 			invoiceId: invoice.invoiceId,
@@ -341,7 +387,6 @@ export async function assembleRenderableInvoice(
 			dueDate: invoice.dueDate,
 			closedAt: invoice.closedAt,
 			closedBy: staffRef(invoice.closedByUser),
-			notes: invoice.notes,
 		},
 		from,
 		consumer,
@@ -357,6 +402,7 @@ export async function assembleRenderableInvoice(
 		},
 		payments,
 		refunds,
+		notes,
 		footer: { text: null },
 	};
 

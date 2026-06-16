@@ -313,13 +313,26 @@ function PaymentsBlock({ dto }: { dto: RenderableInvoice }) {
 }
 
 function NotesBlock({ dto }: { dto: RenderableInvoice }) {
-	// Whitespace-only notes ("   \n  ") would render an empty bordered box;
-	// trim before deciding whether to draw the section at all.
-	if (!dto.meta.notes?.trim()) return null;
+	// Phase 9c — render all (non-deleted) notes (the assembler already excludes
+	// soft-deleted ones). Whitespace-only bodies are skipped so an empty note
+	// never draws a blank bordered box. The PDF is the "customer" audience, so
+	// note bodies render but staff author attribution is absent from the DTO.
+	const notes = dto.notes.filter((n) => n.body.trim());
+	if (notes.length === 0) return null;
 	return (
 		<View style={styles.notesBlock} wrap={false}>
 			<Text style={[styles.sectionTitle, { marginTop: 0 }]}>Notes</Text>
-			<Text style={styles.notesText}>{dto.meta.notes}</Text>
+			{notes.map((n, i) => (
+				<Text
+					key={n.invoiceNoteId}
+					style={[
+						styles.notesText,
+						i < notes.length - 1 ? { marginBottom: 3 } : {},
+					]}
+				>
+					{n.body}
+				</Text>
+			))}
 		</View>
 	);
 }

@@ -139,6 +139,12 @@ export default function InvoiceDetail({
 	const [voidReason, setVoidReason] = useState("");
 	const [refundCtx, setRefundCtx] = useState<RefundContext | null>(null);
 
+	// Phase 9c — invoice notes (staff CRUD; members read-only).
+	const [noteDraft, setNoteDraft] = useState("");
+	const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+	const [editDraft, setEditDraft] = useState("");
+	const [deleteNoteId, setDeleteNoteId] = useState<string | null>(null);
+
 	const closeInvoiceMutation = api.billing.closeInvoice.useMutation({
 		onSuccess: async () => {
 			toast(
@@ -197,6 +203,32 @@ export default function InvoiceDetail({
 		},
 	});
 	const voiding = voidMutation.isPending;
+
+	// Phase 9c — invoice notes. All three invalidate this page's query so the
+	// freshly added/edited/removed note re-renders. Notes don't touch balances,
+	// so no BillingPanel invalidation is needed.
+	const addNoteMutation = api.billing.addInvoiceNote.useMutation({
+		onSuccess: async () => {
+			setNoteDraft("");
+			await utils.billing.getInvoice.invalidate({ invoiceId });
+		},
+		onError: (err) => toast(err.message, "error"),
+	});
+	const editNoteMutation = api.billing.editInvoiceNote.useMutation({
+		onSuccess: async () => {
+			setEditingNoteId(null);
+			setEditDraft("");
+			await utils.billing.getInvoice.invalidate({ invoiceId });
+		},
+		onError: (err) => toast(err.message, "error"),
+	});
+	const removeNoteMutation = api.billing.removeInvoiceNote.useMutation({
+		onSuccess: async () => {
+			setDeleteNoteId(null);
+			await utils.billing.getInvoice.invalidate({ invoiceId });
+		},
+		onError: (err) => toast(err.message, "error"),
+	});
 
 	// Phase 12a Round 3 Stream 6 — invoice pay-now. Single click: no
 	// BuyerBeneficiaryForm in the middle (the invoice already encodes
@@ -678,15 +710,135 @@ export default function InvoiceDetail({
 				</div>
 			)}
 
-			{/* Invoice-level comment (renders on the PDF later). */}
-			{dto.meta.notes && (
+			{/* Notes (phase9c §6). Staff add/edit/delete; members read-only. Notes
+			    also render on the customer PDF. The card hides entirely for members
+			    when there are no notes. */}
+			{(dto.notes.length > 0 || isStaff) && (
 				<div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
-					<h2 className="mb-2 font-semibold text-[var(--foreground)] text-sm">
+					<h2 className="mb-3 font-semibold text-[var(--foreground)] text-sm">
 						Notes
 					</h2>
-					<p className="whitespace-pre-wrap text-[var(--muted-foreground)] text-sm">
-						{dto.meta.notes}
-					</p>
+
+					{dto.notes.length > 0 ? (
+						<ul className="space-y-3">
+							{dto.notes.map((n) => (
+								<li
+									key={n.invoiceNoteId}
+									className="border-[var(--border)] border-b pb-3 last:border-b-0 last:pb-0"
+								>
+									{isStaff && editingNoteId === n.invoiceNoteId ? (
+										<div className="space-y-2">
+											<textarea
+												value={editDraft}
+												onChange={(e) => setEditDraft(e.target.value)}
+												rows={3}
+												maxLength={2000}
+												className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-[var(--foreground)] text-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+											/>
+											<div className="flex items-center gap-2">
+												<Button
+													size="sm"
+													disabled={
+														editNoteMutation.isPending ||
+														editDraft.trim().length === 0
+													}
+													onClick={() => {
+														if (editDraft.trim().length === 0) return;
+														editNoteMutation.mutate({
+															invoiceNoteId: n.invoiceNoteId,
+															body: editDraft.trim(),
+														});
+													}}
+												>
+													{editNoteMutation.isPending ? "Saving…" : "Save"}
+												</Button>
+												<Button
+													size="sm"
+													variant="outline"
+													disabled={editNoteMutation.isPending}
+													onClick={() => {
+														setEditingNoteId(null);
+														setEditDraft("");
+													}}
+												>
+													Cancel
+												</Button>
+											</div>
+										</div>
+									) : (
+										<div className="flex items-start justify-between gap-3">
+											<div className="min-w-0 space-y-1">
+												<p className="whitespace-pre-wrap text-[var(--foreground)] text-sm">
+													{n.body}
+												</p>
+												<div className="text-[var(--muted-foreground)] text-xs">
+													{formatDateTime(n.createdAt)}
+													{n.author && ` · ${n.author.fullName}`}
+												</div>
+											</div>
+											{isStaff && (
+												<div className="flex shrink-0 items-center gap-1">
+													<Button
+														size="sm"
+														variant="ghost"
+														onClick={() => {
+															setEditingNoteId(n.invoiceNoteId);
+															setEditDraft(n.body);
+														}}
+													>
+														Edit
+													</Button>
+													<Button
+														size="sm"
+														variant="ghost"
+														className="text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+														onClick={() => setDeleteNoteId(n.invoiceNoteId)}
+													>
+														Delete
+													</Button>
+												</div>
+											)}
+										</div>
+									)}
+								</li>
+							))}
+						</ul>
+					) : (
+						<p className="text-[var(--muted-foreground)] text-sm">
+							No notes yet.
+						</p>
+					)}
+
+					{/* Add-note composer (staff only). */}
+					{isStaff && (
+						<div className="mt-3 space-y-2 border-[var(--border)] border-t pt-3">
+							<textarea
+								value={noteDraft}
+								onChange={(e) => setNoteDraft(e.target.value)}
+								rows={2}
+								maxLength={2000}
+								placeholder="Add a note… (visible to the member and on the PDF)"
+								className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-[var(--foreground)] text-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+							/>
+							<div className="flex justify-end">
+								<Button
+									size="sm"
+									disabled={
+										addNoteMutation.isPending || noteDraft.trim().length === 0
+									}
+									onClick={() => {
+										if (noteDraft.trim().length === 0) return;
+										addNoteMutation.mutate({
+											invoiceId,
+											body: noteDraft.trim(),
+										});
+									}}
+								>
+									{addNoteMutation.isPending ? "Adding…" : "Add note"}
+								</Button>
+							</div>
+						</div>
+					)}
 				</div>
 			)}
 
@@ -749,7 +901,7 @@ export default function InvoiceDetail({
 					>
 						<label className="block space-y-1">
 							<span className="text-[var(--muted-foreground)] text-xs">
-								Reason (required) — appended to the invoice notes
+								Reason (required) — saved as a note on the invoice
 							</span>
 							<textarea
 								value={voidReason}
@@ -770,6 +922,27 @@ export default function InvoiceDetail({
 						refund={refundCtx}
 						consumerUserId={dto.consumer.userId}
 						payerUserId={dto.billedTo?.userId ?? null}
+					/>
+
+					{/* Phase 9c — delete-note confirmation. */}
+					<AlertDialog
+						open={deleteNoteId !== null}
+						destructive
+						title="Delete note"
+						description="This removes the note from the invoice and its PDF. This can't be undone."
+						confirmLabel={
+							removeNoteMutation.isPending ? "Deleting…" : "Delete note"
+						}
+						cancelLabel="Cancel"
+						confirmDisabled={removeNoteMutation.isPending}
+						onConfirm={() => {
+							if (removeNoteMutation.isPending || deleteNoteId === null) return;
+							removeNoteMutation.mutate({ invoiceNoteId: deleteNoteId });
+						}}
+						onCancel={() => {
+							if (removeNoteMutation.isPending) return;
+							setDeleteNoteId(null);
+						}}
 					/>
 				</>
 			)}

@@ -74,6 +74,10 @@ export const AUDIT_ACTIONS = {
 	// event-registration charges for uncovered billable check-ins)
 	ADHOC_CHARGE_ADDED: "charge.adhoc",
 	EVENT_CHARGE_ADDED: "charge.event_registration",
+	// Phase 9c — staff-attributed invoice notes (added/edited/soft-removed)
+	INVOICE_NOTE_ADDED: "invoice_note.added",
+	INVOICE_NOTE_EDITED: "invoice_note.edited",
+	INVOICE_NOTE_REMOVED: "invoice_note.removed",
 	// Phase 10a — memberships
 	MEMBERSHIP_SOLD: "membership.sold",
 	MEMBERSHIP_FROZEN: "membership.frozen",

@@ -85,6 +85,8 @@ export default function AddChargeModal({
 	const [description, setDescription] = useState<string>("");
 	const [quantity, setQuantity] = useState<string>("1");
 	const [amountDollars, setAmountDollars] = useState<string>("");
+	// Phase 9c §6.5 — optional "why" note, saved as a line-linked InvoiceNote.
+	const [note, setNote] = useState<string>("");
 	const [productPickerOpen, setProductPickerOpen] = useState<boolean>(false);
 	const [billToUser, setBillToUser] = useState<{
 		userId: string;
@@ -105,6 +107,7 @@ export default function AddChargeModal({
 			setDescription("");
 			setQuantity("1");
 			setAmountDollars("");
+			setNote("");
 			setProductPickerOpen(false);
 			setBillToUser(null);
 		}
@@ -220,6 +223,7 @@ export default function AddChargeModal({
 			return;
 		}
 
+		const trimmedNote = note.trim();
 		addChargeMutation.mutate({
 			userId,
 			productId,
@@ -227,6 +231,7 @@ export default function AddChargeModal({
 			quantity: parsedQuantity,
 			unitPriceInCents: parsedAmountCents,
 			billToUserId: billToUser?.userId,
+			note: trimmedNote === "" ? undefined : trimmedNote,
 		});
 	};
 
@@ -458,6 +463,27 @@ export default function AddChargeModal({
 								Lands on the member’s open tab — a fresh one opens automatically
 								if none is open.
 							</p>
+						</div>
+
+						{/* Phase 9c §6.5 — optional note explaining the charge. Saved as a
+						    note linked to this line; visible to the member and on the PDF. */}
+						<div className="space-y-1">
+							<label
+								htmlFor="add-charge-note"
+								className="font-medium text-[var(--foreground)] text-sm"
+							>
+								Note (optional)
+							</label>
+							<textarea
+								id="add-charge-note"
+								value={note}
+								onChange={(e) => setNote(e.target.value)}
+								rows={2}
+								maxLength={2000}
+								disabled={saving}
+								placeholder="Why this charge? Saved on the invoice (visible to the member + on the PDF)."
+								className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-[var(--foreground)] text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+							/>
 						</div>
 					</div>
 

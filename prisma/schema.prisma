@@ -1341,7 +1341,6 @@ model Invoice {
   // amountPaidInCents is net of refunds: sum(payments.amount) - sum(refunds.amount).
   // Outstanding balance is computed at query time as totalInCents - amountPaidInCents.
   amountPaidInCents Int           @default(0)
-  notes             String?       @db.Text
   createdBy         String // staff userId
   createdByUser     User          @relation("InvoiceCreatedBy", fields: [createdBy], references: [userId])
   createdAt         DateTime      @default(now())
@@ -1383,6 +1382,8 @@ model Invoice {
   creditAppliedToLineItems InvoiceLineItem[] @relation("CreditSource")
   // Phase 9b — cached PDF renders (one row per render, latest version is served).
   invoicePdfs              InvoicePdf[]
+  // Phase 9c — staff-attributed note rows (replaces the dropped `notes` blob).
+  invoiceNotes             InvoiceNote[]
 
   @@unique([clubShortName, invoiceNumber])
   @@index([clubShortName])
@@ -1499,6 +1500,10 @@ model InvoiceLineItem {
   eventRegistrationId String?
   eventRegistration   EventRegistration? @relation(fields: [eventRegistrationId], references: [registrationId], onDelete: SetNull)
 
+  // Phase 9c — notes optionally linked to this specific line (nullable; no
+  // per-line UI yet — see InvoiceNote).
+  invoiceNotes        InvoiceNote[]
+
   @@index([invoiceId])
   @@index([kind])
   @@index([productId])
@@ -1579,6 +1584,40 @@ model InvoiceRefund {
   @@index([refundedBy])
 }
 
+// InvoiceNote — Phase 9c §6. Staff-attributed, timestamped note rows that
+// REPLACE the legacy single `Invoice.notes` text blob (dropped in the same
+// migration). Unlike the blob, each note has an author trail (createdBy /
+// updatedBy), a soft-delete trail (deletedAt / deletedBy — history is preserved,
+// never hard-deleted), and an optional link to a specific line item. The void
+// reason that used to be appended to `Invoice.notes` is now an InvoiceNote
+// (body "[Voided …] {reason}"). All notes are visible to everyone this phase;
+// `showOnInvoice` is a reserved printed-vs-internal switch (always true, no UI /
+// filter yet) so staff-private notes can be added later with NO migration.
+model InvoiceNote {
+  invoiceNoteId String           @id @default(cuid())
+  // Denormalized from the parent invoice so club-wide note queries (e.g. the
+  // listInvoices note search) don't need a join. addInvoiceNote keeps it in sync.
+  clubShortName String
+  invoiceId     String
+  invoice       Invoice          @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  // Optional link to a specific charge (e.g. an ad-hoc fee's "why"). Nullable;
+  // no per-line UI this phase — invoice-level notes only (Phase 9c locked scope).
+  lineItemId    String?
+  lineItem      InvoiceLineItem? @relation(fields: [lineItemId], references: [lineItemId])
+  body          String           @db.Text
+  // Reserved printed-vs-internal switch — always true this phase (no UI / filter).
+  showOnInvoice Boolean          @default(true)
+  createdBy     String // staff userId (audit: who added)
+  updatedBy     String? // staff userId (audit: who last edited)
+  deletedAt     DateTime? // soft delete — preserves history
+  deletedBy     String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([invoiceId])
+  @@index([clubShortName])
+}
+
 // ============================================================
 // MEMBERSHIPS (Phase 10a, 2026-05-26)
 // See designFiles/roadmap/phase10-memberships.md (spec) +
@@ -1633,7 +1672,7 @@ model MembershipPlan {
   billingUnit          String         @db.VarChar(20) // "day" | "week" | "month" | "year"
   billingCycles        Int? // how many times to bill per contract (null = indefinite)
   feePerTermInCents    Int // recurring fee each billing cycle, in cents (#94: Int cents, never Decimal)
-  initiationFeeInCents Int            @default(0) // one-time fee at signup (future)
+  initiationFeeInCents Int            @default(0) // one-time registration fee charged at signup (membership checkout + SellMembershipModal)
   maxVisits            Int? // null = unlimited (future)
   // DEFAULT auto-renew for new sales of this plan. Inert in 10a (no generator).
   // Per-sale override lives on MemberMembership.autoRenew. See Auto-Renew Toggle §.
