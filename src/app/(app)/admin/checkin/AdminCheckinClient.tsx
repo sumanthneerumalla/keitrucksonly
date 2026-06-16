@@ -144,9 +144,6 @@ export default function AdminCheckinClient() {
 	const searchRef = useRef<HTMLInputElement>(null);
 	const dropdownRef = useRef<HTMLDivElement>(null);
 
-	// Barcode scan detection
-	const keystrokeTimestamps = useRef<number[]>([]);
-
 	// Walk-in confirmation
 	const [walkinConfirm, setWalkinConfirm] = useState<{
 		eventId: string;
@@ -276,32 +273,42 @@ export default function AdminCheckinClient() {
 		searchRef.current?.focus();
 	}, [isFacilityOrAdmin]);
 
-	// Barcode scan detection: if 10+ chars arrive within 100ms, treat as scan
-	const handleSearchKeyDown = useCallback(
-		(e: React.KeyboardEvent<HTMLInputElement>) => {
-			if (e.key === "Escape") {
-				setShowDropdown(false);
+	// Focus-independent barcode/QR scan: a hardware scanner types the member's
+	// code as a rapid keystroke burst ending in Enter. Capture it at the document
+	// level so it works no matter where focus is (front-desk staff don't have to
+	// keep the search box focused), then drive the member search.
+	useEffect(() => {
+		if (!isFacilityOrAdmin) return;
+		let buf = "";
+		let last = 0;
+		const onKeyDown = (e: KeyboardEvent) => {
+			const now = Date.now();
+			if (now - last > 100) buf = ""; // >100ms gap → human/idle, start fresh
+			last = now;
+			if (e.key === "Enter") {
+				// A long buffer accumulated with no >100ms gaps = a scanner burst,
+				// not human typing (humans can't sustain <100ms/char for 8+ chars).
+				if (buf.length >= 8) {
+					e.preventDefault();
+					setSearchInput(buf);
+					setDebouncedQuery(buf);
+					setShowDropdown(true);
+					searchRef.current?.focus();
+				}
+				buf = "";
 				return;
 			}
-			const now = Date.now();
-			keystrokeTimestamps.current.push(now);
-			// Keep only last 10 timestamps
-			if (keystrokeTimestamps.current.length > 10) {
-				keystrokeTimestamps.current = keystrokeTimestamps.current.slice(-10);
-			}
-			const stamps = keystrokeTimestamps.current;
-			if (stamps.length >= 10) {
-				const elapsed = stamps[stamps.length - 1]! - stamps[0]!;
-				if (elapsed < 100) {
-					// Barcode scan detected — force immediate search
-					setTimeout(() => {
-						const val = (e.target as HTMLInputElement).value.trim();
-						if (val) {
-							setDebouncedQuery(val);
-						}
-					}, 50);
-				}
-			}
+			if (e.key.length === 1) buf += e.key;
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [isFacilityOrAdmin]);
+
+	// Esc closes the dropdown. Barcode scans are handled by the document-level
+	// listener above, so they work regardless of which element has focus.
+	const handleSearchKeyDown = useCallback(
+		(e: React.KeyboardEvent<HTMLInputElement>) => {
+			if (e.key === "Escape") setShowDropdown(false);
 		},
 		[],
 	);
