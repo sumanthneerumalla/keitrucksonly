@@ -18,43 +18,66 @@
 	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
+# HTTP Strict Transport Security (HSTS): force browsers to use HTTPS only.
+# Applied to every site block below (including redirect-only blocks, since the
+# `header` directive runs before `redir` in Caddy's default order). The
+# `header` directive defaults to deferred application so the value is also set
+# on error/redirect responses.
+#   max-age=31536000  -> remember for 1 year
+#   includeSubDomains -> also covers dev.*, cal.*, etc. (all served over HTTPS)
+# NOTE: do not add `preload` unless you intend to submit the domain to the
+# browser HSTS preload list (hstspreload.org) — it is hard to reverse.
+(hsts) {
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
+
 www.facilitypresence.com {
+	import hsts
 	reverse_proxy 127.0.0.1:3001
 }
 
 www.dev.facilitypresence.com {
+	import hsts
 	reverse_proxy 127.0.0.1:3000
 }
 
 dev.facilitypresence.com {
+	import hsts
 	redir https://www.dev.facilitypresence.com{uri} permanent
 }
 
 facilitypresence.com {
+	import hsts
 	redir https://www.facilitypresence.com{uri} permanent
 }
 
 # Old domain redirects
 www.shuttlementor.com {
+	import hsts
 	redir https://www.facilitypresence.com{uri} permanent
 }
 
 shuttlementor.com {
+	import hsts
 	redir https://www.facilitypresence.com{uri} permanent
 }
 
 www.dev.shuttlementor.com {
+	import hsts
 	redir https://www.dev.facilitypresence.com{uri} permanent
 }
 
 dev.shuttlementor.com {
+	import hsts
 	redir https://www.dev.facilitypresence.com{uri} permanent
 }
 
 cal.facilitypresence.com {
+	import hsts
 	reverse_proxy 127.0.0.1:3030
 }
 
 www.cal.facilitypresence.com {
+	import hsts
 	redir https://cal.facilitypresence.com{uri} permanent
 }
