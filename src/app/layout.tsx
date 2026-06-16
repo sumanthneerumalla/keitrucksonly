@@ -18,7 +18,9 @@ export const metadata: Metadata = {
 	title: "Facility Presence",
 	description:
 		"All-in-one facility management platform for sports and recreation",
-	icons: [{ rel: "icon", url: "/favicon.ico" }],
+	// Favicons are provided by the App Router file conventions: app/icon.svg
+	// (modern, scalable), app/icon.png (raster fallback), app/apple-icon.png.
+	// Next injects the <link> tags automatically — no manual config needed.
 };
 
 export default function RootLayout({
