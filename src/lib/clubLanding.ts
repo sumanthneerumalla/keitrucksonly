@@ -168,6 +168,16 @@ export function matchClubShortUrlPathname(
 		};
 	}
 
+	// /<short>/calendar (Phase 16) — the public club calendar (the "Book a
+	// Court" / "View Calendar" destination). Query params (view/mode/
+	// orientation) ride along via the preserved nextUrl search string.
+	if (rest[0] === "calendar" && rest.length === 1) {
+		return {
+			shortname: short,
+			rewritePath: `/club/${short}/calendar`,
+		};
+	}
+
 	// /<short>/events/<eventId> (Phase 16 Step 5) — club-chromed public event
 	// page. Single trailing id only; no index (the events live on the landing
 	// page + calendar).

@@ -46,6 +46,15 @@ describe("matchClubShortUrlPathname", () => {
 		});
 	});
 
+	it("rewrites the public calendar", () => {
+		expect(matchClubShortUrlPathname("/cba/calendar")).toEqual({
+			shortname: "cba",
+			rewritePath: "/club/cba/calendar",
+		});
+		// No deeper calendar paths.
+		expect(matchClubShortUrlPathname("/cba/calendar/week")).toBeNull();
+	});
+
 	it("rewrites a club-chromed event page", () => {
 		expect(matchClubShortUrlPathname("/cba/events/evt_123")).toEqual({
 			shortname: "cba",
