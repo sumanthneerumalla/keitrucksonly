@@ -1907,15 +1907,17 @@ model EmailSendRecipient {
 // PDFs (which member-1 saw). Only the LATEST row is exposed to consumers via
 // the /api/invoices/[invoiceId]/pdf route handler.
 //
-// Cache invalidation is read-time:
+// Cache invalidation is read-time + CONTENT-ADDRESSED:
 //   serve cached row IFF
-//     row.invoiceUpdatedAt == invoice.updatedAt
+//     row.contentHash == sha256(the assembled RenderableInvoice DTO)
 //     AND row.rendererVersion == CURRENT_RENDERER_VERSION (constant in code)
 //   else regenerate from src/server/services/invoiceRenderer/assemble.ts
 //
-// The Invoice's @updatedAt already bumps on every meaningful mutation
-// (sellPackage line-item add, recordPayment, closeInvoice, voidInvoice,
-// refund), so no explicit cache-bust calls are needed at write sites.
+// The hash is over the EXACT data the renderer draws (the customer-audience
+// DTO), so any change to anything rendered — invoice, line items, payments,
+// notes, a party's name/phone, the club/facility block — invalidates the cache
+// automatically. No per-field staleness watermark to keep in sync with the
+// renderer (that list drifted twice: invoice notes + the per-club phone move).
 model InvoicePdf {
   invoicePdfId     String   @id @default(cuid())
   invoiceId        String
@@ -1932,10 +1934,11 @@ model InvoicePdf {
   // PDF layout changes meaningfully so cached rows auto-regenerate on next
   // read. Free-form string so the next bump can encode anything (e.g. "v2.0").
   rendererVersion  String   @db.VarChar(30)
-  // Snapshot of Invoice.updatedAt at render time. Compared with the live
-  // invoice.updatedAt on read; mismatch = invoice changed since render =
-  // regenerate.
-  invoiceUpdatedAt DateTime
+  // sha256 (hex) of the assembled RenderableInvoice DTO at render time —
+  // content-addressed cache key. Mismatch vs the live DTO's hash = rendered
+  // content changed = regenerate. Nullable so rows cached before this column
+  // (legacy timestamp-watermark scheme) simply regenerate once on next read.
+  contentHash      String?  @db.VarChar(64)
   // Whoever triggered this render (null = system, e.g. background regen).
   generatedBy      String?
   generatedByUser  User?    @relation("InvoicePdfGeneratedBy", fields: [generatedBy], references: [userId], onDelete: SetNull)

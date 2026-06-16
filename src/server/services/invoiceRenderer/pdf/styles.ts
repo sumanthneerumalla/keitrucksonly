@@ -141,7 +141,11 @@ export const styles = StyleSheet.create({
 		alignItems: "flex-end",
 	},
 	invoiceTitle: {
-		fontSize: 20,
+		// NOTE: keep this < 20. At fontSize 20 the Noto Sans 700 face renders a
+		// stray horizontal strike through the invoice number in @react-pdf's
+		// output (visible in viewers + rasterizers); 18 renders cleanly. Don't
+		// bump back to 20 without re-checking the rendered PDF header.
+		fontSize: 18,
 		fontFamily: "Noto Sans",
 		fontWeight: 700,
 		marginBottom: 6,
