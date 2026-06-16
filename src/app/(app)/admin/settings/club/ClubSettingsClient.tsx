@@ -370,17 +370,20 @@ export default function ClubSettingsClient() {
 						</p>
 						<div>
 							<label className="mb-1 block text-[var(--muted-foreground)] text-xs">
-								Canonical domain
+								Custom domain
 							</label>
+							{/* Disabled until custom-domain serving ships (Phase 16 Step
+								6). Setting it now would point every public URL at a domain
+								that isn't served yet. */}
 							<Input
 								type="url"
 								value={canonicalDomain}
-								onChange={(e) => setCanonicalDomain(e.target.value)}
-								placeholder="https://yourclub.com"
+								disabled
+								placeholder="Coming soon"
 							/>
 							<p className="mt-1 text-[var(--muted-foreground)] text-xs">
-								Leave blank unless this club has its own domain. Changes every
-								public URL for this club.
+								Custom domains aren't available yet — your club page lives at
+								facilitypresence.com/your-club for now.
 							</p>
 						</div>
 					</div>

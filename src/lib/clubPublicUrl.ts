@@ -28,3 +28,20 @@ export function getClubPublicUrl(club: ClubUrlSource, path = ""): string {
 	const suffix = path.startsWith("/") ? path : `/${path}`;
 	return `${getClubBaseUrl(club)}${suffix}`;
 }
+
+/**
+ * Absolute Open Graph image URL for a club's public pages: the club hero photo,
+ * else its logo, else the platform fallback card (public/og-default.svg). Used
+ * for the club landing page and its events' share previews. Always an absolute
+ * URL on SITE_URL (social scrapers require absolute), independent of any custom
+ * canonicalDomain — the image is always served from the platform origin.
+ */
+export function clubOgImageUrl(club: {
+	heroImageId?: string | null;
+	logoImageId?: string | null;
+}): string {
+	const id = club.heroImageId ?? club.logoImageId;
+	return id
+		? `${SITE_URL}/api/content-image/${id}`
+		: `${SITE_URL}/og-default.svg`;
+}

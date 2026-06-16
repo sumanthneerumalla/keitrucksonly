@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import AnnouncementFeed from "~/app/_components/client/public/announcements/AnnouncementFeed";
 import { ArticleCard } from "~/app/_components/client/public/articles/ArticleCard";
 import { DAYS_OF_WEEK, operatingHoursSchema } from "~/lib/clubProfile";
-import { getClubBaseUrl } from "~/lib/clubPublicUrl";
+import { clubOgImageUrl, getClubBaseUrl } from "~/lib/clubPublicUrl";
 import { SITE_URL } from "~/lib/marketing";
 import { db } from "~/server/db";
 import { api } from "~/trpc/server";
@@ -36,6 +36,8 @@ export async function generateMetadata({
 			clubName: true,
 			description: true,
 			canonicalDomain: true,
+			logoImageId: true,
+			heroImageId: true,
 			facilities: {
 				where: { isActive: true },
 				orderBy: { position: "asc" },
@@ -61,6 +63,7 @@ export async function generateMetadata({
 		club.description?.slice(0, 155) ||
 		`Upcoming events, programs, and court bookings at ${club.clubName}${location ? ` in ${location}` : ""}.`;
 	const url = getClubBaseUrl(club);
+	const ogImage = clubOgImageUrl(club);
 	return {
 		title,
 		description,
@@ -71,8 +74,14 @@ export async function generateMetadata({
 			url,
 			type: "website",
 			siteName: club.clubName,
+			images: [ogImage],
 		},
-		twitter: { card: "summary", title, description },
+		twitter: {
+			card: "summary_large_image",
+			title,
+			description,
+			images: [ogImage],
+		},
 	};
 }
 

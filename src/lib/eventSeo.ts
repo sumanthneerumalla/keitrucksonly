@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { cache } from "react";
-import { getClubBaseUrl } from "~/lib/clubPublicUrl";
+import { clubOgImageUrl, getClubBaseUrl } from "~/lib/clubPublicUrl";
 import { SITE_URL } from "~/lib/marketing";
 import { db } from "~/server/db";
 
@@ -30,6 +30,8 @@ export const fetchEventForSeo = cache(async (eventId: string) => {
 					clubShortName: true,
 					clubName: true,
 					canonicalDomain: true,
+					logoImageId: true,
+					heroImageId: true,
 				},
 			},
 			facility: {
@@ -82,6 +84,7 @@ export function buildEventMetadata(
 	}
 	const title = `${event.title} | ${event.club.clubName}`;
 	const description = buildEventDescription(event.description);
+	const ogImage = clubOgImageUrl(event.club);
 	return {
 		title,
 		description,
@@ -92,8 +95,14 @@ export function buildEventMetadata(
 			url: canonical,
 			type: "website",
 			siteName: event.club.clubName,
+			images: [ogImage],
 		},
-		twitter: { card: "summary", title, description },
+		twitter: {
+			card: "summary_large_image",
+			title,
+			description,
+			images: [ogImage],
+		},
 	};
 }
 
