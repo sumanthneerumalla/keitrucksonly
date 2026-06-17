@@ -103,11 +103,13 @@ export default function EventDetailClient({
 		onError: (err) => toast(err.message, "error"),
 	});
 
-	const cancelMutation = api.calendar.cancelRegistration.useMutation({
+	// Self check-in from the event page (members only). The window + ownership are
+	// enforced server-side by selfCheckin; we only gate the button client-side.
+	const selfCheckinMutation = api.checkin.selfCheckin.useMutation({
 		onSuccess: () => {
 			void utils.calendar.getMyRegistrations.invalidate();
 			void utils.calendar.getPublicEventById.invalidate({ eventId });
-			toast("Registration cancelled", "success");
+			toast("Checked in!", "success");
 		},
 		onError: (err) => toast(err.message, "error"),
 	});
@@ -120,7 +122,12 @@ export default function EventDetailClient({
 		event.maxParticipants !== null &&
 		event._count.registrations >= event.maxParticipants;
 	const canRegister = isStudent && isBookable && !isFull && !myRegistration;
-	const canCancel = isStudent && myRegistration != null;
+	// Registered members can self check in, but only within ±30 min of start and
+	// only for events tied to a facility.
+	const checkinWindowOpen =
+		event != null &&
+		event.facilityId != null &&
+		Math.abs(Date.now() - new Date(event.start).getTime()) <= 30 * 60 * 1000;
 	// Free-event detection — must mirror server-side `shop.guestRegisterForFreeEvent` validation
 	// exactly (review I2). Server checks BOTH price-is-zero AND credit-is-zero before letting
 	// a guest register. If we relax this client-side, a credit-required $0 event will show the
@@ -375,25 +382,27 @@ export default function EventDetailClient({
 											<CalendarCheck size={16} />
 											You're registered for this event
 										</div>
-										<Button
-											variant="outline"
-											size="sm"
-											onClick={() =>
-												cancelMutation.mutate({
-													registrationId: myRegistration.registrationId,
-												})
-											}
-											disabled={cancelMutation.isPending}
-											className="border-red-200 text-red-600 hover:bg-red-50"
-										>
-											<X size={14} />
-											{cancelMutation.isPending
-												? "Cancelling…"
-												: "Cancel Registration"}
-										</Button>
-										<p className="text-[var(--muted-foreground)] text-xs">
-											Cancelling forfeits any credit used for this registration.
-										</p>
+										{checkinWindowOpen ? (
+											<Button
+												size="sm"
+												onClick={() =>
+													selfCheckinMutation.mutate({
+														registrationId: myRegistration.registrationId,
+														facilityId: event.facilityId ?? "",
+													})
+												}
+												disabled={selfCheckinMutation.isPending}
+											>
+												<Check size={14} />
+												{selfCheckinMutation.isPending
+													? "Checking in…"
+													: "Check in"}
+											</Button>
+										) : (
+											<p className="text-[var(--muted-foreground)] text-xs">
+												Check-in opens 30 minutes before the event starts.
+											</p>
+										)}
 									</>
 								) : isFull ? (
 									<p className="text-[var(--muted-foreground)] text-sm">
