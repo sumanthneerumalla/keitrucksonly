@@ -225,7 +225,7 @@ export default function SellMembershipModal({
 	// Active membership plans for the picker.
 	const { data: plansData, isLoading: plansLoading } =
 		api.memberships.listPlans.useQuery({ isActive: true });
-	const plans = (plansData?.plans ?? []) as MembershipPlanRow[];
+	const plans = (plansData?.plans ?? []) as unknown as MembershipPlanRow[];
 	const selectedPlan = plans.find((p) => p.membershipPlanId === selectedPlanId);
 
 	// Prior memberships for the consumer — drives the registration-fee default
