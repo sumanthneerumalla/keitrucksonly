@@ -58,7 +58,13 @@ export default function CreateGroupClient({
 	);
 
 	// Mutations
-	const createMutation = api.emailGroups.create.useMutation();
+	const utils = api.useUtils();
+	const createMutation = api.emailGroups.create.useMutation({
+		onSuccess: () => {
+			void utils.emailGroups.getMyGroups.invalidate();
+			void utils.emailGroups.getAllForFacility.invalidate();
+		},
+	});
 	const addMembersMutation = api.emailGroups.addMembers.useMutation();
 
 	const selectedUserIds = useMemo(

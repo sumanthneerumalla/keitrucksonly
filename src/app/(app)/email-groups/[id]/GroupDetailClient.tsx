@@ -73,12 +73,16 @@ export default function GroupDetailClient({
 
 	const leaveMutation = api.emailGroups.leave.useMutation({
 		onSuccess: () => {
+			void utils.emailGroups.getMyGroups.invalidate();
+			void utils.emailGroups.getAllForFacility.invalidate();
 			router.push("/email-groups");
 		},
 	});
 
 	const deleteMutation = api.emailGroups.delete.useMutation({
 		onSuccess: () => {
+			void utils.emailGroups.getMyGroups.invalidate();
+			void utils.emailGroups.getAllForFacility.invalidate();
 			router.push("/email-groups");
 		},
 	});

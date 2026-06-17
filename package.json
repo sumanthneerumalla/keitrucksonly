@@ -61,7 +61,7 @@
 		"@clerk/nextjs": "^6.39.3",
 		"@emotion/is-prop-valid": "^1.4.0",
 		"@expo-google-fonts/noto-sans": "^0.4.2",
-		"@ilamy/calendar": "^1.7.0",
+		"@ilamy/calendar": "1.8.1",
 		"@prisma/client": "6.19.0",
 		"@prisma/studio-core": "^0.14.0",
 		"@radix-ui/react-avatar": "^1.1.10",
