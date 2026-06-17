@@ -377,33 +377,40 @@ export default function EventDetailClient({
 						{isStudent && isBookable && (
 							<div className="glass-card space-y-3 rounded-lg p-5">
 								{myRegistration ? (
-									<>
+									myRegistration.status === "CHECKED_IN" ? (
 										<div className="flex items-center gap-2 font-medium text-green-600 text-sm">
-											<CalendarCheck size={16} />
-											You're registered for this event
+											<Check size={16} />
+											You're checked in
 										</div>
-										{checkinWindowOpen ? (
-											<Button
-												size="sm"
-												onClick={() =>
-													selfCheckinMutation.mutate({
-														registrationId: myRegistration.registrationId,
-														facilityId: event.facilityId ?? "",
-													})
-												}
-												disabled={selfCheckinMutation.isPending}
-											>
-												<Check size={14} />
-												{selfCheckinMutation.isPending
-													? "Checking in…"
-													: "Check in"}
-											</Button>
-										) : (
-											<p className="text-[var(--muted-foreground)] text-xs">
-												Check-in opens 30 minutes before the event starts.
-											</p>
-										)}
-									</>
+									) : (
+										<>
+											<div className="flex items-center gap-2 font-medium text-green-600 text-sm">
+												<CalendarCheck size={16} />
+												You're registered for this event
+											</div>
+											{checkinWindowOpen ? (
+												<Button
+													size="sm"
+													onClick={() =>
+														selfCheckinMutation.mutate({
+															registrationId: myRegistration.registrationId,
+															facilityId: event.facilityId ?? "",
+														})
+													}
+													disabled={selfCheckinMutation.isPending}
+												>
+													<Check size={14} />
+													{selfCheckinMutation.isPending
+														? "Checking in…"
+														: "Check in"}
+												</Button>
+											) : (
+												<p className="text-[var(--muted-foreground)] text-xs">
+													Check-in opens 30 minutes before the event starts.
+												</p>
+											)}
+										</>
+									)
 								) : isFull ? (
 									<p className="text-[var(--muted-foreground)] text-sm">
 										This event is fully booked ({event._count.registrations}/

@@ -2550,7 +2550,11 @@ export const calendarRouter = createTRPCRouter({
 		const registrations = await ctx.db.eventRegistration.findMany({
 			where: {
 				userId: user.userId,
-				status: RegistrationStatus.REGISTERED,
+				// Include CHECKED_IN so the event page can reflect a checked-in state
+				// (and not offer "Register" again to someone who already checked in).
+				status: {
+					in: [RegistrationStatus.REGISTERED, RegistrationStatus.CHECKED_IN],
+				},
 			},
 			include: {
 				event: {
