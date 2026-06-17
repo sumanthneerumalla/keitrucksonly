@@ -13,6 +13,7 @@ import {
 	buildPartyAuditEntries,
 	writeAuditedMutation,
 } from "~/server/utils/auditedMutation";
+import { sendInvoiceEmailByInvoiceId } from "~/server/utils/invoiceEmail";
 import { getMembershipCoverage } from "~/server/utils/membershipCoverage";
 import { sellMembershipInternal } from "~/server/utils/sellMembership";
 
@@ -511,7 +512,7 @@ export const membershipsRouter = createTRPCRouter({
 		// parse / backdating check / computeMembershipTerm). The Zod input +
 		// tRPC signature are UNCHANGED. The shipped procedure stays named
 		// `memberships.sell` (#129).
-		return await sellMembershipInternal({
+		const result = await sellMembershipInternal({
 			db: ctx.db,
 			clubShortName: ctx.user.clubShortName,
 			actorUserId: ctx.user.userId,
@@ -527,6 +528,21 @@ export const membershipsRouter = createTRPCRouter({
 				selectedAddOnKeys: input.selectedAddOnKeys,
 			},
 		});
+
+		// Fire-and-forget: email the invoice PDF after the DB transaction commits.
+		// Email failure must not roll back or fail the sale.
+		void sendInvoiceEmailByInvoiceId(
+			ctx.db,
+			result.invoice.invoiceId,
+			ctx.user.userId,
+		).catch((err: unknown) => {
+			console.error(
+				`[memberships.sell] invoice email failed for invoice ${result.invoice.invoiceId}:`,
+				err,
+			);
+		});
+
+		return result;
 	}),
 
 	// ------------------------------------------------------------------
