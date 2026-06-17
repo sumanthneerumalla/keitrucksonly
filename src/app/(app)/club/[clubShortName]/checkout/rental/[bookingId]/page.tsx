@@ -1,6 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
+import { CheckoutSignInGate } from "~/app/_components/client/CheckoutSignInGate";
 import BuyerBeneficiaryForm from "~/app/_components/client/shared/BuyerBeneficiaryForm";
 import { Button } from "~/app/_components/shared/Button";
 import { db } from "~/server/db";
@@ -25,14 +26,15 @@ export default async function RentalCheckoutFormPage({
 }) {
 	const { clubShortName, bookingId } = await params;
 
-	// Guest visitors can't pay for a rental — there's no guest endpoint. Send
-	// them to sign-in with the current path so they come back here.
+	// Guest visitors can't pay for a rental — there's no guest endpoint. Onboard
+	// them via /join (join club → profile), then return to this checkout page.
 	const session = await auth();
 	if (!session?.userId) {
-		redirect(
-			`/sign-in?redirect_url=${encodeURIComponent(
-				`/club/${clubShortName}/checkout/rental/${bookingId}`,
-			)}`,
+		return (
+			<CheckoutSignInGate
+				clubShortName={clubShortName}
+				next={`/club/${clubShortName}/checkout/rental/${bookingId}`}
+			/>
 		);
 	}
 

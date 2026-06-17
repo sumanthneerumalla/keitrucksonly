@@ -1,6 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
+import { CheckoutSignInGate } from "~/app/_components/client/CheckoutSignInGate";
 import BuyerBeneficiaryForm from "~/app/_components/client/shared/BuyerBeneficiaryForm";
 import { Button } from "~/app/_components/shared/Button";
 import { formatCents } from "~/lib/money";
@@ -24,10 +25,12 @@ export default async function MembershipCheckoutFormPage({
 
 	const session = await auth();
 	if (!session?.userId) {
-		redirect(
-			`/sign-in?redirect_url=${encodeURIComponent(
-				`/club/${clubShortName}/checkout/membership/${planId}`,
-			)}`,
+		// New buyer: onboard via /join (join club → profile) then back here.
+		return (
+			<CheckoutSignInGate
+				clubShortName={clubShortName}
+				next={`/club/${clubShortName}/checkout/membership/${planId}`}
+			/>
 		);
 	}
 
