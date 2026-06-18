@@ -27,7 +27,10 @@ import {
 	assertRegistrable,
 	createRegistrationTx,
 } from "~/server/utils/eventRegistration";
-import { sendRegistrationConfirmationEmail } from "~/server/utils/registrationEmail";
+import {
+	sendRegistrationCancellationEmail,
+	sendRegistrationConfirmationEmail,
+} from "~/server/utils/registrationEmail";
 import {
 	checkRecurringEventConflicts,
 	checkResourceConflicts,
@@ -2526,6 +2529,17 @@ export const calendarRouter = createTRPCRouter({
 							: "self_service",
 					},
 				});
+			});
+
+			// Fire-and-forget: notify registrant of cancellation. Failure must not roll back.
+			void sendRegistrationCancellationEmail(
+				ctx.db,
+				registrationId,
+			).catch((err: unknown) => {
+				console.error(
+					`[cancelRegistration] cancellation email failed for registration ${registrationId}:`,
+					err,
+				);
 			});
 
 			return { success: true };
