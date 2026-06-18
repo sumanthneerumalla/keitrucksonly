@@ -132,3 +132,108 @@ export async function sendRegistrationConfirmationEmail(
 	);
 	return { kind: "sent", sentTo: registration.user.email };
 }
+
+/**
+ * Send a cancellation notice for `registrationId`.
+ *
+ * Same calling contract as `sendRegistrationConfirmationEmail` — call after
+ * the cancellation transaction commits, fire-and-forget.
+ */
+export async function sendRegistrationCancellationEmail(
+	db: PrismaClient,
+	registrationId: string,
+): Promise<SendRegistrationEmailResult> {
+	const registration = await db.eventRegistration.findUnique({
+		where: { registrationId },
+		select: {
+			registrationId: true,
+			instanceDate: true,
+			user: {
+				select: {
+					firstName: true,
+					lastName: true,
+					email: true,
+				},
+			},
+			event: {
+				select: {
+					title: true,
+					start: true,
+					end: true,
+					club: { select: { clubName: true } },
+					facility: { select: { timezone: true } },
+				},
+			},
+		},
+	});
+
+	if (!registration) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Registration not found",
+		});
+	}
+
+	if (!registration.user.email) {
+		return {
+			kind: "skipped",
+			reason: "Registrant does not have an email address on file",
+		};
+	}
+
+	const { user, event } = registration;
+	const tz = event.facility?.timezone ?? "UTC";
+
+	const displayStart = registration.instanceDate ?? event.start;
+	const durationMs = event.end.getTime() - event.start.getTime();
+	const displayEnd = new Date(displayStart.getTime() + durationMs);
+
+	const dateStr = dayjs(displayStart).tz(tz).format("dddd, MMMM D, YYYY");
+	const startTimeStr = dayjs(displayStart).tz(tz).format("h:mm A");
+	const endTimeStr = dayjs(displayEnd).tz(tz).format("h:mm A z");
+
+	const recipientName =
+		`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "there";
+	const clubName = event.club.clubName;
+
+	const subject = `Your registration for ${event.title} has been cancelled`;
+	const bodyHtml = [
+		`<p>Hi ${recipientName},</p>`,
+		`<p>Your registration has been cancelled for:</p>`,
+		`<p><strong>${event.title}</strong><br/>${dateStr}<br/>${startTimeStr} – ${endTimeStr}</p>`,
+		`<p>If you have any questions, please contact ${clubName}.</p>`,
+	].join("\n");
+	const bodyText = [
+		`Hi ${recipientName},`,
+		``,
+		`Your registration has been cancelled for:`,
+		`  ${event.title}`,
+		`  ${dateStr}`,
+		`  ${startTimeStr} – ${endTimeStr}`,
+		``,
+		`If you have any questions, please contact ${clubName}.`,
+	].join("\n");
+
+	const resend = await getResendClient();
+	const from = await getFromAddress({ firstName: null, lastName: null });
+
+	const { error } = await resend.emails.send({
+		from,
+		to: [registration.user.email],
+		subject,
+		html: bodyHtml,
+		text: bodyText,
+	});
+
+	if (error) {
+		throw new TRPCError({
+			code: "INTERNAL_SERVER_ERROR",
+			message: `Failed to send cancellation email: ${error.message}`,
+		});
+	}
+
+	console.log(
+		`[registrationEmail] cancellation sent for registration ${registrationId} to ${registration.user.email}`,
+	);
+	return { kind: "sent", sentTo: registration.user.email };
+}
