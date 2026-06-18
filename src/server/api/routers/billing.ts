@@ -17,6 +17,7 @@ import {
 	computeViewerCapabilities,
 } from "~/server/services/invoiceRenderer/assemble";
 import { getOrRenderInvoicePdf } from "~/server/services/invoiceRenderer/getOrRender";
+import { sendInvoiceEmailByInvoiceId } from "~/server/utils/invoiceEmail";
 import type { InvoiceView } from "~/server/services/invoiceRenderer/types";
 import {
 	AUDIT_ACTIONS,
@@ -2294,7 +2295,7 @@ export const billingRouter = createTRPCRouter({
 			}
 			const lineTotalInCents = unitPriceInCents; // qty 1, no tax/discount in v1
 
-			return await writeAuditedMutation(
+			const chargeResult = await writeAuditedMutation(
 				{
 					db: ctx.db,
 					actorUserId: ctx.user.userId,
@@ -2439,6 +2440,21 @@ export const billingRouter = createTRPCRouter({
 					};
 				},
 			);
+
+			// Fire-and-forget: email the invoice PDF after the charge is committed.
+			// Failure must not affect the charge result.
+			void sendInvoiceEmailByInvoiceId(
+				ctx.db,
+				chargeResult.invoice.invoiceId,
+				ctx.user.userId,
+			).catch((err: unknown) => {
+				console.error(
+					`[chargeEventRegistration] invoice email failed for invoice ${chargeResult.invoice.invoiceId}:`,
+					err,
+				);
+			});
+
+			return chargeResult;
 		}),
 
 	/**

@@ -27,6 +27,7 @@ import {
 	assertRegistrable,
 	createRegistrationTx,
 } from "~/server/utils/eventRegistration";
+import { sendRegistrationConfirmationEmail } from "~/server/utils/registrationEmail";
 import {
 	checkRecurringEventConflicts,
 	checkResourceConflicts,
@@ -2390,6 +2391,17 @@ export const calendarRouter = createTRPCRouter({
 				}),
 			);
 
+		// Fire-and-forget: confirm registration by email. Failure must not roll back.
+		void sendRegistrationConfirmationEmail(
+			ctx.db,
+			registration.registrationId,
+		).catch((err: unknown) => {
+			console.error(
+				`[registerForEvent] confirmation email failed for registration ${registration.registrationId}:`,
+				err,
+			);
+		});
+
 			return { registrationId: registration.registrationId };
 		}),
 
@@ -2438,6 +2450,17 @@ export const calendarRouter = createTRPCRouter({
 					changedByUserId: staffUser.userId,
 				}),
 			);
+
+		// Fire-and-forget: confirm registration by email. Failure must not roll back.
+		void sendRegistrationConfirmationEmail(
+			ctx.db,
+			registration.registrationId,
+		).catch((err: unknown) => {
+			console.error(
+				`[staffRegister] confirmation email failed for registration ${registration.registrationId}:`,
+				err,
+			);
+		});
 
 			return { registration };
 		}),
