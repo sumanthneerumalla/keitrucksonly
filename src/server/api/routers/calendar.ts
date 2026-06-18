@@ -2394,16 +2394,16 @@ export const calendarRouter = createTRPCRouter({
 				}),
 			);
 
-		// Fire-and-forget: confirm registration by email. Failure must not roll back.
-		void sendRegistrationConfirmationEmail(
-			ctx.db,
-			registration.registrationId,
-		).catch((err: unknown) => {
-			console.error(
-				`[registerForEvent] confirmation email failed for registration ${registration.registrationId}:`,
-				err,
-			);
-		});
+			// Fire-and-forget: confirm registration by email. Failure must not roll back.
+			void sendRegistrationConfirmationEmail(
+				ctx.db,
+				registration.registrationId,
+			).catch((err: unknown) => {
+				console.error(
+					`[registerForEvent] confirmation email failed for registration ${registration.registrationId}:`,
+					err,
+				);
+			});
 
 			return { registrationId: registration.registrationId };
 		}),
@@ -2454,16 +2454,16 @@ export const calendarRouter = createTRPCRouter({
 				}),
 			);
 
-		// Fire-and-forget: confirm registration by email. Failure must not roll back.
-		void sendRegistrationConfirmationEmail(
-			ctx.db,
-			registration.registrationId,
-		).catch((err: unknown) => {
-			console.error(
-				`[staffRegister] confirmation email failed for registration ${registration.registrationId}:`,
-				err,
-			);
-		});
+			// Fire-and-forget: confirm registration by email. Failure must not roll back.
+			void sendRegistrationConfirmationEmail(
+				ctx.db,
+				registration.registrationId,
+			).catch((err: unknown) => {
+				console.error(
+					`[staffRegister] confirmation email failed for registration ${registration.registrationId}:`,
+					err,
+				);
+			});
 
 			return { registration };
 		}),
@@ -2532,15 +2532,14 @@ export const calendarRouter = createTRPCRouter({
 			});
 
 			// Fire-and-forget: notify registrant of cancellation. Failure must not roll back.
-			void sendRegistrationCancellationEmail(
-				ctx.db,
-				registrationId,
-			).catch((err: unknown) => {
-				console.error(
-					`[cancelRegistration] cancellation email failed for registration ${registrationId}:`,
-					err,
-				);
-			});
+			void sendRegistrationCancellationEmail(ctx.db, registrationId).catch(
+				(err: unknown) => {
+					console.error(
+						`[cancelRegistration] cancellation email failed for registration ${registrationId}:`,
+						err,
+					);
+				},
+			);
 
 			return { success: true };
 		}),

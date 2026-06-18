@@ -20,6 +20,7 @@ import {
 	getFromAddress,
 	getResendClient,
 } from "~/server/services/email/resend";
+import { escapeHtml } from "~/server/utils/escapeHtml";
 
 export type SendRegistrationEmailResult =
 	| { kind: "sent"; sentTo: string }
@@ -92,10 +93,10 @@ export async function sendRegistrationConfirmationEmail(
 
 	const subject = `You're registered for ${event.title}`;
 	const bodyHtml = [
-		`<p>Hi ${recipientName},</p>`,
+		`<p>Hi ${escapeHtml(recipientName)},</p>`,
 		`<p>Your registration is confirmed for:</p>`,
-		`<p><strong>${event.title}</strong><br/>${dateStr}<br/>${startTimeStr} – ${endTimeStr}</p>`,
-		`<p>Thank you,<br/>${clubName}</p>`,
+		`<p><strong>${escapeHtml(event.title)}</strong><br/>${escapeHtml(dateStr)}<br/>${escapeHtml(startTimeStr)} – ${escapeHtml(endTimeStr)}</p>`,
+		`<p>Thank you,<br/>${escapeHtml(clubName)}</p>`,
 	].join("\n");
 	const bodyText = [
 		`Hi ${recipientName},`,
@@ -198,10 +199,10 @@ export async function sendRegistrationCancellationEmail(
 
 	const subject = `Your registration for ${event.title} has been cancelled`;
 	const bodyHtml = [
-		`<p>Hi ${recipientName},</p>`,
+		`<p>Hi ${escapeHtml(recipientName)},</p>`,
 		`<p>Your registration has been cancelled for:</p>`,
-		`<p><strong>${event.title}</strong><br/>${dateStr}<br/>${startTimeStr} – ${endTimeStr}</p>`,
-		`<p>If you have any questions, please contact ${clubName}.</p>`,
+		`<p><strong>${escapeHtml(event.title)}</strong><br/>${escapeHtml(dateStr)}<br/>${escapeHtml(startTimeStr)} – ${escapeHtml(endTimeStr)}</p>`,
+		`<p>If you have any questions, please contact ${escapeHtml(clubName)}.</p>`,
 	].join("\n");
 	const bodyText = [
 		`Hi ${recipientName},`,

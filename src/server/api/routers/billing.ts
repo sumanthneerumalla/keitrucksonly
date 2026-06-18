@@ -17,6 +17,7 @@ import {
 	computeViewerCapabilities,
 } from "~/server/services/invoiceRenderer/assemble";
 import { getOrRenderInvoicePdf } from "~/server/services/invoiceRenderer/getOrRender";
+import { escapeHtml } from "~/server/utils/escapeHtml";
 import { sendInvoiceEmailByInvoiceId } from "~/server/utils/invoiceEmail";
 import type { InvoiceView } from "~/server/services/invoiceRenderer/types";
 import {
@@ -2654,7 +2655,7 @@ export const billingRouter = createTRPCRouter({
 			const clubName = invoice.club.clubName;
 
 			const subject = `Invoice ${invoice.invoiceNumber} from ${clubName}`;
-			const bodyHtml = `<p>Hi ${recipientName},</p><p>Please find your invoice <strong>${invoice.invoiceNumber}</strong> attached.</p><p>Thank you,<br/>${clubName}</p>`;
+			const bodyHtml = `<p>Hi ${escapeHtml(recipientName)},</p><p>Please find your invoice <strong>${escapeHtml(invoice.invoiceNumber)}</strong> attached.</p><p>Thank you,<br/>${escapeHtml(clubName)}</p>`;
 			const bodyText = `Hi ${recipientName},\n\nPlease find your invoice ${invoice.invoiceNumber} attached.\n\nThank you,\n${clubName}`;
 
 			const { error } = await resend.emails.send({
