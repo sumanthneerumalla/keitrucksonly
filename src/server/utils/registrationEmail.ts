@@ -85,7 +85,8 @@ export async function sendRegistrationConfirmationEmail(
 
 	const dateStr = dayjs(displayStart).tz(tz).format("dddd, MMMM D, YYYY");
 	const startTimeStr = dayjs(displayStart).tz(tz).format("h:mm A");
-	const endTimeStr = dayjs(displayEnd).tz(tz).format("h:mm A z");
+	const endTimeStr = dayjs(displayEnd).tz(tz).format("h:mm A");
+	const tzLabel = tz === "UTC" ? "UTC" : tz.split("/").pop()?.replace(/_/g, " ") ?? tz;
 
 	const recipientName =
 		`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "there";
@@ -95,7 +96,7 @@ export async function sendRegistrationConfirmationEmail(
 	const bodyHtml = [
 		`<p>Hi ${escapeHtml(recipientName)},</p>`,
 		`<p>Your registration is confirmed for:</p>`,
-		`<p><strong>${escapeHtml(event.title)}</strong><br/>${escapeHtml(dateStr)}<br/>${escapeHtml(startTimeStr)} – ${escapeHtml(endTimeStr)}</p>`,
+		`<p><strong>${escapeHtml(event.title)}</strong><br/>${escapeHtml(dateStr)}<br/>${escapeHtml(startTimeStr)} – ${escapeHtml(endTimeStr)} (${escapeHtml(tzLabel)})</p>`,
 		`<p>Thank you,<br/>${escapeHtml(clubName)}</p>`,
 	].join("\n");
 	const bodyText = [
@@ -104,7 +105,7 @@ export async function sendRegistrationConfirmationEmail(
 		`Your registration is confirmed for:`,
 		`  ${event.title}`,
 		`  ${dateStr}`,
-		`  ${startTimeStr} – ${endTimeStr}`,
+		`  ${startTimeStr} – ${endTimeStr} (${tzLabel})`,
 		``,
 		`Thank you,`,
 		clubName,
@@ -191,7 +192,8 @@ export async function sendRegistrationCancellationEmail(
 
 	const dateStr = dayjs(displayStart).tz(tz).format("dddd, MMMM D, YYYY");
 	const startTimeStr = dayjs(displayStart).tz(tz).format("h:mm A");
-	const endTimeStr = dayjs(displayEnd).tz(tz).format("h:mm A z");
+	const endTimeStr = dayjs(displayEnd).tz(tz).format("h:mm A");
+	const tzLabel = tz === "UTC" ? "UTC" : tz.split("/").pop()?.replace(/_/g, " ") ?? tz;
 
 	const recipientName =
 		`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "there";
@@ -201,7 +203,7 @@ export async function sendRegistrationCancellationEmail(
 	const bodyHtml = [
 		`<p>Hi ${escapeHtml(recipientName)},</p>`,
 		`<p>Your registration has been cancelled for:</p>`,
-		`<p><strong>${escapeHtml(event.title)}</strong><br/>${escapeHtml(dateStr)}<br/>${escapeHtml(startTimeStr)} – ${escapeHtml(endTimeStr)}</p>`,
+		`<p><strong>${escapeHtml(event.title)}</strong><br/>${escapeHtml(dateStr)}<br/>${escapeHtml(startTimeStr)} – ${escapeHtml(endTimeStr)} (${escapeHtml(tzLabel)})</p>`,
 		`<p>If you have any questions, please contact ${escapeHtml(clubName)}.</p>`,
 	].join("\n");
 	const bodyText = [
@@ -210,7 +212,7 @@ export async function sendRegistrationCancellationEmail(
 		`Your registration has been cancelled for:`,
 		`  ${event.title}`,
 		`  ${dateStr}`,
-		`  ${startTimeStr} – ${endTimeStr}`,
+		`  ${startTimeStr} – ${endTimeStr} (${tzLabel})`,
 		``,
 		`If you have any questions, please contact ${clubName}.`,
 	].join("\n");
