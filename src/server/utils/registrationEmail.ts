@@ -17,7 +17,7 @@ import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import dayjs from "~/lib/dayjs-config";
 import {
-	getFromAddress,
+	getPlatformFromAddress,
 	getResendClient,
 } from "~/server/services/email/resend";
 import { escapeHtml } from "~/server/utils/escapeHtml";
@@ -92,7 +92,7 @@ export async function sendRegistrationConfirmationEmail(
 		`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "there";
 	const clubName = event.club.clubName;
 
-	const subject = `You're registered for ${event.title}`;
+	const subject = `[${clubName}] You're registered for ${event.title}`;
 	const bodyHtml = [
 		`<p>Hi ${escapeHtml(recipientName)},</p>`,
 		`<p>Your registration is confirmed for:</p>`,
@@ -112,7 +112,7 @@ export async function sendRegistrationConfirmationEmail(
 	].join("\n");
 
 	const resend = await getResendClient();
-	const from = await getFromAddress({ firstName: null, lastName: null });
+	const from = await getPlatformFromAddress();
 
 	const { error } = await resend.emails.send({
 		from,
@@ -199,7 +199,7 @@ export async function sendRegistrationCancellationEmail(
 		`${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "there";
 	const clubName = event.club.clubName;
 
-	const subject = `Your registration for ${event.title} has been cancelled`;
+	const subject = `[${clubName}] Your registration for ${event.title} has been cancelled`;
 	const bodyHtml = [
 		`<p>Hi ${escapeHtml(recipientName)},</p>`,
 		`<p>Your registration has been cancelled for:</p>`,
@@ -218,7 +218,7 @@ export async function sendRegistrationCancellationEmail(
 	].join("\n");
 
 	const resend = await getResendClient();
-	const from = await getFromAddress({ firstName: null, lastName: null });
+	const from = await getPlatformFromAddress();
 
 	const { error } = await resend.emails.send({
 		from,

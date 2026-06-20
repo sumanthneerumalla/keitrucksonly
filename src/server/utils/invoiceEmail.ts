@@ -17,6 +17,7 @@ import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import {
 	getFromAddress,
+	getPlatformFromAddress,
 	getResendClient,
 } from "~/server/services/email/resend";
 import { escapeHtml } from "~/server/utils/escapeHtml";
@@ -99,9 +100,9 @@ export async function sendInvoiceEmailByInvoiceId(
 				})
 			: null;
 
-	const from = await getFromAddress(
-		senderDisplay ?? { firstName: null, lastName: null },
-	);
+	const from = senderDisplay
+		? await getFromAddress(senderDisplay)
+		: await getPlatformFromAddress();
 
 	const recipientName =
 		`${recipient.firstName ?? ""} ${recipient.lastName ?? ""}`.trim() ||

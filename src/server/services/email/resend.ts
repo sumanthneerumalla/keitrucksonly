@@ -42,6 +42,11 @@ export function getDisplayName(user: {
 	return `${user.firstName ?? "Shuttle"} ${user.lastName ?? "Mentor"}`;
 }
 
+/** From-address for automated platform emails with no specific sender (e.g. transactional notifications). */
+export async function getPlatformFromAddress(): Promise<string> {
+	return getFromAddress({ firstName: null, lastName: null });
+}
+
 // ─── Retry (429-only, exponential backoff) ───────────────────────────────────
 
 const RETRY_DELAYS_MS = [1000, 2000, 4000];
