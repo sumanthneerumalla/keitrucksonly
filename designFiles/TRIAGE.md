@@ -1,8 +1,33 @@
 # ShuttleMentor — Launch Triage & Vulnerability Report
 
-> Updated: 2026-06-11 (conflict fix confirmed merged, Option B override investigated). Original: 2026-06-10. Owner context: first customer is a badminton club (Fung) moving off
-> Pike13. Primary revenue = drop-in packages, court rentals, training/classes. Not
+> **Last updated: 2026-06-22.** Owner context: first customer is a badminton club (Fung) moving
+> off Pike13. Primary revenue = drop-in packages, court rentals, training/classes. Not
 > membership-heavy for v1. Goal of this doc: fastest path to a live, paying club.
+
+---
+
+## What Got Done Since Last Update (2026-06-10 → 2026-06-22)
+
+The sprint was productive. Here's what landed, in rough order of impact:
+
+| Done | Feature | Commit(s) |
+|------|---------|-----------|
+| ✅ | **Club landing page — full Phase 16** (hero, events, about, OG images, JSON-LD SEO, short-URL calendar, club-chromed event pages, branding) | Phase 16 Steps 0–5 |
+| ✅ | **Onboarding carry-through** — Clerk strips query params on redirect; sessionStorage side-channel now carries `{club, facility, next}` through sign-in. `/join` is membership-first with auto-search. | feat(onboarding) |
+| ✅ | **Checkout sign-in gate** — auth-required checkouts (membership, rental) no longer dead-end at missing `/sign-in`. `CheckoutSignInGate` stashes intent and routes through `/join`. | fix(checkout) |
+| ✅ | **Barcode scanner** — document-level keydown listener so hardware scanners work regardless of focused element. No more "keep the search box focused" requirement for front desk. | feat(checkin) |
+| ✅ | **Email: invoice via email** — invoices can be sent directly to members via email | Invoice through mail |
+| ✅ | **Email: event registration confirmation** — confirmation email sent on event sign-up | event registration confirmation mail update |
+| ✅ | **Email: event cancellation** — cancellation email sent when staff or member cancels | event cancellation mailing update |
+| ✅ | **Phase 10c — Memberships: family/household + add-on fees** — `memberCapacity`, add-on fee menu, sell modal checkboxes, live total, coverage shown at check-in | feat(memberships) |
+| ✅ | **Phase 9c — Invoice notes** — `InvoiceNote` model, staff-attributed notes on all invoice surfaces + PDF, timeline audit entries | feat(invoice) |
+| ✅ | **Invoice PDF** — content-hash caching (never stale), invoice-number font render fix | refactor(invoice-pdf) |
+| ✅ | **Security: HSTS header** — `max-age=31536000; includeSubDomains` in Caddy config | Add HSTS header |
+| ✅ | **Security: CSP** — staged rollout (`report-only` → `enforce` → `off`), per-request nonce, Clerk/Stripe/YouTube allowlists, `CspReport` table + `/api/csp-report` collector | Add staged CSP |
+| ✅ | **Security: npm HIGH vulns resolved** — dompurify → 3.4.11, undici → 7.28.0, vite → 8.0.16 | This PR (triaged-items) |
+| ✅ | **Branding** — real FP favicon (SVG + PNG + apple-icon), `fp-logo.svg`, OG PNG fallbacks for social scrapers | feat(branding) |
+| ✅ | **UI staleness fix** | UI staleness fix |
+| ✅ | **Mail subject update** — club name added to email subjects (PR #55, open) | mail subject update |
 
 ---
 
@@ -19,67 +44,73 @@ first regardless of build status because a broken money pipe = no launch.
 
 | # | Item | Status | Why it matters |
 |---|------|--------|----------------|
-| 1 | **Stripe Connect end-to-end smoke test** | Built; untested in staging | Zero revenue if payments can't be taken. Full flow: connect account → checkout session → webhook → credit issued. Also confirm `ClubStripeAccount` row writes correctly on return from Stripe. |
-| 2 | **Admin check-in + QR self-check-in verification** | Built; needs browser pass | Staff must be able to find a member, mark attended, and see their package balance update. QR scan → `selfCheckin` → deduct credit. |
-| 3 | **Package sell → credit consume pipeline** | Built; needs e2e test | Create plan → sell to member → check in → deduct credit → balance reflected on next checkin search. This is the core drop-in workflow the club uses daily. |
-| 4 | **Court Rentals booking flow** | Built; needs smoke test | Create rental window → slot visible in availability grid → member books → appears on calendar. |
-| 5 | **Onboarding gate hardening** | `/join` page done; gender set-once done; **drop-in participation gate NOT implemented** | A new user must be onboarded before they can join a Rotation Play queue. Not blocking for initial launch if Rotation Play is demoed to staff-only, but gate must land before member self-serve. |
+| 1 | **Stripe Connect end-to-end smoke test** | Built; **never QA'd in staging** | Zero revenue if payments can't be taken. Full flow: connect account → checkout session → webhook → credit issued. Confirm `ClubStripeAccount` row writes correctly. Verify orphan queue stays empty. |
+| 2 | **Package sell → credit consume → check-in pipeline** | Built; needs e2e browser pass | Create plan → sell to member → check in → deduct credit → balance reflected on next check-in search. This is the core daily revenue loop. |
+| 3 | **Admin check-in + QR self-check-in** | Built; needs browser pass | Staff finds member, marks attended, package balance updates. QR scan → `selfCheckin` → deduct credit. The front-desk workflow. |
+| 4 | **Court Rentals booking flow** | Built; needs smoke test | Create rental window → slot visible in availability grid → member books → appears on calendar. Club's #2 revenue source. |
+| 5 | **Onboarding gate — drop-in queue** | `/join` page done; gender set-once done; **drop-in queue gate NOT implemented** | New users can skip profile and end up in a broken state during Rotation Play. Not blocking if demo is staff-only, but must land before member self-serve. |
 
 ---
 
-### 🟡 P1 — Week-1 after soft launch
+### 🟡 P1 — High value, ship in Week 1–2 after soft launch
 
 | # | Item | Status | Why it matters |
 |---|------|--------|----------------|
-| 6 | **Drop-in Rotation Play browser verification pass** | Router + UI fully built (DI-2/DI-4); HANDOFF explicitly calls out "browser-verification pass" as remaining | This is the biggest differentiator vs Pike13. Staff demo will be the make-or-break moment. Verify MATCH mode, kiosk QR, party join, score report/confirm, dispute resolution, add/remove court mid-session. |
-| 7 | **Memberships smoke test (Phase 10a)** | Types, plans, preferences, sell modal, member card all built (1035-line router) | Even though Fung isn't membership-heavy, being able to show it works is a sellable feature. Sell → view on member card → freeze/unfreeze → cancel. |
-| 8 | **Email notifications (transactional)** | Resend integration + send log built; confirmation emails may not be wired to all triggers | Clubs expect automated emails on package purchase, registration, check-in. Check `emailSend.ts` trigger coverage and fill any gaps. |
-| 9 | **Member profile fields (MemberClubProfile)** | Schema + migration done; `ProfileFieldsCard` exists | Staff needs phone, emergency contact visible on the client detail page. Verify all `MemberClubProfile` fields render and are editable by facility staff. |
+| 6 | **Memberships QA (Phase 10a/10b/10c)** | All built (1035-line router, family/household, add-on fees, registration fee on sale). **Needs QA pass.** | Biggest demoable chunk. Fung isn't membership-heavy but being able to show create plan → sell → view on member card → freeze/cancel makes a strong impression. This outranks Drop-in demo because it's a larger net-new feature surface. |
+| 7 | **Drop-in Rotation Play browser verification pass** | Router + UI fully built (DI-2/DI-4). HANDOFF calls out "browser-verification pass" as the remaining step. | Biggest differentiator vs Pike13. Verify MATCH mode, kiosk QR, party join, score report/confirm, dispute resolution, add/remove court mid-session. |
+| 8 | **Club landing page live with real club data** | Phase 16 complete at `/[shortName]`. Needs real content seeded. | This is the member-facing front door. Load Fung's branding, real events, address. Share the URL. |
+| 9 | **Transactional email coverage audit** | Registration + cancellation + invoice emails shipped. Need to verify package-purchase email and check-in email are wired. | Clubs expect automated emails for every money event. |
 
 ---
 
-### 🟢 P2 — First-month polish
+### 🟢 P2 — Ship before month-end
 
 | # | Item | Status | Why it matters |
 |---|------|--------|----------------|
-| 10 | **Invoices / billing history** | `InvoiceListClient` + router built | Club needs to look up a member's payment history. Smoke test: sell a package, view the resulting invoice. |
-| 11 | **Basic revenue report (packages sold)** | Not built (Phase 14 deferred) | Even a simple "packages sold this week/month" table helps the club close their books. A small scoped query on `MemberPackage` + `Invoice` would suffice for v1. |
-| 12 | **Email groups / campaigns** | `EmailGroupsClient`, compose flow, Resend webhook built | Useful for announcements to members. Verify group create → add members → send. |
-| 13 | ~~Multi-court conflict detection fix~~ | ✅ **DONE** — fixed in commit `9bf086f` (this branch) | `checkResourceConflicts` now matches courts via `OR [resourceId, resourceIds.has]`; `multi-court-conflict-TODO.md` updated. |
+| 10 | **Invoices / billing history QA** | `InvoiceListClient` + router + PDF all built (Phase 9a/9b/9c). **Needs smoke test.** | Sell package → view invoice → record payment → download PDF. Staff uses this daily. |
+| 11 | **MemberClubProfile fields** | Schema done; `ProfileFieldsCard` exists. | Staff needs phone, emergency contact on the client detail page. Verify all fields render and are editable. |
+| 12 | **Basic revenue report** | Phase 14 not built. | Even a simple "packages sold this week/month" table on `/admin` helps close the books. Small scoped query on `MemberPackage + Invoice`. |
+| 13 | **Email groups / campaigns** | Router + compose flow + Resend webhook built. Needs browser pass. | Announcements to members. Group create → add members → compose → send. |
+| 14 | **Capacity enforcement on checkout** | Needs verification. | Confirm checkout is blocked once `maxParticipants` is reached for `BOOKABLE`/`COACHING_SLOT`. |
 
 ---
 
-### ⚪ P3 — Post-launch backlog (do not block launch on these)
+### ⚪ P3 — Post-launch backlog
 
 | # | Item | Notes |
 |---|------|-------|
-| 14 | GBR stitch (DI-5) | Blocked on owner setting up GBR service account + service user |
-| 15 | Drop-in Track C lifecycle (headless cron, G7 one-session-at-a-time enforcement) | Currently unenforced; staff can work around it |
-| 16 | Recurring event registration migration (R1/R2) | Guarded with TODOs; only needed when split-scope recurring events appear in production |
-| 17 | Polar payments (P1–P4) | Stripe Connect is the chosen payment path; Polar is deferred |
+| 15 | GBR stitch (DI-5) | Blocked on setting up GBR service account + service user |
+| 16 | Drop-in Track C lifecycle (headless cron, G7 one-session-at-a-time enforcement) | Currently unenforced; staff can work around it |
+| 17 | Recurring event registration migration (R1/R2) | Guarded with TODOs; only needed when split-scope recurring events appear |
 | 18 | Waivers / consent system (Model 4) | Explicitly out of scope for v1 |
 | 19 | Full reporting suite (Phase 14) | A/R, revenue by category, package sales reports |
-| 20 | M3 Admin invite-member flow | Blocked on M1 `UserClub` deploy + Clerk backend API |
-| 21 | Algorithmic pairing modes (Americano/Mexicano/Ladder) | Post-v1; self-formed pairs is the v1 default |
+| 20 | M3 Admin invite-member flow | Blocked on `UserClub` deploy + Clerk backend API |
+| 21 | CI/CD pipeline, monitoring (Sentry/Datadog) | Post-launch infra |
+| 22 | Algorithmic pairing modes (Americano/Mexicano/Ladder) | Post-v1; self-formed pairs is the v1 default |
 
 ---
 
 ## NPM Vulnerability Report
 
-Run date: 2026-06-10. Command: `npm audit`.
+### Current state — 2026-06-22 (after `npm audit fix` in this PR)
 
-### Summary
+| Severity | Count | Notes |
+|----------|-------|-------|
+| Critical | 0 | — |
+| **High** | **0** ✅ | Fixed in this PR (undici 7.28.0, vite 8.0.16) |
+| Moderate | 3 | All postcss — unfixable until Next.js upgrade (see below) |
+| Low | 0 | — |
 
-| Severity | Count |
-|----------|-------|
-| Critical | 0 |
-| High     | 0 |
-| **Moderate** | **3** |
-| Low      | 0 |
+### Vulnerability history
 
-All 3 moderate vulnerabilities trace to a single root cause.
+| Date | Action | Result |
+|------|--------|--------|
+| 2026-06-10 | Original audit (TRIAGE.md) | 0 High, 3 Moderate (postcss only) |
+| 2026-06-17–18 | New HIGH vulns appeared: vite 7.0–7.3.3, undici 7.0–7.27.2, dompurify ≤3.4.10 | 2 High, 4 Moderate |
+| 2026-06-18 | PR #54 "critical and high issue fix" merged — fixed something but **lockfile still had vulnerable versions** | 2 High, 4 Moderate remained |
+| 2026-06-22 | **This PR:** `npm audit fix` → dompurify 3.4.11, undici 7.28.0, vite 8.0.16 | **0 High, 3 Moderate** ✅ |
 
-### Root cause
+### The remaining 3 moderate — postcss
 
 ```
 postcss < 8.5.10  →  next (15.5.x bundles it)  →  @clerk/nextjs (peer dep on next)
@@ -87,86 +118,47 @@ postcss < 8.5.10  →  next (15.5.x bundles it)  →  @clerk/nextjs (peer dep on
 
 **CVE:** [GHSA-qx2v-qp2m-jg93](https://github.com/advisories/GHSA-qx2v-qp2m-jg93)
 **Title:** PostCSS XSS via Unescaped `</style>` in CSS Stringify Output
-**CVSS score:** 6.1 (Moderate). Requires a maliciously crafted CSS file to be processed by
-PostCSS's stringify step in order to inject a `</style>` tag into the output HTML.
+**CVSS:** 6.1 (Moderate). Requires attacker-controlled CSS at **build time** — not at runtime.
 
-**Attack surface in this app:** PostCSS runs at **build time** (CSS compilation), not at runtime
-in response to user requests. The XSS vector requires an attacker to control a CSS source file
-that is processed during the build. Since no user-uploaded CSS is processed at build time in
-this codebase, the practical exploitability is **very low** in the current setup.
+**Attack surface:** PostCSS runs during CSS compilation, not in response to user requests. No
+user-uploaded CSS is processed at build time. Practical exploitability is **very low**.
 
-**Why `npm audit --fix` can't auto-fix it:** Next.js 15.x pins its own internal copy of
-PostCSS. The fix requires either (a) Next.js to release a patch that upgrades its bundled
-PostCSS, or (b) a package-level override.
+### Options for the remaining postcss moderate
 
----
-
-### Options
-
-#### Option A — Upgrade Next.js to v16 (recommended when ready)
+#### Option A — Upgrade to Next.js 16 (recommended when ready)
 
 ```bash
 npm install next@latest
 ```
 
-Next.js 16.2.9 is already available (current: `^15.5.15`). This is a **major version bump**
-and requires a full compatibility pass (App Router changes, middleware API, etc.) before
-deploying to production. The PostCSS vulnerability will almost certainly be resolved inside
-Next.js 16's bundled version.
+Next.js 16 almost certainly ships with postcss ≥ 8.5.10. This is a **major version** and
+requires a full compatibility pass (App Router, middleware API) before shipping to production.
 
-**Effort:** High (regression testing required). **Risk if deferred:** Low (build-time only).
+**Effort:** High. **Risk if deferred:** Low (build-time only).
 
-#### Option B — Force PostCSS version override ⚠️ Does NOT work with current setup
+#### Option B — Force override ⚠️ Does NOT work
 
-> **Investigated 2026-06-11:** Both global (`"overrides": { "postcss": ">=8.5.10" }`) and
-> scoped (`"overrides": { "next": { "postcss": ">=8.5.10" } }`) override forms were tested
-> against npm 10.7.0 + Next.js 15.5.15. **Neither removed the nested
-> `node_modules/next/node_modules/postcss@8.4.31`.** Next.js pins postcss at exactly
-> `8.4.31` in its own `package.json`; npm overrides cannot override exact-version pinned
-> nested deps in npm 10.x. This option is effectively a no-op until Next.js itself
-> releases a version that drops the pin.
+> **Investigated 2026-06-11:** Both global and scoped `"overrides": { "postcss": ">=8.5.10" }`
+> were tested against npm 10.x + Next.js 15.5.x. Neither removed
+> `node_modules/next/node_modules/postcss@8.4.31` — Next.js pins it exactly and npm 10.x
+> cannot override exact-pinned nested deps. Skip this option.
 
-**Effort:** Low. **Outcome:** No change; skip this option for now.
+#### Option C — Accept and document (current recommendation)
 
-#### Option C — Accept and document (no-action for now)
+Given build-time-only attack surface, CVSS 6.1, and no working fix path for Next.js 15.x,
+accept the risk and re-evaluate when upgrading to Next.js 16.
 
-Given that:
-- The vulnerability is build-time only
-- No user CSS is processed at build time
-- The CVSS score is 6.1 (Moderate, not High/Critical)
-- A fix requires either a major Next.js upgrade or a risky override
-
-Accept the risk with a documented review date (e.g., re-evaluate when upgrading Next.js or
-if the attack surface changes). Add a comment in `package.json` noting the known advisory.
-
-**Effort:** Zero. **Risk:** Acceptable for now; re-evaluate at next Next.js upgrade.
-
----
-
-### Recommendation
-
-**Short term:** Go with **Option C** (accept + document) for the launch sprint — it's a
-build-time-only vulnerability with no user-controlled CSS input, and it should not block
-go-live for a club management SaaS. Track it on the backlog.
-
-**Medium term:** Skip Option B (override) — it doesn't work with npm 10.x + Next.js 15.x
-(tested 2026-06-11). The only real fix is upgrading to Next.js 16 (Option A) when the team
-is ready for a full regression pass.
-
-**Never block launch on this.** The 3 moderate vulns are all the same postcss issue; there
-are 0 high and 0 critical vulnerabilities.
+**This should never block launch.** Re-evaluate at next Next.js major upgrade.
 
 ---
 
 ## Open Technical Debt (carry into every sprint)
 
-These are pre-existing items from `designFiles/nextSteps.md` + HANDOFF that aren't P0 but
-will accumulate interest if left too long:
-
-| Item | File | Notes |
-|------|------|-------|
-| ~~`multi-court-conflict-TODO.md` gap~~ | ✅ Fixed in `9bf086f` | `OR [resourceId, resourceIds.has]` now in both query branches |
-| Gender required drop-in gate | `src/server/services/dropIn/` | G7 unenforced; `joinQueue` has no onboarding check |
-| `getCoachDashboardMetrics` cleanup | `src/server/api/routers/user.ts` | Still flagged in `nextSteps.md` |
-| Video collection DB queries in page component | `src/app/(app)/video-collections/` | Should use paginated tRPC endpoints |
-| `noLabelWithoutControl` a11y warnings | `src/app/(app)/profile/page.tsx`, `ClientsList.tsx` | Pre-existing; do a broader a11y pass |
+| Item | Notes |
+|------|-------|
+| Gender required drop-in gate | G7 unenforced; `joinQueue` has no onboarding check |
+| `getCoachDashboardMetrics` cleanup | Still flagged in `nextSteps.md` |
+| Video collection DB queries in page component | Should use paginated tRPC endpoints |
+| `noLabelWithoutControl` a11y warnings | Pre-existing in profile + ClientsList; do a broader a11y pass |
+| Coach filter UI | `CoachFilters` component not built; filtering is API-only |
+| Multi-court conflict detection | ✅ Fixed (commit `9bf086f`) — `OR [resourceId, resourceIds.has]` in both query branches |
