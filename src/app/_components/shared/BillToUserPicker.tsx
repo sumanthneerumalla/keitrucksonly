@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronsUpDown } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useDebouncedValue } from "~/app/_components/hooks/use-debounced-value";
 import {
 	Command,
@@ -74,21 +74,11 @@ export default function BillToUserPicker({
 	const [query, setQuery] = useState<string>("");
 	const debouncedQuery = useDebouncedValue(query, 200);
 	const [showDropdown, setShowDropdown] = useState<boolean>(false);
-	const wrapperRef = useRef<HTMLDivElement>(null);
-
-	// Close dropdown on outside click
-	useEffect(() => {
-		function handleClickOutside(e: MouseEvent) {
-			if (
-				wrapperRef.current &&
-				!wrapperRef.current.contains(e.target as Node)
-			) {
-				setShowDropdown(false);
-			}
-		}
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
+	// NOTE: no custom outside-click handler — Radix Popover dismisses on outside
+	// click/Escape itself. A manual document mousedown listener would fire before
+	// cmdk's onSelect and, because PopoverContent is portaled (outside this
+	// subtree), would treat clicking a result as an "outside click" — closing the
+	// dropdown before the selection registers.
 
 	const trimmedQuery = query.trim();
 	const trimmedDebouncedQuery = debouncedQuery.trim();
@@ -119,7 +109,7 @@ export default function BillToUserPicker({
 		: "Self-pay";
 
 	return (
-		<div ref={wrapperRef} className={className}>
+		<div className={className}>
 			<label
 				htmlFor={pickerId}
 				className="font-medium text-[var(--foreground)] text-sm"
