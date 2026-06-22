@@ -151,21 +151,39 @@ export default function PrivacyPolicyPage() {
 				completely secure, and we cannot guarantee absolute security.
 			</p>
 
-			<h2 className="mt-8 mb-2 font-semibold text-xl">7. Children’s Privacy</h2>
+			<h2
+				id="cookies"
+				className="mt-8 mb-2 scroll-mt-24 font-semibold text-xl"
+			>
+				7. Cookies and Similar Technologies
+			</h2>
+			<p className="mb-4 leading-relaxed">
+				We use only strictly necessary cookies to operate the Service. These
+				include session cookies set by our authentication provider (Clerk) to
+				keep you signed in, payment-session cookies set by our payment processor
+				(Stripe) during checkout, and a first-party preference cookie that
+				remembers your sidebar layout. We do not use analytics, advertising, or
+				cross-site tracking cookies, so no cookie-consent banner is required.
+				Cookies set by Clerk and Stripe are governed by their own privacy
+				policies. You can block or delete cookies in your browser settings, but
+				doing so may prevent you from signing in or completing payments.
+			</p>
+
+			<h2 className="mt-8 mb-2 font-semibold text-xl">8. Children’s Privacy</h2>
 			<p className="mb-4 leading-relaxed">
 				The Service is not directed to children under 13, and we do not
 				knowingly collect their information.
 			</p>
 
 			<h2 className="mt-8 mb-2 font-semibold text-xl">
-				8. Changes to This Policy
+				9. Changes to This Policy
 			</h2>
 			<p className="mb-4 leading-relaxed">
 				We may update this Privacy Policy from time to time. Material changes
 				will be reflected by updating the effective date above.
 			</p>
 
-			<h2 className="mt-8 mb-2 font-semibold text-xl">9. Contact Us</h2>
+			<h2 className="mt-8 mb-2 font-semibold text-xl">10. Contact Us</h2>
 			<p className="mb-4 leading-relaxed">
 				Beacon LLC
 				<br />

@@ -78,12 +78,12 @@ First customer: badminton club (Fung), currently on Pike13. Primary revenue: dro
 
 **Design doc:** `roadmap/phase13-communications.md`
 
-### 7. Documents & Waivers ← NOT SCOPED
+### 7. Documents & Waivers ← SCOPED (Phase 17)
 - Admin-created document/waiver library
 - Link waivers to specific packages
 - Client signature/acceptance tracking
 
-**Design doc:** TBD
+**Design doc:** `roadmap/phase17-waivers.md`
 
 ### 8. Reports ← POST-MVP
 - Accounts receivable

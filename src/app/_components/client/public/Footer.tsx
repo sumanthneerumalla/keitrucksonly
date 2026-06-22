@@ -31,8 +31,9 @@ const resourceLinks = [
 
 const legalLinks = [
 	{ href: "/terms", label: "Terms" },
+	{ href: "/acceptable-use", label: "Acceptable Use" },
 	{ href: "/privacy", label: "Privacy" },
-	{ href: "/cookies", label: "Cookies" },
+	{ href: "/privacy#cookies", label: "Cookies" },
 ];
 
 function ColumnHeading({ children }: { children: React.ReactNode }) {
