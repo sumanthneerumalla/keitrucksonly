@@ -55,7 +55,7 @@ export async function sendRegistrationConfirmationEmail(
 					start: true,
 					end: true,
 					club: { select: { clubName: true } },
-					facility: { select: { timezone: true } },
+					facility: { select: { timezone: true, email: true } },
 				},
 			},
 		},
@@ -117,6 +117,7 @@ export async function sendRegistrationConfirmationEmail(
 	const { error } = await resend.emails.send({
 		from,
 		to: [registration.user.email],
+		...(event.facility?.email ? { replyTo: event.facility.email } : {}),
 		subject,
 		html: bodyHtml,
 		text: bodyText,
@@ -163,7 +164,7 @@ export async function sendRegistrationCancellationEmail(
 					start: true,
 					end: true,
 					club: { select: { clubName: true } },
-					facility: { select: { timezone: true } },
+					facility: { select: { timezone: true, email: true } },
 				},
 			},
 		},
@@ -223,6 +224,7 @@ export async function sendRegistrationCancellationEmail(
 	const { error } = await resend.emails.send({
 		from,
 		to: [registration.user.email],
+		...(event.facility?.email ? { replyTo: event.facility.email } : {}),
 		subject,
 		html: bodyHtml,
 		text: bodyText,
