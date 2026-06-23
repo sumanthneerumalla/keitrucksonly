@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Cron-driven dev deploy poller. Install via crontab:
 #   * * * * * /home/<user>/Desktop/projects/shuttleMentor/scripts/poll-dev-redeploy.sh
-# Polls origin/dev once per minute; on advance, hard-resets local dev,
-# redeploys the dev compose stack detached. State (lock, log, last-
+# Polls origin/dev once per minute; on advance, hard-resets the clone and
+# redeploys the HOSTED-DEV stack detached (prebuilt: runner image + next start
+# + Aikido Zen, via `docker:hosted-dev:*` — NOT the local HMR `next dev`).
+# State (lock, log, last-
 # deployed sha) lives in ~/.shuttlementor-dev-poll/ so `git reset --hard`
 # cannot wipe it. Container logs are snapshotted to <repo>/logs/ before
 # each redeploy (see scripts/snapshot-logs.sh); old snapshots are
@@ -64,10 +66,10 @@ export BUILD_TIMESTAMP="$(date -Iseconds)"
 
 # Phased redeploy. Health probe runs between `up` and `cleanup` so prune
 # time doesn't inflate the "site live" measurement. Phases:
-#   - docker:dev:build           — compose build
-#   - docker:dev:redeploy:up     — snapshot-logs → stop → up -d
-#   - (curl loop)                — wait for /api/health 200 via Caddy
-#   - docker:dev:redeploy:cleanup — image/container/builder/volume prunes
+#   - docker:hosted-dev:build           — compose build (runner image)
+#   - docker:hosted-dev:redeploy:up     — snapshot-logs → stop → up -d
+#   - (curl loop)                       — wait for /api/health 200 via Caddy
+#   - docker:hosted-dev:redeploy:cleanup — image/container/builder/volume prunes
 #
 # Disk hygiene cadence (same intent, now distributed across the sub-scripts):
 #   - snapshot-logs:dev: gzip current container logs to <repo>/logs/ before
@@ -81,12 +83,12 @@ export BUILD_TIMESTAMP="$(date -Iseconds)"
 T_TOTAL_START=$SECONDS
 
 T0=$SECONDS
-npm run docker:dev:build >> "$LOG_FILE" 2>&1 \
+npm run docker:hosted-dev:build >> "$LOG_FILE" 2>&1 \
   || { log "build failed @ ${REMOTE:0:7}; will retry next tick"; exit 1; }
 T_BUILD=$((SECONDS - T0))
 
 T0=$SECONDS
-npm run docker:dev:redeploy:up >> "$LOG_FILE" 2>&1 \
+npm run docker:hosted-dev:redeploy:up >> "$LOG_FILE" 2>&1 \
   || { log "up failed @ ${REMOTE:0:7}; will retry next tick"; exit 1; }
 T_DEPLOY=$((SECONDS - T0))
 
@@ -103,7 +105,7 @@ done
 T_HEALTH=$((SECONDS - T0))
 
 # Cleanup runs untimed — doesn't affect user-visible deploy duration.
-npm run docker:dev:redeploy:cleanup >> "$LOG_FILE" 2>&1 || true
+npm run docker:hosted-dev:redeploy:cleanup >> "$LOG_FILE" 2>&1 || true
 
 T_TOTAL=$((SECONDS - T_TOTAL_START))
 

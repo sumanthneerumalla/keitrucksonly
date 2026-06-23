@@ -1,0 +1,29 @@
+# ============================================================================
+# HOSTED DEV environment (dev.facilitypresence.com). Prebuilt + Aikido Zen.
+#   Combine: docker-compose.yml + docker-compose.deployed.yml + docker-compose.hosted-dev.yml
+#   Wrapped by: npm run docker:hosted-dev:*
+# Same setup as hosted-prod (see deployed.yml); differs only in the items below.
+# Shares the dev namespace with local — run only one "dev" at a time.
+# ============================================================================
+name: shuttlementor-dev
+
+services:
+  app:
+    container_name: shuttlementor-app-dev
+    image: shuttlementor:hosted-dev
+    environment:
+      - PORT=3000
+    ports:
+      - "3000:3000" # app (Caddy -> dev.facilitypresence.com)
+      - "5555:5555" # prisma studio
+  db:
+    container_name: shuttlementor-db-dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+
+volumes:
+  postgres_data_dev:
+    name: shuttlementor-dev-postgres-data
+    external: true

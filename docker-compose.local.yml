@@ -1,0 +1,39 @@
+# ============================================================================
+# LOCAL development (your laptop). HMR via `next dev` + the base source mounts.
+#   Combine: docker-compose.yml + docker-compose.local.yml
+#   Wrapped by: npm run docker:dev:*    (e.g. docker:dev:redeploy)
+# NOT used on the server. No Aikido Zen here (that's deployed.yml).
+# Shares the dev namespace (project/ports/DB) with hosted-dev, so run only one
+# "dev" at a time.
+# ============================================================================
+name: shuttlementor-dev
+
+services:
+  app:
+    container_name: shuttlementor-app-dev
+    image: shuttlementor:local
+    build:
+      target: development
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+    # Source mounts are inherited from base. This adds the entrypoint so it can
+    # be live-edited during local dev.
+    volumes:
+      - ./docker-entrypoint.sh:/app/docker-entrypoint.sh
+    command: ["npm", "run", "dev"] # Turbopack HMR
+    ports:
+      - "3000:3000" # app
+      - "9229:9229" # node debug
+      - "5555:5555" # prisma studio
+  db:
+    container_name: shuttlementor-db-dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+
+volumes:
+  postgres_data_dev:
+    name: shuttlementor-dev-postgres-data
+    external: true

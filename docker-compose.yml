@@ -1,32 +1,54 @@
-# Define networks for proper isolation
+# ============================================================================
+# BASE — shared by ALL tiers. Holds ONLY what is identical everywhere.
+#
+# How the tiers are composed (npm scripts wrap these -f chains for you):
+#   • Local dev (HMR):  docker-compose.yml + docker-compose.local.yml
+#   • Hosted dev:       docker-compose.yml + docker-compose.deployed.yml + docker-compose.hosted-dev.yml
+#   • Hosted prod:      docker-compose.yml + docker-compose.deployed.yml + docker-compose.hosted-prod.yml
+#
+# Tier-specific things (build target, NODE_ENV, PORT, run command, ports,
+# container names, DB volume, resource limits, image tag) live in those files.
+# ============================================================================
+
 networks:
   frontend:
     driver: bridge
   backend:
     driver: bridge
-    internal: true  # This network is not accessible from outside
+    internal: true # DB-only network, not reachable from outside the project
 
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-      target: ${NODE_ENV:-development}  # Use development target by default
-    image: shuttlementor:${TAG:-latest}
-    restart: unless-stopped
-    # Ports defined in environment-specific compose files
+      # `target` is set per tier: development (local) | runner (hosted-dev/prod)
+    restart: unless-stopped # hosted tiers override to `always`
     environment:
-      - NODE_ENV=${NODE_ENV:-development}
       - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-password}@db:5432/${DB_NAME:-shuttlementor}
       - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
       - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
-      - BUILD_SHA=${BUILD_SHA:-unknown}
-      - BUILD_TIMESTAMP=${BUILD_TIMESTAMP:-unknown}
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-}
       - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-}
+      - BUILD_SHA=${BUILD_SHA:-unknown}
+      - BUILD_TIMESTAMP=${BUILD_TIMESTAMP:-unknown}
+      # NODE_ENV and PORT are set per tier.
+    # ┌─ SOURCE MOUNTS — READ THIS ────────────────────────────────────────────┐
+    # │ Defined here in base, so Compose MERGES them into EVERY tier: local,    │
+    # │ hosted-dev, AND hosted-prod. (Compose merges volume lists across -f     │
+    # │ files; it does NOT replace them — a `volumes: []` override cannot clear  │
+    # │ these.) This is intentional and is how all tiers run today:             │
+    # │   • local    → powers `next dev` hot-reload                             │
+    # │   • hosted-* → `next start` serves the built .next, but reads           │
+    # │                next.config.js + src/env.js from these mounts at boot.   │
+    # │                (The runner image ALSO bakes src/env.js in as a boot     │
+    # │                fallback, so it can start even without the mount.)       │
+    # │ ⇒ Net effect: hosted-dev/prod run the *clone's* working-tree source.    │
+    # │   Keep each server clone clean and on its intended branch.              │
+    # │ For a local-only mount, add it in docker-compose.local.yml instead.     │
+    # └─────────────────────────────────────────────────────────────────────────┘
     volumes:
-      # For development: mount source code for hot reloading
       - ./src:/app/src
       - ./public:/app/public
       - ./prisma:/app/prisma
@@ -34,12 +56,7 @@ services:
       - ./tailwind.config.js:/app/tailwind.config.js
       - ./postcss.config.js:/app/postcss.config.js
       - ./tsconfig.json:/app/tsconfig.json
-      # NOTE: node_modules is NOT mounted as a volume. The dev setup bind-mounts
-      # only specific subdirs (not the project root), so the host's node_modules
-      # can never shadow the container's — making the old anonymous-volume guard
-      # unnecessary. node_modules lives in the image layer (built by `deps`),
-      # which avoids the slow per-`up` volume reseed and volume accumulation.
-      # NOTE: We do not mount /app/.next as a volume to avoid permission issues
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"] # prisma generate -> migrate -> exec command
     depends_on:
       db:
         condition: service_healthy
@@ -47,12 +64,13 @@ services:
       - frontend
       - backend
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      # PORT is set per tier (3000 local/hosted-dev, 3001 hosted-prod). The $$
+      # makes the container shell expand it at runtime, not Compose at parse time.
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:$${PORT:-3000}/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    command: npm run dev  # Use dev command for hot reloading in development
 
   db:
     image: postgres:15-alpine
@@ -61,8 +79,6 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${DB_PASSWORD:-password}
       - POSTGRES_DB=${DB_NAME:-shuttlementor}
-    # Ports defined in environment-specific compose files
-    volumes: []  # Volumes defined in environment-specific compose files
     networks:
       - backend
     healthcheck:
@@ -71,5 +87,4 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-
-# Volumes defined in environment-specific compose files
+    # container_name, ports, and the data volume are set per tier.

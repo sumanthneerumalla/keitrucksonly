@@ -94,7 +94,7 @@ DATABASE_URL="postgresql://postgres:password@localhost:5432/shuttlementor"
 1. Make sure Docker is running
 2. Start the application:
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
    ```
 3. Wait until you see: `Ready - started server on 0.0.0.0:3000`
 
@@ -129,7 +129,7 @@ For local development using Docker (including app + PostgreSQL containers, migra
 1. Open http://localhost:3000
 2. Sign in and use your Gmail account
 3. Set up admin access:
-   - Run `npx prisma studio` (Node.js) or `docker compose exec app npx prisma studio` (Docker)
+   - Run `npx prisma studio` (Node.js) or `npm run docker:db:studio:dev` (Docker)
    - Open http://localhost:5555
    - Find your user record and change the `role` (user type) field to `ADMIN`
    - Refresh the main application to see admin features
@@ -140,7 +140,7 @@ For local development using Docker (including app + PostgreSQL containers, migra
 
 Press `Ctrl+C` in the terminal, then run:
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+docker compose -f docker-compose.yml -f docker-compose.local.yml down
 ```
 
 ### If using Node.js:

@@ -1,0 +1,42 @@
+# ============================================================================
+# DEPLOYED — the SHARED prebuilt run mode for hosted-dev AND hosted-prod.
+#   Combine: docker-compose.yml + docker-compose.deployed.yml + (hosted-dev | hosted-prod)
+#
+# Prebuilt, self-contained `runner` image + `next start` + Aikido Zen firewall.
+# The dev/prod commonality lives here ONCE, so the two hosted tiers can't drift.
+# Per-tier files add only port / DB / names / limits.
+# ============================================================================
+services:
+  app:
+    build:
+      target: runner # self-contained image (bakes in src/env.js as a boot fallback)
+      args:
+        # NEXT_PUBLIC_* are inlined into the client bundle at BUILD time, so the
+        # real publishable key MUST be present when building the runner image
+        # (unlike local `next dev`, which reads it at runtime). CLERK_SECRET_KEY /
+        # DATABASE_URL are build-time only (env validation + `next build`); the
+        # runtime values come from the container `environment` above. Values
+        # resolve from the clone's .env (Compose auto-loads) or, for prod, the
+        # .env.production the docker:prod scripts export. Distinct per-tier image
+        # tags keep dev/prod keys from colliding.
+        - NODE_ENV=production
+        - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+        - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
+        - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:password@localhost:5432/shuttlementor}
+    environment:
+      - NODE_ENV=production # production build served by `next start`
+      # Aikido Zen firewall — monitoring-only while AIKIDO_BLOCK=false.
+      # Values come from the clone's .env / .env.production (Compose loads .env;
+      # the prod npm scripts also export .env.production).
+      - AIKIDO_TOKEN=${AIKIDO_TOKEN:-}
+      - AIKIDO_BLOCK=${AIKIDO_BLOCK:-false}
+      - AIKIDO_DEBUG=${AIKIDO_DEBUG:-false}
+    restart: always
+    # Source mounts are inherited from base (see its SOURCE MOUNTS banner) and
+    # apply here too — we don't redefine or clear them.
+    #
+    # Token-gated Zen preload, scoped to `next start` ONLY (never the entrypoint's
+    # prisma generate/migrate steps). The $$ makes the container shell read the
+    # token at runtime, not Compose at deploy time. When AIKIDO_TOKEN is empty
+    # this is a complete no-op. PORT comes from the per-tier environment.
+    command: ["sh", "-c", "if [ -n \"$$AIKIDO_TOKEN\" ]; then export NODE_OPTIONS=\"-r @aikidosec/firewall/instrument\"; fi; exec npm start"]

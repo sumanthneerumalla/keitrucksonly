@@ -1,5 +1,7 @@
 # Dependencies stage - install all dependencies
-FROM node:20-alpine AS deps
+# Node 22 (>=22.15): required for Aikido Zen firewall's module.registerHooks
+# instrumentation; also moves off Node 20, which reached EOL on 2026-04-30.
+FROM node:22-alpine AS deps
 WORKDIR /app
 
 # Copy package files and ONLY the Prisma schema. The postinstall `prisma
@@ -13,7 +15,7 @@ COPY prisma/schema.prisma ./prisma/schema.prisma
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline --no-audit --no-fund
 
 # Development stage - for hot reloading during development
-FROM node:20-alpine AS development
+FROM node:22-alpine AS development
 WORKDIR /app
 
 # Create a non-root user for development
@@ -49,7 +51,7 @@ USER nextjs
 CMD ["npm", "run", "dev"]
 
 # Builder stage - build the application
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Define build arguments for environment variables (will be passed from docker-build.sh)
@@ -74,14 +76,14 @@ RUN npx prisma generate
 RUN --mount=type=cache,target=/app/.next/cache npm run build
 
 # Prune stage - remove dev dependencies
-FROM node:20-alpine AS pruned
+FROM node:22-alpine AS pruned
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 RUN npm prune --production
 
 # Runner stage - production image
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -93,6 +95,10 @@ RUN addgroup --system --gid 1001 nodejs && \
 
 # Copy necessary files
 COPY --from=builder --chown=nextjs:nodejs /app/next.config.js ./
+# next.config.js does `import "./src/env.js"` at startup, so ship that one
+# runtime source file. This makes the image self-contained: `next start` works
+# WITHOUT bind-mounting host source. (Everything else is compiled into .next.)
+COPY --from=builder --chown=nextjs:nodejs /app/src/env.js ./src/env.js
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=pruned --chown=nextjs:nodejs /app/node_modules ./node_modules

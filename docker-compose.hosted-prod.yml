@@ -1,0 +1,36 @@
+# ============================================================================
+# HOSTED PROD (www.facilitypresence.com). Prebuilt + Aikido Zen.
+#   Combine: docker-compose.yml + docker-compose.deployed.yml + docker-compose.hosted-prod.yml
+#   Wrapped by: npm run docker:prod:*
+# Same setup as hosted-dev (see deployed.yml); differs only in the items below.
+# ============================================================================
+name: shuttlementor-prod
+
+services:
+  app:
+    container_name: shuttlementor-app-prod
+    image: shuttlementor:hosted-prod
+    environment:
+      - PORT=3001
+    ports:
+      - "3001:3001" # app (Caddy -> www.facilitypresence.com)
+      - "5556:5556" # prisma studio
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+  db:
+    container_name: shuttlementor-db-prod
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+
+volumes:
+  postgres_data_prod:
+    name: shuttlementor-prod-postgres-data
+    external: true

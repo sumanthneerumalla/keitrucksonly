@@ -71,12 +71,12 @@ export BUILD_TIMESTAMP="$(date -Iseconds)"
 T_TOTAL_START=$SECONDS
 
 T0=$SECONDS
-npm run docker:prod:build >> "$LOG_FILE" 2>&1 \
+npm run docker:hosted-prod:build >> "$LOG_FILE" 2>&1 \
   || { log "build failed @ ${REMOTE:0:7}; will retry next tick"; exit 1; }
 T_BUILD=$((SECONDS - T0))
 
 T0=$SECONDS
-npm run docker:prod:redeploy:up >> "$LOG_FILE" 2>&1 \
+npm run docker:hosted-prod:redeploy:up >> "$LOG_FILE" 2>&1 \
   || { log "up failed @ ${REMOTE:0:7}; will retry next tick"; exit 1; }
 T_DEPLOY=$((SECONDS - T0))
 
@@ -93,7 +93,7 @@ done
 T_HEALTH=$((SECONDS - T0))
 
 # Cleanup runs untimed — doesn't affect user-visible deploy duration.
-npm run docker:prod:redeploy:cleanup >> "$LOG_FILE" 2>&1 || true
+npm run docker:hosted-prod:redeploy:cleanup >> "$LOG_FILE" 2>&1 || true
 
 T_TOTAL=$((SECONDS - T_TOTAL_START))
 

@@ -12,9 +12,12 @@ else
   echo ""
   echo "!!! Migration failed (exit code $EXIT_CODE)."
 
-  # In production, do NOT auto-resolve — fail hard so it's noticed
+  # All HOSTED tiers run NODE_ENV=production (hosted-dev + hosted-prod) -> strict:
+  # do NOT auto-resolve, fail hard so a human looks (auto-deleting a half-applied
+  # migration can mask schema damage). Only LOCAL dev (NODE_ENV=development) gets
+  # the lenient auto-resolve below.
   if [ "$NODE_ENV" = "production" ]; then
-    echo "!!! PRODUCTION: Refusing to auto-resolve. Fix migrations manually before restarting."
+    echo "!!! PRODUCTION (hosted): Refusing to auto-resolve. Fix migrations manually before restarting."
     echo "!!! Inspect the _prisma_migrations table for failed records."
     echo "!!! To resolve: docker exec <db-container> psql -U postgres -d <db> -c \"DELETE FROM _prisma_migrations WHERE finished_at IS NULL;\""
     exit 1

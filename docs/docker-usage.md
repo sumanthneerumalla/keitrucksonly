@@ -18,7 +18,7 @@ The development environment is configured for hot reloading, so your changes wil
 npm run docker:dev
 
 # Or using Docker Compose directly
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+docker compose -f docker-compose.yml -f docker-compose.local.yml up
 ```
 
 ### Debugging
@@ -27,7 +27,7 @@ For debugging server-side code:
 
 1. Start the application in debug mode:
    ```bash
-   npm run docker:debug
+   npm run docker:dev
    ```
 
 2. In VS Code:
@@ -51,14 +51,14 @@ npm run docker:db:migrate
 
 ```bash
 # Build the production image
-docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.deployed.yml -f docker-compose.hosted-prod.yml build
 ```
 
 ### Starting Production Environment
 
 ```bash
 # Start the production environment
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.deployed.yml -f docker-compose.hosted-prod.yml up -d
 ```
 
 ### Environment Variables
