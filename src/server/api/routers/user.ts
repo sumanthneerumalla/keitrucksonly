@@ -1432,6 +1432,135 @@ export const userRouter = createTRPCRouter({
 			return { userId, email: input.email };
 		}),
 
+	// Bulk-create users from an imported CSV/Excel file.
+	// Reuses the same Clerk + local-account helpers as `createUser`, processing
+	// each row independently so one bad row never aborts the whole batch.
+	// Returns a per-row result list plus a summary the UI renders after import.
+	bulkCreateUsers: facilityProcedure
+		.input(
+			z.object({
+				facilityId: z.string().optional(),
+				// Tags applied to every successfully created/updated user in the batch.
+				tagIds: z.array(z.string()).max(15).optional(),
+				rows: z
+					.array(
+						z.object({
+							firstName: z.string().min(1).max(100).trim(),
+							lastName: z.string().min(1).max(100).trim(),
+							email: z.string().email(),
+							gender: z.nativeEnum(Gender),
+							role: z.nativeEnum(UserType).default(UserType.STUDENT),
+						}),
+					)
+					.min(1)
+					.max(500),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const clubShortName = ctx.user.clubShortName;
+
+			// Validate batch tags belong to the caller's club once up-front.
+			const tagIds = input.tagIds ?? [];
+			if (tagIds.length > 0) {
+				const validTags = await ctx.db.tag.count({
+					where: { tagId: { in: tagIds }, clubShortName },
+				});
+				if (validTags !== tagIds.length) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "One or more tags do not belong to your club.",
+					});
+				}
+			}
+
+			type RowResult = {
+				email: string;
+				firstName: string;
+				lastName: string;
+				status: "created" | "skipped" | "error";
+				message?: string;
+			};
+
+			const results: RowResult[] = [];
+
+			for (const row of input.rows) {
+				const base = {
+					email: row.email,
+					firstName: row.firstName,
+					lastName: row.lastName,
+				};
+
+				// Enforce role ceiling per row (don't abort the whole batch).
+				if (!canAssignRole(ctx.user.userType, row.role)) {
+					results.push({
+						...base,
+						status: "error",
+						message: "You cannot assign this role.",
+					});
+					continue;
+				}
+
+				try {
+					// Clerk find-or-create runs OUTSIDE the transaction (decision #24).
+					const { clerkUserId } = await findOrCreateClerkUserId({
+						email: row.email,
+						firstName: row.firstName,
+						lastName: row.lastName,
+					});
+
+					await ctx.db.$transaction(async (tx) => {
+						const { userId } = await findOrCreateLocalUserAccount({
+							db: tx,
+							clerkUserId,
+							email: row.email,
+							firstName: row.firstName,
+							lastName: row.lastName,
+							gender: row.gender,
+							clubShortName,
+							role: row.role,
+							facilityId: input.facilityId,
+							requireNewMembership: true,
+						});
+
+						if (tagIds.length > 0) {
+							await tx.userTag.createMany({
+								data: tagIds.map((tagId) => ({ userId, tagId })),
+								skipDuplicates: true,
+							});
+						}
+					});
+
+					results.push({ ...base, status: "created" });
+				} catch (err) {
+					// CONFLICT = already a member at this facility -> skip, not fatal.
+					if (err instanceof TRPCError && err.code === "CONFLICT") {
+						results.push({
+							...base,
+							status: "skipped",
+							message: "Already a member of this facility.",
+						});
+						continue;
+					}
+					results.push({
+						...base,
+						status: "error",
+						message:
+							err instanceof TRPCError
+								? err.message
+								: "Failed to create account.",
+					});
+				}
+			}
+
+			const summary = {
+				created: results.filter((r) => r.status === "created").length,
+				skipped: results.filter((r) => r.status === "skipped").length,
+				errored: results.filter((r) => r.status === "error").length,
+			};
+
+			return { results, summary };
+		}),
+
 	// Update a user's role at a specific facility.
 	updateUserRole: clubAdminProcedure
 		.input(
