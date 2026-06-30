@@ -19,6 +19,32 @@ export default clerkMiddleware(async (auth, req) => {
 	// Raw path of the incoming request, e.g. "/cba" or "/cba/articles/hello".
 	const { pathname } = req.nextUrl;
 
+	// TEMP telemetry probe (removed once the Zen rollout is validated). Auth-
+	// independent: a plain `curl -H "x-zen-probe: 1"` reports which runtime the
+	// middleware runs in and whether its outbound fetch — the exact operation that
+	// fails under Zen in the edge sandbox on hosted-dev — succeeds.
+	if (req.headers.get("x-zen-probe")) {
+		const runtime =
+			typeof (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime !==
+			"undefined"
+				? "edge"
+				: (process.env.NEXT_RUNTIME ?? "node?");
+		const t = Date.now();
+		let fetchResult: string;
+		try {
+			const r = await fetch(
+				"https://driven-dodo-7.clerk.accounts.dev/.well-known/jwks.json",
+			);
+			fetchResult = `OK ${r.status}`;
+		} catch (e) {
+			const err = e as Error & { cause?: { code?: string; message?: string } };
+			fetchResult = `FAIL ${err.message} ${
+				err.cause?.code ?? err.cause?.message ?? ""
+			}`;
+		}
+		return NextResponse.json({ runtime, fetchResult, ms: Date.now() - t });
+	}
+
 	// --- Content Security Policy (staged rollout, see src/lib/csp.ts) --------
 	const cspMode = env.CSP_MODE;
 	const nonce = generateNonce();
@@ -82,6 +108,10 @@ export default clerkMiddleware(async (auth, req) => {
 });
 
 export const config = {
+	// Run middleware in the Node.js runtime (stable in Next 15.5) so Aikido Zen's
+	// undici instrumentation applies to Clerk's handshake fetch instead of breaking
+	// the edge-runtime sandbox fetch.
+	runtime: "nodejs",
 	matcher: [
 		// Skip Next.js internals and all static files, unless found in search params
 		"/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
