@@ -116,9 +116,12 @@ function normalizeIdentityBlock(
  * `/checkout/confirmation`. The two pages render the same client; the split
  * just makes Stripe's receipt-email link point at the appropriate surface.
  */
-const SHOP_CONFIRMATION_RETURN_URL =
+// Path suffixes only — joined to the absolute NEXT_PUBLIC_APP_URL inside
+// createCheckoutSessionForIntent. Stripe rejects a relative `return_url`
+// with "Not a valid URL", so these MUST be prefixed with the app origin.
+const SHOP_CONFIRMATION_RETURN_PATH =
 	"/shop/confirmation?session_id={CHECKOUT_SESSION_ID}";
-const INAPP_CONFIRMATION_RETURN_URL =
+const INAPP_CONFIRMATION_RETURN_PATH =
 	"/checkout/confirmation?session_id={CHECKOUT_SESSION_ID}";
 
 /**
@@ -266,6 +269,26 @@ async function createCheckoutSessionForIntent(
 
 	const provider = await getProviderForClub(db, args.clubShortName);
 
+	// Stripe requires an ABSOLUTE return_url; a relative path fails SDK
+	// validation with "Not a valid URL". Resolve the configured app origin
+	// (env → PlatformConfig, same as onboarding) and join the per-surface path.
+	const appUrlRaw = await getConfig("NEXT_PUBLIC_APP_URL");
+	if (!appUrlRaw) {
+		throw new TRPCError({
+			code: "PRECONDITION_FAILED",
+			message:
+				'App URL not configured. Set the NEXT_PUBLIC_APP_URL env var or add a PlatformConfig row with key "NEXT_PUBLIC_APP_URL" (e.g., https://www.dev.facilitypresence.com).',
+		});
+	}
+	const appUrl = appUrlRaw.replace(/\/+$/, "");
+	// Round 3.6 N6 — guest surfaces land on /shop/confirmation; logged-in
+	// surfaces land on /checkout/confirmation. Both render the same client.
+	const returnUrl = `${appUrl}${
+		args.audience === "guest"
+			? SHOP_CONFIRMATION_RETURN_PATH
+			: INAPP_CONFIRMATION_RETURN_PATH
+	}`;
+
 	const { sessionId, clientSecret } = await provider.createCheckoutSession({
 		providerAccountId,
 		amountInCents: args.amountInCents,
@@ -275,12 +298,7 @@ async function createCheckoutSessionForIntent(
 		providerCustomerId: args.providerCustomerId,
 		applicationFeeInCents: 0, // §3: 0% in 12a; scaffolded for future
 		metadata,
-		// Round 3.6 N6 — guest surfaces land on /shop/confirmation; logged-in
-		// surfaces land on /checkout/confirmation. Both render the same client.
-		returnUrl:
-			args.audience === "guest"
-				? SHOP_CONFIRMATION_RETURN_URL
-				: INAPP_CONFIRMATION_RETURN_URL,
+		returnUrl,
 		expiresAt,
 	});
 
