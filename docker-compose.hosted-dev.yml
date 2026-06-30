@@ -13,12 +13,6 @@ services:
     image: shuttlementor:hosted-dev
     environment:
       - PORT=3000
-    # Zen preload DISABLED on hosted-dev (revert of f1063c3). Node-runtime
-    # middleware did NOT fix the Clerk break: Zen still fails the outbound fetch in
-    # the Node runtime here — "Cannot read properties of undefined (reading
-    # 'dispatch')", the exact bug @aikidosec/firewall 1.8.31 fixed (we're on
-    # 1.8.30). Keep Zen off until we bump Zen and re-validate via the probe.
-    command: ["sh", "-c", "exec npm start"]
     ports:
       - "3000:3000" # app (Caddy -> dev.facilitypresence.com)
       - "5555:5555" # prisma studio
