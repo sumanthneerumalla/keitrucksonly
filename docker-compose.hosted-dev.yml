@@ -13,12 +13,6 @@ services:
     image: shuttlementor:hosted-dev
     environment:
       - PORT=3000
-    # STAGED ROLLOUT (temporary): Zen preload disabled on hosted-dev while we
-    # validate the Node-runtime middleware fix. Overrides deployed.yml's token-
-    # gated preload with a plain start. Removed in the next push to re-enable Zen
-    # (which then instruments Clerk's handshake in the Node runtime, not the edge
-    # sandbox). See project_aikido_zen_firewall memory.
-    command: ["sh", "-c", "exec npm start"]
     ports:
       - "3000:3000" # app (Caddy -> dev.facilitypresence.com)
       - "5555:5555" # prisma studio
