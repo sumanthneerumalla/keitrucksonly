@@ -16,6 +16,7 @@ import {
 	Receipt,
 	Settings,
 	ShoppingCart,
+	Store,
 	User,
 	Users,
 	Video,
@@ -85,6 +86,15 @@ export const navItems: NavItem[] = [
 		label: "Book a Court",
 		href: "/rentals",
 		icon: <CalendarClock size={20} />,
+		userTypes: ALL_TYPES,
+	},
+	{
+		// Public storefront for the member's club. Club-agnostic href — the
+		// /shop route resolves the active club server-side and redirects to
+		// /club/[clubShortName]/shop, mirroring /rentals and /invoices.
+		label: "Shop",
+		href: "/shop",
+		icon: <Store size={20} />,
 		userTypes: ALL_TYPES,
 	},
 	{
