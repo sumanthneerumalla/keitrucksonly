@@ -5,6 +5,7 @@ import {
 	AlertCircle,
 	CheckCircle2,
 	FileSpreadsheet,
+	Loader2,
 	UploadCloud,
 	X,
 } from "lucide-react";
@@ -392,6 +393,23 @@ export default function ImportClientsModal({
 				</DialogHeader>
 
 				<DialogBody className="max-h-[60vh] overflow-y-auto">
+					{/* In-flight notice: sets expectations and reassures the user
+					    it's safe to close the dialog while the import runs. */}
+					{bulkCreate.isPending && (
+						<div className="flex items-start gap-2 rounded-lg border border-[var(--primary)]/30 bg-[var(--accent)] px-3 py-2.5 text-sm">
+							<Loader2
+								size={16}
+								className="mt-0.5 shrink-0 animate-spin text-[var(--primary)]"
+							/>
+							<p className="text-[var(--foreground)]">
+								Importing {eligibleRows.length} account
+								{eligibleRows.length === 1 ? "" : "s"}. This can take a couple
+								of minutes for large batches — feel free to close this dialog
+								and we'll let you know when it's done.
+							</p>
+						</div>
+					)}
+
 					{/* Results view (after import) */}
 					{results ? (
 						<ImportResultsView results={results} />
@@ -550,7 +568,11 @@ export default function ImportClientsModal({
 
 				<DialogFooter className="gap-2">
 					<Button variant="outline" onClick={handleClose}>
-						{results ? "Close" : "Cancel"}
+						{bulkCreate.isPending
+							? "Close (import will continue)"
+							: results
+								? "Close"
+								: "Cancel"}
 					</Button>
 					{!results && rows.length > 0 && (
 						<Button
