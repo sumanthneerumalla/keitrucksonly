@@ -47,6 +47,52 @@ export class ClerkPersistentError extends Error {
 }
 
 // ============================================================
+// withClerk429Retry — 429-aware retry for Clerk backend calls
+// ============================================================
+
+/**
+ * Clerk backend rate limits: ~100 req/s (production) / ~10 req/s (development),
+ * with 429 responses carrying a `Retry-After` header (seconds).
+ *
+ * Bulk imports, concurrent staff imports, or dev testing can occasionally trip
+ * these. This wrapper retries ONLY on 429, honoring `Retry-After` (capped at
+ * 10s) so it backs off exactly as long as Clerk asks — and adds zero latency on
+ * the common (non-429) path. Mirrors `withRetry` in
+ * `~/server/services/email/resend.ts`, but delay-by-header instead of fixed.
+ */
+async function withClerk429Retry<T>(
+	fn: () => Promise<T>,
+	maxAttempts = 4,
+): Promise<T> {
+	let lastErr: unknown;
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		try {
+			return await fn();
+		} catch (err: unknown) {
+			const e = err as {
+				status?: number;
+				statusCode?: number;
+				retryAfter?: number;
+				headers?: Record<string, string | undefined>;
+			};
+			const status = e?.status ?? e?.statusCode;
+			if (status !== 429) throw err;
+			lastErr = err;
+			const retryAfterSec = Number(
+				e?.headers?.["retry-after"] ?? e?.retryAfter ?? 2,
+			);
+			const delaySec = Number.isFinite(retryAfterSec) ? retryAfterSec : 2;
+			const cappedDelaySec = Math.min(delaySec, 10);
+			console.warn(
+				`[clerk] 429 rate limited, retrying in ${cappedDelaySec}s (attempt ${attempt + 1}/${maxAttempts})`,
+			);
+			await new Promise((r) => setTimeout(r, cappedDelaySec * 1000));
+		}
+	}
+	throw lastErr;
+}
+
+// ============================================================
 // findOrCreateClerkUserId — pure Clerk, NO database access
 // ============================================================
 
@@ -78,12 +124,14 @@ export async function findOrCreateClerkUserId({
 }: FindOrCreateClerkUserIdInput): Promise<FindOrCreateClerkUserIdResult> {
 	const clerk = await clerkClient();
 	try {
-		const clerkUser = await clerk.users.createUser({
-			emailAddress: [email],
-			firstName,
-			lastName,
-			skipPasswordRequirement: true,
-		});
+		const clerkUser = await withClerk429Retry(() =>
+			clerk.users.createUser({
+				emailAddress: [email],
+				firstName,
+				lastName,
+				skipPasswordRequirement: true,
+			}),
+		);
 		return { clerkUserId: clerkUser.id, wasJustCreated: true };
 	} catch (err: unknown) {
 		// If email already exists in Clerk, find the existing user.
@@ -95,9 +143,11 @@ export async function findOrCreateClerkUserId({
 			e?.errors?.[0]?.code === "form_identifier_exists" ||
 			e?.status === 422
 		) {
-			const existingClerkUsers = await clerk.users.getUserList({
-				emailAddress: [email],
-			});
+			const existingClerkUsers = await withClerk429Retry(() =>
+				clerk.users.getUserList({
+					emailAddress: [email],
+				}),
+			);
 			// Phase 12a (phase12 §23 #5) — multi-Clerk-user guard. Silent
 			// misattachment of paid purchases would be unrecoverable; route to the
 			// orphan queue instead by throwing a `ClerkPersistentError` the webhook

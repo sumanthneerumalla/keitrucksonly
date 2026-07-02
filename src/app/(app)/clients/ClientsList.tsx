@@ -9,6 +9,7 @@ import {
 	Search,
 	Settings2,
 	Tag,
+	Upload,
 	UserPlus,
 	X,
 } from "lucide-react";
@@ -47,6 +48,7 @@ import {
 import { Select } from "~/app/_components/shared/ui/select";
 import { ROLE_HIERARCHY, assignableRoles, cn, isAnyAdmin } from "~/lib/utils";
 import { type RouterInputs, api } from "~/trpc/react";
+import ImportClientsModal from "./ImportClientsModal";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -658,6 +660,7 @@ export default function ClientsList({
 	const [facilityFilter, setFacilityFilter] = useState("");
 	const [roleFilter, setRoleFilter] = useState("");
 	const [isCreateOpen, setIsCreateOpen] = useState(false);
+	const [isImportOpen, setIsImportOpen] = useState(false);
 	const [editingUserId, setEditingUserId] = useState<string | null>(null);
 	const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(
 		new Set(),
@@ -842,10 +845,16 @@ export default function ClientsList({
 				<h1 className="font-semibold text-2xl text-[var(--foreground)]">
 					Clients
 				</h1>
-				<Button onClick={() => setIsCreateOpen(true)}>
-					<UserPlus size={16} className="mr-2" />
-					Create Client
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button variant="outline" onClick={() => setIsImportOpen(true)}>
+						<Upload size={16} className="mr-2" />
+						Import Clients
+					</Button>
+					<Button onClick={() => setIsCreateOpen(true)}>
+						<UserPlus size={16} className="mr-2" />
+						Create Client
+					</Button>
+				</div>
 			</div>
 
 			{/* Filters */}
@@ -1292,6 +1301,11 @@ export default function ClientsList({
 				open={isCreateOpen}
 				onClose={() => setIsCreateOpen(false)}
 				callerType={userType}
+				toast={toast}
+			/>
+			<ImportClientsModal
+				open={isImportOpen}
+				onClose={() => setIsImportOpen(false)}
 				toast={toast}
 			/>
 			<EditUserModal
