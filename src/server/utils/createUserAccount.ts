@@ -82,7 +82,11 @@ async function withClerk429Retry<T>(
 				e?.headers?.["retry-after"] ?? e?.retryAfter ?? 2,
 			);
 			const delaySec = Number.isFinite(retryAfterSec) ? retryAfterSec : 2;
-			await new Promise((r) => setTimeout(r, Math.min(delaySec, 10) * 1000));
+			const cappedDelaySec = Math.min(delaySec, 10);
+			console.warn(
+				`[clerk] 429 rate limited, retrying in ${cappedDelaySec}s (attempt ${attempt + 1}/${maxAttempts})`,
+			);
+			await new Promise((r) => setTimeout(r, cappedDelaySec * 1000));
 		}
 	}
 	throw lastErr;
