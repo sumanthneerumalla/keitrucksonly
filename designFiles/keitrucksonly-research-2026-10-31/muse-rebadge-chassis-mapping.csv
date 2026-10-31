@@ -1,0 +1,47 @@
+term,canonical_chassis_family,make,years,is_4wd,truck_or_van,source,notes
+DA51T,DA51T,Suzuki,1990-1991,false,truck,Carry code guides (Minitrucks.net / Oiwa),Predecessor pair to DC/DD51T; 2WD.
+DB51T,DB51T,Suzuki,1990-1991,true,truck,Carry code guides (Minitrucks.net / Oiwa),Predecessor pair; 4WD. DB51T is NOT the 1991-1999 4WD code.
+DC51T,DC51T,Suzuki,1991-1999,false,truck,Minitrucks.net Carry guide; Oiwa Carry table; Wikipedia Suzuki Carry,"F6A 657cc, belt. DC = 2WD truck."
+DD51T,DD51T,Suzuki,1991-1999,true,truck,Minitrucks.net Carry guide; Oiwa Carry table; Wikipedia Suzuki Carry,"F6A 657cc, belt. DD = 4WD truck."
+DC51B,DC51T,Suzuki,1991-1999,false,truck,Carry code guides,B suffix = dump/tip-deck variant of DC51T.
+DD51B,DD51T,Suzuki,1991-1999,true,truck,Carry code guides,B suffix = dump/tip-deck variant of DD51T.
+DA52T,DA52T,Suzuki,1999-2001,false,truck,Minitrucks.net 10th-gen Carry table,F6A (NOT K6A). 2WD.
+DB52T,DB52T,Suzuki,1999-2001,true,truck,Minitrucks.net 10th-gen Carry table,F6A (NOT K6A). 4WD.
+DA62T,DA62T,Suzuki,2001-2002,varies,truck,Minitrucks.net 10th-gen Carry table; Oiwa grouping,"Transitional semi-cabover, long wheelbase, K6A 658cc chain. No DB62T exists; do not infer drivetrain from code."
+DA63T,DA63T,Suzuki,2002-2013,varies,truck,KEI Import Parts: '2002-2013 DA63T (2WD & 4WD)'; BE FORWARD 2WD DA63T listings,"Long-wheelbase semi-cabover, K6A. Both 2WD and 4WD exist under this one code."
+DA65T,DA65T,Suzuki,2005-2013,varies,truck,Oiwa Carry table (DA63T/DA65T both 2WD/4WD); SAT Japan DA65T short-wheelbase 2WD listing,"Short-wheelbase full-cabover version of DA63T, K6A. Month boundary Jan vs Nov 2005 is medium confidence."
+DA16T,DA16T,Suzuki,2013-present,varies,truck,RHDJapan fitment (DA16T R06A 09/2013~); BE FORWARD DA16T listings showing both Drive 2WD and Drive 4WD under EBD-DA16T,"R06A. Same code covers 2WD and 4WD; part-time 4WD models can switch 2WD/4WD, which is NOT the same as a 2WD-only variant. BE FORWARD examples: 2020 EBD-DA16T Drive 2WD and 2018 EBD-DA16T Drive 4WD."
+DG52T,DA52T,Mazda,1999-2001,false,truck,"Mirai kei-truck guide (Scrum = Carry, DG52T/DH52T)",Mazda Scrum = Suzuki Carry rebadge. 2WD.
+DH52T,DB52T,Mazda,1999-2001,true,truck,"Mirai kei-truck guide (Scrum = Carry, DG52T/DH52T)",Mazda Scrum = Suzuki Carry rebadge. 4WD.
+DG63T,DA63T,Mazda,2002-2013,varies,truck,"Mirai kei-truck guide (Scrum = Carry, DG63T)",Mazda Scrum = Carry DA63T rebadge. Drivetrain varies under the code.
+DG16T,DA16T,Mazda,2013-present,varies,truck,RHDJapan fitment (Scrum DG16T R06A 09/2013~),Mazda Scrum = Carry DA16T rebadge. Drivetrain varies.
+DS16T,DA16T,Mitsubishi,2014-2021,varies,truck,RHDJapan fitment (Minicab DS16T R06A 02/2014-08/2021); Carused DS16T 4WD listings,Mitsubishi Minicab = Carry DA16T rebadge from 2014. Drivetrain varies; do not assume 4WD from the rebadge name.
+DR16T,DA16T,Nissan,2013-2021,varies,truck,RHDJapan fitment (NT100 Clipper DR16T R06A 12/2013-08/2021); Wikipedia Nissan Clipper,Nissan NT100 Clipper = Carry DA16T rebadge from Dec 2013. Drivetrain varies.
+U41T,U41T,Mitsubishi,1991-1999,false,truck,KEI Import Parts Minicab U41-U62 guide; Mirai kei-truck guide,"3G83 657cc, belt. Digit before T: 1 = 2WD."
+U42T,U42T,Mitsubishi,1991-1999,true,truck,KEI Import Parts Minicab U41-U62 guide; Mirai kei-truck guide,"3G83 657cc, belt. Digit before T: 2 = 4WD."
+U61T,U61T,Mitsubishi,1999-2014,false,truck,KEI Import Parts Minicab U41-U62 guide; Mirai kei-truck guide,"3G83 660cc, belt. 2WD."
+U62T,U62T,Mitsubishi,1999-2014,true,truck,KEI Import Parts Minicab U41-U62 guide; Mirai kei-truck guide,"3G83 660cc, belt. 4WD."
+U71T,U61T,Nissan,2003-2012,false,truck,Wikipedia Nissan Clipper (Clipper Truck U71T 2003-2012); RHDJapan Clipper fitment 10/2003-01/2012,Nissan Clipper = Mitsubishi Minicab rebadge (not Carry) in this period. 2WD.
+U72T,U62T,Nissan,2003-2012,true,truck,Wikipedia Nissan Clipper; RHDJapan Clipper fitment 10/2003-01/2012; 2006 U72T 4WD listing,Nissan Clipper = Minicab rebadge. 4WD.
+S100P,S100P,Daihatsu,1994-1999,false,truck,Daihatsu Hijet generation guides; Hijet third-digit rule,EF 660cc. Third digit 0 = 2WD.
+S110P,S110P,Daihatsu,1994-1999,true,truck,Daihatsu Hijet generation guides; Hijet third-digit rule,EF 660cc. Third digit 1 = 4WD.
+S200P,S200P,Daihatsu,1999-2007,false,truck,"KEI Import Parts Hijet guide (1999-2007 S200P/S210P, EF, belt); Wikipedia Daihatsu Hijet (9th gen truck 1999-2014; pre-facelift S210P 1999-2007)","Pre-facelift Hijet, EF 660cc, belt. NOT 1999-2004. Third digit 0 = 2WD."
+S210P,S210P,Daihatsu,1999-2007,true,truck,KEI Import Parts Hijet guide; Wikipedia Daihatsu Hijet (pre-facelift S210P 1999-2007),"Pre-facelift Hijet, EF 660cc, belt. NOT 1999-2004. Third digit 1 = 4WD."
+S201P,S201P,Daihatsu,2007-2014,false,truck,"KEI Import Parts Hijet guide (2007-2014 S201P/S211P, KF, chain); Wikipedia (facelifted S211P 2007-2014; S201/S211 made until July 2014)","Facelift Hijet, KF 660cc, chain. Oiwa lists S201/S211 from 2005 - that start year conflicts with Wikipedia/KEI Import Parts 2007; use 2007."
+S211P,S211P,Daihatsu,2007-2014,true,truck,KEI Import Parts Hijet guide; Wikipedia (facelifted S211P 2007-2014; S201/S211 made until July 2014),"Facelift Hijet, KF 660cc, chain. This is a distinct code from S210P, not a variant folded into it."
+S500P,S500P,Daihatsu,2014-present,false,truck,Daihatsu Hijet generation guides; Hijet third-digit rule,Current Hijet. Third digit 0 = 2WD.
+S510P,S510P,Daihatsu,2014-present,true,truck,Daihatsu Hijet generation guides; Hijet third-digit rule,Current Hijet. Third digit 1 = 4WD.
+S201U,S201P,Toyota,2011-2014,false,truck,ZenPlus Hijet S200-series fitment (Pixis Truck S201U/S211U May 2011-May 2014),Toyota Pixis Truck = Hijet rebadge. U replaces P in the code. 2WD.
+S211U,S211P,Toyota,2011-2014,true,truck,ZenPlus Hijet S200-series fitment (Pixis Truck S201U/S211U May 2011-May 2014),Toyota Pixis Truck = Hijet rebadge. 4WD.
+KS3,KS3,Subaru,1990-1999,false,truck,"KEI Import Parts Sambar code guide (KS3 2WD truck, 1990-1999); Oiwa Sambar (KS3-KS4 1990-1998)","Odd last digit = 2WD. EN07 658cc. Oiwa ends this run at 1998, KEI Import Parts at 1999 - year boundary is low-stakes for US listings."
+KS4,KS4,Subaru,1990-1999,true,truck,"KEI Import Parts Sambar code guide (KS4 4WD truck, 1990-1999)",Even last digit = 4WD. EN07 658cc.
+TT1,TT1,Subaru,1999-2012,false,truck,"KEI Import Parts Sambar code guide (TT1 2WD truck, 1999-2012); Oiwa Sambar (TT1-TT2 1999-2012)","Subaru-built Sambar, last digit 1 = 2WD. EN07/EN07Y."
+TT2,TT2,Subaru,1999-2012,true,truck,"KEI Import Parts Sambar code guide (TT2 4WD truck, 1999-2012); Oiwa Sambar",Last digit 2 = 4WD. EN07/EN07Y.
+TV1,TV1,Subaru,1999-2012,false,van,"KEI Import Parts Sambar code guide (TV1 2WD van, 1999-2012)","Van, not truck. Included so van codes are not misread as trucks."
+TV2,TV2,Subaru,1999-2012,true,van,"KEI Import Parts Sambar code guide (TV2 4WD van, 1999-2012)","Van, not truck."
+S201J,S201P,Subaru,2012-2014,false,truck,ZenPlus Hijet S200-series fitment (Sambar Truck S201J/S211J); JDMBUYSELL Sambar (2012 Sambar is Daihatsu-supplied),Post-2012 Sambar truck = Hijet rebadge. J replaces P. 2WD.
+S211J,S211P,Subaru,2012-2014,true,truck,ZenPlus Hijet S200-series fitment (Sambar Truck S201J/S211J); JDMBUYSELL Sambar (2012 Sambar is Daihatsu-supplied),Post-2012 Sambar truck = Hijet rebadge. 4WD.
+HA3,HA3,Honda,1990-1999,false,truck,"JDMBUYSELL Acty guide (HA3/HA4 1990-1999, HA4 is 4WD); Oiwa Acty table (HA3 2WD, HA4 4WD)",E07A 656cc. 660-class second-generation Acty from 26 Mar 1990.
+HA4,HA4,Honda,1990-1999,true,truck,JDMBUYSELL Acty guide; Oiwa Acty table (HA4 4WD),E07A 656cc. Real Time 4WD; Attack trim adds diff lock - do not infer diff lock from 4WD alone.
+HA6,HA6,Honda,1999-2009,false,truck,"JDMBUYSELL Acty guide (HA6/HA7 1999-2009, HA7 is 4WD); Oiwa Acty table (HA6 2WD, HA7 4WD)",E07Z 656cc. Truck archive ends Nov 2009.
+HA7,HA7,Honda,1999-2009,true,truck,JDMBUYSELL Acty guide; Oiwa Acty table (HA7 4WD),E07Z 656cc. Real Time 4WD.
