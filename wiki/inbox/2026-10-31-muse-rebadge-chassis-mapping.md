@@ -9,4 +9,8 @@ source: agent:muse (corrected after session spot-check), relayed by owner
 - Suffix B on Carry codes (DC51B/DD51B) = dump/tip-deck variant.
 - Acty HA4 "Attack" trim adds diff lock; don't infer diff lock from HA4 alone.
 - GAPS in the mapping (session note, to fill): no Acty HA8/HA9 (2009–2021); no pre-1994 Hijet (S80/S81/S82/S83P) or pre-1990 Carry/Sambar/Minicab codes, which matter for 25+ yr imports; no van codes besides Sambar TV.
-- Colorado HB25-1281 effective-date check: not yet answered by Muse.
+- Product rule (Muse): Suzuki 1991–2001 letter pair encodes drivetrain; 2001–2013 the code encodes body/wheelbase (DA62T long-wheelbase transitional 2001–2002, DA63T long-wheelbase semi-cabover 2002–2013, DA65T short-wheelbase full-cabover 2005–2013), so drivetrain must come from the listing or plate, never the code.
+- is_4wd values are only true, false or "varies". Rows left out pending verification (Scrum DG62T/DG65T, Pixis S500U/S510U, Sambar S500J/S510J): do not invent them from the pattern.
+- CONFLICT (minor): Sambar KS3/KS4 end year: Oiwa 1998, KEI Import Parts 1999. Hijet facelift start: Oiwa 2005, Wikipedia + KEI Import Parts 2007 (use 2007).
+- RESOLVES the Colorado CONFLICT ([[state-laws]], [[open-questions]]): HB25-1281 "Title, Register, and Drive Kei Vehicles", signed 2025-05-09, takes effect 2027-07-01, but applies only to licensure applications and offenses on or after 2028-01-01 (CGA final fiscal note LLS 25-0753; Session Laws of Colorado 2025 ch. 176 §13(2)). Practically: no CO road registration under this law until 2028-01-01; 25+ yr, titled and registered, roads posted ≤55 mph. The Apr–Jun 2027 Colorado push in [[positioning]] should be re-timed (e.g. Q4 2027).
+- Muse also produced a corrected 123-row synonym table (DA16T family "varies", S200P/S210P 1999–2007, S201P/S211P split); not yet downloaded, so the saved 119-row version is outdated for chassis rows.
