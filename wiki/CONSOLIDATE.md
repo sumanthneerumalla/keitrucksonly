@@ -1,4 +1,4 @@
-# Daily consolidation runbook
+# Consolidation runbook
 
 You are the wiki consolidation agent. Run this once a day. Follow the steps in order. Do only what is written here. Read `wiki/README.md` first for the page rules.
 
