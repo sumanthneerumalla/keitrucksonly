@@ -30,9 +30,9 @@ This is the ShuttleMentor codebase (Next.js, tRPC, Prisma, Clerk, Stripe Connect
   - That covers 12 seed dealers, about 300–500 listings.
 - **New dealers need vetting before going live:** domain age, phone area code vs. address, payment terms, Google Maps / BBB presence.
 
-## Open decisions (ask the owner)
-1. **Hosting:** keep the self-hosted setup (Caddy, ddclient, pgbackrest, crontab in `serverFiles/`), or move to managed hosting with managed Postgres and a scheduler?
-2. **Leftover ShuttleMentor features:** remove them from the working tree in one labelled commit (history keeps them), or leave them in place?
+## Decided by owner (2026-10-31)
+1. **Hosting: self-hosted.** Keep the `serverFiles/` setup (Caddy, ddclient, pgbackrest, crontab).
+2. **Leftover ShuttleMentor features: leave in place.** Build alongside them; no cleanup commit.
 
 ## Competitors
 - **Oiwa Garage / KeiTruckUS.com:** a parts retailer in Long Beach that also sells some trucks. Its site lists 402 trucks from 18 dealers, has a 50-state law map, price trends, a 25-year-rule checker and a landed-cost calculator, and funnels visitors to its parts store. It does **not** have: a per-buyer-state registration filter, saved-search alerts, or links out to dealers. It also isn't neutral.
@@ -67,13 +67,39 @@ Excluded from everything.
 - The key minted in the cloud session (prefix `bf_live_7rGk`) was not carried over. The owner can revoke it at `/keys`.
 
 ## Next tasks
-1. **(Pending owner OK)** Gap-fill research with The Browser Farm:
-   - live inventory at Northwest Mini Trucks (WA, 161–218 listings) and Mayberry (NC; its site loads listings from api.mayberryminitrucks.com)
-   - Weatherford Mini Trucks (TX, a JavaScript-rendered Base44 site)
-   - Google Trends for "kei truck" vs "mini truck" vs "k truck"
-   - Facebook dealer pages and group sizes
+1. ~~Gap-fill research with The Browser Farm~~ **Done 2026-10-31.** See below and `keitrucksonly-research-2026-10-31/`. The owner asked for research only, no code, in this session.
 2. **Week 0 from the playbook:**
    - Register ktrucksonly.com.
    - Build a "coming soon" page on keitrucksonly.com with email capture (email, state, model of interest).
    - Rename the project from ShuttleMentor (package.json, README).
-3. Once hosting and cleanup are decided: build the v0 data model (`Dealer` reusing `Club`, `Listing`, `StateRule`, `SavedSearch`) and the registration filter.
+3. Hosting and cleanup are decided, so next: build the v0 data model (`Dealer` reusing `Club`, `Listing`, `StateRule`, `SavedSearch`) and the registration filter.
+
+## Gap-fill research results (2026-10-31)
+Full notes are in `keitrucksonly-research-2026-10-31/` (`dealers.md`, `trends.md`, `facebook.md`, `gap-states.md`). Seven gap-state dealers were appended to `dealer-prospects.csv`.
+
+- **Dealer feeds (all public, no red flags):**
+  - Mayberry: 65 units from one unauthenticated JSON endpoint (`api.mayberryminitrucks.com/inventory/getInventoryMetaData`).
+  - Northwest Mini Trucks: 210 units, about 147 of them kei trucks. Custom Rails site; ingest via `sitemap.xml` plus the structured data on each vehicle page.
+  - Weatherford: 31 live units from a public Base44 function. Most are **new off-road-only** Hijets and Carrys.
+  - **Implication:** `Listing` needs a street-legal (25+ yr import) vs. off-road-new flag.
+- **Data model:** some operators run several locations (JDM Car & Motorcycle in WA and TN), so `Dealer` needs multiple locations.
+- **Gap states:** GA, OR and ME refuse to title kei trucks, which is why there are few dealers there. Listings in those states need an "off-road only here" flag.
+- **Colorado dealers aren't ready for 2027:** the two found mostly sell new units, which won't qualify for the 25+ yr registration.
+- **Search terms (Google Trends, US):**
+  - "kei truck" is up about 10x since 2021.
+  - "kei truck for sale" is about 0.85x of "mini truck for sale" and closing.
+  - "Mini truck" is noisy (food trucks, toys).
+  - Peaks are December and April–June.
+  - Top states by share: HI, UT, WA, ID, VT, NH, AK, CO.
+  - Use "kei truck" as the head term and "mini truck" as secondary wording (the South and Midwest say "mini truck").
+- **Distribution:**
+  - Largest groups: Mini Truck Marketplace (151K, public), Japanese Mini Trucks For Sale (75K), Kei Truck Owners (58K; promotions need admin approval), Kei Truck Club (52K; promotions OK).
+  - Oiwa owns "Japanese Mini Trucks of America For Sale!" (56K) and charges dealers to list.
+  - r/keitruck: about 37K weekly visitors, vendor flair required, strong anti-Oiwa sentiment (a pinned post).
+  - PNW Kei bans dealer ads, so pitch "free, no dealer fees".
+  - The state advocacy groups weren't found.
+- **Browser Farm dogfood notes:**
+  - Google Trends: the cold load returned 429; warming up cookies and retrying after 60 s worked. Classic Explore is being retired.
+  - Facebook logged out: `/groups/<id>/about` works even for private groups; bare `/groups/<id>/` hits a login wall after about 6 parallel loads.
+  - Search: Brave `site:` search showed a CAPTCHA after about 18 queries (not bypassed). Bing ignores `site:`.
+  - old.reddit requires login.
