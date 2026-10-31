@@ -1,0 +1,120 @@
+term,canonical_value,facet,variants_and_misspellings,makes,model_years,is_4wd,truck_or_van,frequency,notes
+Suzuki Carry,Suzuki Carry,model,Carry|Kei Carry|Mini Carry,Suzuki,1990-2001 (25yr-eligible); also 2022+ new off-road,,truck,common,"Most-listed make in Oct sample; Carry van is Every, not a Carry truck"
+Daihatsu Hijet,Daihatsu Hijet,model,Hijet|HiJet|Hi-Jet|Hi Jet|Diahatsu Hijet,Daihatsu,1990-2001; also 2022+ new,,truck,common,"Diahatsu is a seen misspelling; Hijet van is Atrai, not a Hijet truck"
+Honda Acty,Honda Acty,model,Acty|ACTY|Honda Acty Truck,Honda,1990-2001,,truck,common,"Acty van is Street/Vamos, not a truck"
+Subaru Sambar,Subaru Sambar,model,Sambar|SAMBAR,Subaru,1990-2001 (pre-2012 Subaru-built); 2012+ is Hijet rebadge,,truck,common,Do not map post-2012 Sambar to Subaru chassis codes
+Mitsubishi Minicab,Mitsubishi Minicab,model,Minicab|Mini Cab|MiniCab|Mini-Cab,Mitsubishi,1990-2001; 2014+ is Carry rebadge,,truck,common,"Mini Cab spelling is common, not a separate model"
+Mazda Scrum,Suzuki Carry,model,Scrum|Scrum Truck,Mazda;Suzuki,1990-2001,,truck,occasional,"REBADGE: Scrum = Carry. Map by chassis code and year, not by badge alone"
+Nissan Clipper,Mitsubishi Minicab,model,Clipper|Clipper Truck,Nissan;Mitsubishi,1999-2012 (early Clipper = Minicab); 2012+ = Carry,,truck,occasional,"REBADGE, generation-dependent: early=Minicab, 2012+=Carry"
+Daihatsu Pixis Truck,Daihatsu Hijet,model,Pixis|Pixis Truck,Daihatsu,2011+,,truck,rare,REBADGE: Pixis Truck = Hijet (S500P family). Rare in US 25yr sample because too new
+Toyota Pixis Truck,Daihatsu Hijet,model,Pixis Truck|Toyota Pixis,Toyota;Daihatsu,2011+,,truck,rare,Same Hijet platform sold as Toyota; do not create a Toyota chassis family
+kei truck,kei truck,model,kei|key truck|mini truck|mini-truck|Kei-tora|Kei tora,All,1990-2001,,truck,common,'key truck' is a seen misspelling; 'mini truck' also means US domestic mini-trucks - disambiguate
+kei car,kei car,model,kei car|K-car,All,,car,occasional,Not a truck; exclude from truck search unless user asks for vans/cars
+kei van,kei van,model,kei van|microvan|Microvan|JDM van,All,,van,occasional,Facebook auto-appends 'Microvan' to some truck titles - strip it in parser
+DD51T,DD51T,chassis_code,DD51|DD51T,Suzuki,1991-1999,false,truck,occasional,"Carry, 2WD version of the DD51 family; F6A engine"
+DB51T,DB51T,chassis_code,DB51|DB51T,Suzuki,1991-1999,true,truck,occasional,Carry 4WD counterpart to DD51T; do not merge DD/DB
+DA52T,DA52T,chassis_code,DA52|DA52T,Suzuki,1999-2002,false,truck,rare,"Carry, K6A era, 2WD"
+DB52T,DB52T,chassis_code,DB52|DB52T,Suzuki,1999-2002,true,truck,occasional,"Carry 4WD, K6A era; 3 seen in Oct Marketplace sample"
+DA62T,DA62T,chassis_code,DA62|DA62T,Suzuki,2002-2005,false,truck,rare,"Carry, 2WD"
+DA63T,DA63T,chassis_code,DA63|DA63T,Suzuki,2002-2005,true,truck,occasional,"Carry 4WD; the most-cited Carry chassis in groups, rare in Marketplace titles"
+DA65T,DA65T,chassis_code,DA65|DA65T,Suzuki,2005-2013,true,truck,rare,"Carry 4WD, later K6A; mostly too new for 25yr sample in 2026 except earliest years"
+DA16T,DA16T,chassis_code,DA16|DA16T,Suzuki,2013+,true,truck,rare,"Carry 4WD, current generation; not 25yr-eligible in 2026 - off-road/new market only"
+DG52T,DA52T,chassis_code,DG52|DG52T|DK51T (see notes),Mazda;Suzuki,1999-2002,false,truck,rare,"REBADGE: Scrum DG52T = Carry DA52T family. DK51T seen on a Scrum listing is likely a misread/variant - verify against plate, do not auto-merge"
+DG63T,DA63T,chassis_code,DG63|DG63T,Mazda;Suzuki,2002-2005,true,truck,rare,REBADGE: Scrum DG63T = Carry DA63T family
+HA3,HA3,chassis_code,HA3,Honda,1990-1999,false,truck,occasional,Acty 2WD
+HA4,HA4,chassis_code,HA4,Honda,1990-1999,true,truck,occasional,Acty 4WD; 8 seen in Oct Marketplace sample - the most common Acty code there
+HA6,HA6,chassis_code,HA6,Honda,1999-2009,false,truck,rare,"Acty 2WD, later generation"
+HA7,HA7,chassis_code,HA7,Honda,1999-2009,true,truck,rare,"Acty 4WD, later generation"
+S83P,S83P,chassis_code,S83|S83P,Daihatsu,1990-1994,false,truck,rare,"Hijet, early 1990s; 4WD variant is S83P with 4WD option - check drivetrain field, do not assume"
+S100P,S100P,chassis_code,S100|S100P,Daihatsu,1994-1999,false,truck,rare,Hijet 2WD
+S110P,S110P,chassis_code,S110|S110P|S110P,Daihatsu,1994-1999,true,truck,occasional,Hijet 4WD; 5 seen in Oct sample
+S200P,S200P,chassis_code,S200|S200P,Daihatsu,1999-2004,false,truck,rare,Hijet 2WD
+S210P,S210P,chassis_code,S210|S210P|S211P (see notes),Daihatsu,1999-2004,true,truck,occasional,Hijet 4WD; 7 seen in Oct sample. S211P is the related 4WD van/related variant - keep separate unless plate proves otherwise
+S500P,S500P,chassis_code,S500|S500P,Daihatsu,2014+,false,truck,rare,"Hijet 2WD, current generation; not 25yr-eligible in 2026"
+S510P,S510P,chassis_code,S510|S510P,Daihatsu,2014+,true,truck,rare,"Hijet 4WD, current generation; sold as NEW off-road truck in US (e.g. Mini Trucks Ohio stock)"
+KS3,KS3,chassis_code,KS3,Subaru,1990-1999,false,truck,rare,Sambar 2WD
+KS4,KS4,chassis_code,KS4,Subaru,1990-1999,true,truck,occasional,"Sambar 4WD; 3 seen in Oct sample; EN07 engine, rear-engine layout"
+TT1,TT1,chassis_code,TT1,Subaru,1999-2012,false,truck,rare,"Sambar truck, 2WD (TT = truck)"
+TT2,TT2,chassis_code,TT2,Subaru,1999-2012,true,truck,occasional,"Sambar truck, 4WD; 5 seen in Oct sample. TT vs TV is the truck/van split - do not merge"
+TV1,TV1,chassis_code,TV1,Subaru,1999-2012,false,van,rare,"Sambar VAN, 2WD (TV = van) - not a truck"
+TV2,TV2,chassis_code,TV2,Subaru,1999-2012,true,van,rare,"Sambar VAN, 4WD - not a truck; 1 seen in Oct sample"
+U41T,U41T,chassis_code,U41|U41T,Mitsubishi,1990-1999,false,truck,rare,Minicab 2WD
+U42T,U42T,chassis_code,U42|U42T,Mitsubishi,1990-1999,true,truck,rare,Minicab 4WD; 1 seen in Oct sample; 3G83 engine
+U61T,U61T,chassis_code,U61|U61T,Mitsubishi,1999-2014,false,truck,rare,"Minicab 2WD, later generation"
+U62T,U62T,chassis_code,U62|U62T,Mitsubishi,1999-2014,true,truck,occasional,Minicab 4WD; 4 seen in Oct sample
+DS16T,DA16T,chassis_code,DS16|DS16T,Mitsubishi;Suzuki,2014+,true,truck,rare,REBADGE: Minicab DS16T = Carry DA16T. 4WD version; 2WD is DS16T with 2WD drivetrain - check field
+U71T,U71T,chassis_code,U71|U71T,Nissan;Mitsubishi,1999-2012,false,truck,rare,"REBADGE: Clipper U71T = Minicab U61T family, 2WD"
+U72T,U72T,chassis_code,U72|U72T,Nissan;Mitsubishi,1999-2012,true,truck,rare,"REBADGE: Clipper U72T = Minicab U62T family, 4WD"
+DR16T,DA16T,chassis_code,DR16|DR16T,Nissan;Suzuki,2012+,true,truck,rare,"REBADGE: Clipper DR16T = Carry DA16T. Post-2012 Clipper is Carry, not Minicab"
+KC,KC,trim,KC,Suzuki,1990-2001,,truck,rare,Carry trim; sellers rarely expand what KC includes - do not invent equipment from trim alone
+KU,KU,trim,KU,Suzuki,1990-2001,,truck,rare,"Carry trim, below KC in most listings; same caution as KC"
+Jumbo,Jumbo,trim,Jumbo|Jumbo Cab|Extended cab,Daihatsu;Suzuki,1994-2004,,truck,occasional,"Extended cab with storage behind seats; Hijet Jumbo is the common US usage. Median $9,375 in Oct sample (n=8, estimate)"
+SDX,SDX,trim,SDX,Honda,1990-2001,,truck,occasional,"Acty trim, commonly paired with 4WD + A/C in listings"
+Attack,Attack,trim,Attack|ATACK|Acty Attack,Honda,1990-2001,,truck,occasional,"Acty off-road package: diff lock, hi/lo, often no A/C; ATACK is a seen misspelling"
+Climber,Climber,trim,Climber,Daihatsu,1990-2001,,truck,rare,"Hijet off-road package; sellers use it loosely - verify diff lock/hi-lo, do not assume"
+Dias,Dias,trim,Dias|Diaz,Subaru,1999-2012,,van,occasional,"Sambar van trim (Dias Wagon); Diaz is a seen misspelling. Dias is a VAN, not a truck, even when listed as a truck"
+Akabou,Akabou,trim,Akabou|Akabo|Red Cap|Redcap,Subaru,1999-2012,,truck,rare,Japanese delivery spec (red cap on roof sign). US listings loosely associate it with supercharged Sambar - label alone does NOT prove supercharger; verify engine code
+Supercharged,Supercharged,trim,Supercharged|Supercharges|SC|Super Charge,Subaru,1990-2012,,truck,occasional,"Sambar EN07Y supercharged, not turbocharged; 'Supercharges' is a seen misspelling"
+Dump,Dump,body_type,Dump|Dump bed|Dump truck|Tipper,All,1990-2001,,truck,common,"Strongest price premium in Oct sample: median $10,500 vs $8,495 for 1990s-2001 overall (estimate)"
+Scissor Dump,Scissor Dump,body_type,Scissor Dump|Scissor lift|Scissor bed,Daihatsu;Suzuki,1990-2001,,truck,rare,Dump bed that also lifts vertically (scissor mechanism); distinct from a plain dump - do not merge
+Flatbed,Flatbed,body_type,Flatbed|Flat bed|Flat-bed,All,1990-2001,,truck,occasional,"Plain flat bed, no dump mechanism"
+3-way gates,3-way gates,body_type,3-way|Three-way gates|Drop sides|Drop-side,All,1990-2001,,truck,occasional,Bed sides drop on three sides; sellers also just say 'drop sides'
+Van,Van,body_type,Van|Panel van|Deck van|Microvan,All,,van,occasional,"Deck van = van with a small open bed behind cab (Hijet Deck Van S200/S210 family) - facet as van, not truck"
+Fire truck,Fire truck,body_type,Fire truck|Fire response|Fire engine,Subaru;Daihatsu,1990-2001,,truck,rare,"Ex-fire-service truck, often with pump/lights removed; 3% of Oct complete trucks"
+Crane,Crane,body_type,Crane|Crane truck,All,1990-2001,,truck,rare,"0 in Oct filtered Marketplace set; known body type, keep in schema, do not claim US frequency"
+Refrigerator,Refrigerator,body_type,Refrigerator|Reefer|Freezer|Cold box,Daihatsu;Suzuki,1990-2001,,truck,rare,Refrigerated box body; 'reefer' is the short form
+Food truck,Food truck,body_type,Food truck|Takoyaki|Coffee truck|Mobile food,All,1990-2001,,truck,rare,"Converted kei truck, often a van or flatbed conversion - facet by base vehicle, not just conversion"
+4x4,4x4,drivetrain,4x4|4WD|4wd|Four wheel drive|4 wheel drive,All,1990-2001,,truck,common,68% of Oct complete trucks mention 4WD; the single most important filter after make/year
+4WD,4x4,drivetrain,4WD|4wd|AWD (see notes),All,1990-2001,,truck,common,"Sellers use 4WD and 4x4 interchangeably. Sambar AWD is full-time, not part-time 4WD - keep a separate full-time flag if you can"
+2WD,2WD,drivetrain,2WD|2wd|RWD|Rear wheel drive,All,1990-2001,,truck,occasional,RWD is the default for 2WD kei trucks; do not map RWD to a separate drivetrain
+Hi/Lo,Hi/Lo,drivetrain,Hi/Lo|Hi-Lo|High/Low|High low|Hi Low range|Low range,All,1990-2001,,truck,occasional,Two-range transfer case; 8% of Oct complete trucks
+Super Low,Super Low,drivetrain,Super Low|Extra Low|Ultra Low|EL|Extra Low Gear,Subaru;Daihatsu,1990-2001,,truck,rare,"Extra-low first gear, Sambar/Hijet off-road spec; 'EL' alone is ambiguous - require context"
+Diff lock,Diff lock,drivetrain,Diff lock|Diff-lock|Rear locker|Locker|DIF-LOCK,Honda;Daihatsu;Subaru,1990-2001,,truck,rare,Rear differential lock; 2% of Oct complete trucks. Acty Attack is the classic diff-lock truck
+PTO,PTO,drivetrain,PTO|Power take-off,All,1990-2001,,truck,rare,Power take-off for dump/crane equipment; ~1% of Oct complete trucks
+5-speed manual,5-speed manual,transmission,5 speed|5MT|5-spd|Manual|Stick|Stick shift,All,1990-2001,,truck,common,61% of Oct complete trucks mention manual
+3-speed automatic,3-speed automatic,transmission,3 speed auto|3AT|Automatic,Subaru,1999-2012,,truck,occasional,Sambar TT2 automatic is typically 3-speed; do not assume 4-speed
+4-speed automatic,4-speed automatic,transmission,4 speed auto|4AT|Automatic,Daihatsu;Suzuki,1999-2004,,truck,rare,"Later Hijet/Carry automatics; verify, sellers often just say 'automatic' (7% of Oct set)"
+F6A,F6A,engine,F6A|657cc|660cc (see notes),Suzuki,1991-1999,,truck,occasional,"Carry 657cc 3-cyl. '660cc' is the class label, not proof of F6A vs K6A - check year"
+K6A,K6A,engine,K6A|660cc (see notes),Suzuki,1999+,,truck,occasional,"Carry 660cc 3-cyl, successor to F6A"
+EF,EF,engine,EF|EF-VE|EF-SE,Daihatsu,1990-2004,,truck,rare,Hijet 660cc 3-cyl family; EF-VE is the twin-cam EFI version sellers cite
+KF,KF,engine,KF|KF-VE,Daihatsu,2004+,,truck,rare,Hijet successor engine; too new for most 25yr sample
+E07A,E07A,engine,E07A|E07|660cc (see notes),Honda,1990-2009,,truck,rare,Acty 660cc 3-cyl
+EN07,EN07,engine,EN07|EN07Y (supercharged)|EN07Z,Subaru,1990-2012,,truck,occasional,Sambar 660cc 4-cyl. EN07Y = supercharged version; plain EN07 is not supercharged
+3G83,3G83,engine,3G83|3G83T (turbo),Mitsubishi,1990-2014,,truck,rare,Minicab 660cc 3-cyl
+Turbo,Turbo,engine,Turbo|Turbocharged,All,1990-2001,,truck,rare,3% of Oct complete trucks. Do NOT map Sambar 'supercharged' to turbo
+Carburetor,Carburetor,engine,Carb|Carbureted|Carburettor,All,1990-1999,,truck,occasional,Early 1990s trucks are carbureted; later are EFI/fuel-injected - a useful year proxy
+EFI,EFI,engine,EFI|Fuel injected|Fuel-injected|Twin-cam EFI,All,1994-2004,,truck,occasional,Electronic fuel injection; sellers cite 'twin-cam EFI' on Hijet S210P
+Rust,Rust,condition,Rust|Frame rust|Rusty|Surface rust|Rust free|No rust,All,1990-2001,,truck,common,13% mention rust at all; 5% explicitly say no-rust. Frame rust is the deal-breaker phrase - facet it separately from body rust
+Frame rust,Frame rust,condition,Frame rust|Frame rot|Frame damage,All,1990-2001,,truck,occasional,The specific buyer red flag; surface rust alone is not the same signal
+Japan-spec,Japan-spec,condition,Japan-spec|JDM|JDM Import|Japanese import|Japan import,All,1990-2001,,truck,common,38% mention JDM/Japan. JDM alone does not prove 25yr compliance - check manufacture month
+Original miles,Original miles,condition,Original miles|Verified miles|True miles|Actual miles,All,1990-2001,,truck,occasional,"Seller claim of verified mileage; treat as claim, not verification, unless auction sheet is shown"
+TMU,TMU,condition,TMU|True mileage unknown|Mileage unknown,All,1990-2001,,truck,rare,0 in Oct Marketplace sample; known auction/dealer term - keep in schema for dealer imports
+Clean title,Clean title,paperwork,Clean title|Title in hand|Title in hand!|Clear title,All,1990-2001,,truck,common,"17% of Oct complete trucks say clean title/title in hand. 'Clean' in a listing is a seller claim, not a DMV record"
+Title in hand,Clean title,paperwork,Title in hand|In-hand title,All,1990-2001,,truck,occasional,Stronger than 'clean title' alone: seller physically holds it; still verify name matches seller
+Bill of sale only,Bill of sale only,paperwork,Bill of sale|BOS|Bill of sale only|No title,All,1990-2001,,truck,occasional,Highest paperwork risk; may be off-road-only in the seller's state and unregistrable in the buyer's state
+Export certificate,Export certificate,paperwork,Export certificate|Deregistration|Deregistration certificate|Japanese title|Export cert,All,1990-2001,,truck,occasional,"Japanese deregistration/export certificate is the import paper trail, not a US title"
+CBP 7501,CBP 7501,paperwork,CBP 7501|7501|Entry summary,All,1990-2001,,truck,occasional,US Customs entry summary; buyers ask for a photo of it to verify legal import
+HS-7,HS-7,paperwork,HS-7|DOT HS-7|DOT form,All,1990-2001,,truck,rare,DOT import declaration; Box 1 is the 25yr exemption claim
+EPA 3520-1,EPA 3520-1,paperwork,EPA 3520-1|3520-1|EPA form|Code E,All,1990-2001,,truck,rare,EPA import declaration; Code E is the 25yr exemption
+25-year rule,25-year rule,legal_status,25-year rule|25 year rule|25yr|25 years old|Federal exemption,All,1990-2001,,truck,common,"Federal import exemption by MONTH of manufacture, not model year. Import-legal does NOT equal street-legal in the buyer's state"
+Street legal,Street legal,legal_status,Street legal|Road legal|Road-legal|Street-legal,All,1990-2001,,truck,occasional,10% of Oct complete trucks claim it. State-specific - a truck street-legal in FL/TX may not be in NY/GA/OR
+Off-road only,Off-road only,legal_status,Off-road only|Off road only|Farm use|Farm truck|Private property|UTV|Side-by-side,All,1990-2001,,truck,occasional,"Use-case facet, not a legal status in itself; new 2022+ trucks are sold this way in most states"
+Registered in state,Registered in state,legal_status,Registered in|Titled in|Plated in|Tagged in|Registered in <state>,All,1990-2001,,truck,occasional,18% of Oct complete trucks name a registration state. Registration in one state does NOT transfer automatically to another
+Antique registration,Antique registration,legal_status,Antique|Classic|Historic|Antique plate|Collector plate,All,1990-2001,,truck,occasional,PA and MI routes sellers cite; antique/classic often has use/mileage limits - verify with DMV
+Mini-truck registration,Mini-truck registration,legal_status,Mini-truck|Mini truck plate|LSV|Low-speed vehicle|35 mph|55 mph,All,1990-2001,,truck,occasional,"Speed/road-limited classes (FL 35 mph, CO/TX 55 mph caps in recent law). LSV is a different federal class - do not merge with mini-truck"
+Montana LLC,Montana LLC,legal_status,Montana LLC|Montana registration|MT LLC,All,1990-2001,,truck,rare,Workaround discussed in groups for hard states. Lone Star Kei rules explicitly ban workaround talk - do not surface it as a recommendation
+OBO,OBO,selling_phrase,OBO|Or best offer|O.B.O.|Best offer,All,1990-2001,,truck,occasional,10% of Oct complete trucks; 'or best reasonable offer' is the softer variant
+Firm,Firm,selling_phrase,Firm|Firm price|No offers|Price is firm,All,1990-2001,,truck,rare,3% of Oct complete trucks
+No lowballers,No lowballers,selling_phrase,No lowballers|No low balls|Don't lowball|No tire kickers,All,1990-2001,,truck,occasional,"Seller tone signal, not a price signal"
+Trades,Trades,selling_phrase,Trades|Trade|Will trade|Partial trade|Trade for,All,1990-2001,,truck,common,32% of Oct complete trucks mention trades - unusually high vs normal used cars; facet it
+Cash only,Cash only,selling_phrase,Cash only|Cash|Cash in hand,All,1990-2001,,truck,occasional,"7% of Oct complete trucks; cash-only + no title + deposit = scam cluster, see report section 4"
+Deposit,Deposit,selling_phrase,Deposit|Deposit to hold|On deposit|Hold with deposit,All,1990-2001,,truck,occasional,Lancaster Mini Truck uses 'SOLD/ON DEPOSIT' as an inventory status; deposit-to-hold an unseen truck is the top group scam warning
+Financing,Financing,selling_phrase,Financing|Finance|Payment plan|Monthly,All,1990-2001,,truck,occasional,"8% of Oct complete trucks; almost always dealer listings, rarely private"
+Title pending,Title pending,selling_phrase,Title pending|Title coming|Title in transit|Awaiting title,All,1990-2001,,truck,rare,Lancaster Mini Truck inventory status: titles take approx. 4-6 weeks. Distinct from 'title in hand' - facet separately
+Coming soon,Coming soon,selling_phrase,Coming soon|In transit|On the water|Just landed|Just arrived,All,1990-2001,,truck,occasional,Dealer pipeline status: in transit from Japan or awaiting shipment; not yet inspectable
+A/C,A/C,use_case,A/C|AC|Air conditioning|Air con,All,1990-2001,,truck,common,"31% of Oct complete trucks (corrected figure). Do NOT use a bare 'a/c' substring match - it overcounts ('back', 'rack', etc.)"
+Heat,Heat,use_case,Heat|Heater|In-cab heater,All,1990-2001,,truck,occasional,27% of Oct complete trucks; often paired as 'A/C + heat'
+Power steering,Power steering,use_case,Power steering|PS|P/S,All,1990-2001,,truck,rare,5% of Oct complete trucks; Acty Attack and base trucks often lack it
+Lift kit,Lift kit,use_case,"Lift|Lifted|Lift kit|2 inch lift|2"" lift",All,1990-2001,,truck,occasional,11% of Oct complete trucks; buyers then ask tire size and CV-axle angle - link lift to tire facet
+Farm use,Farm use,use_case,Farm|Farm truck|Ranch|Hunting|Deer stand|Work truck,All,1990-2001,,truck,common,The dominant use-case language; 'farm use' is also used as a registration justification - keep use_case separate from legal_status
+Daily driver,Daily driver,use_case,Daily|Daily driver|Commute|City commute,All,1990-2001,,truck,occasional,Buyer use-case; sellers rarely claim highway suitability - top speed 55-60 mph is the cited limit
