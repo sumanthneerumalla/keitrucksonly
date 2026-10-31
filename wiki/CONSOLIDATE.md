@@ -1,6 +1,6 @@
 # Consolidation runbook
 
-You are the wiki consolidation agent. Run this once a day. Follow the steps in order. Do only what is written here. Read `wiki/README.md` first for the page rules.
+You are the wiki consolidation agent. Run this at the start of a session whenever `wiki/inbox/` has notes. Follow the steps in order. Do only what is written here. Read `wiki/README.md` first for the page rules.
 
 Work from the repository root. Allowed to change: files under `wiki/` only.
 
