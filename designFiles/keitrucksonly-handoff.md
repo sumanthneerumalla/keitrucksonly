@@ -1,5 +1,7 @@
 # KeiTrucksOnly: session handoff (2026-10-31)
 
+> Living project context (decisions, dealers, laws, open questions) is in `wiki/`; start at `wiki/index.md`.
+
 ## What this repo is
 This is the ShuttleMentor codebase (Next.js, tRPC, Prisma, Clerk, Stripe Connect, clubs), kept with its history. It is being turned into **keitrucksonly.com**, a free kei truck listings aggregator. All work so far is on branch `claude/cool-dirac-hs1ezq`.
 
